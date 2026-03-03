@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonomous AI Trading - US Market Pulse</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <style>
+        .ai-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .status-running {
+            background: linear-gradient(135deg, #00c853 0%, #00e676 100%);
+            animation: pulse 2s infinite;
+        }
+        
+        .status-stopped {
+            background: linear-gradient(135deg, #ff5252 0%, #ff1744 100%);
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .control-panel {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        
+        .control-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        
+        .control-item {
+            background: rgba(255,255,255,0.05);
+            padding: 16px;
+            border-radius: 8px;
+        }
+        
+        .control-item label {
+            display: block;
+            color: #888;
+            font-size: 12px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+        
+        .control-item input, .control-item select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: white;
+            font-size: 14px;
+        }
+        
+        .control-item input:focus, .control-item select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #ff5252 0%, #ff1744 100%);
+        }
+        
+        .btn-danger:hover {
+            box-shadow: 0 4px 20px rgba(255, 82, 82, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #333;
+            color: white;
+            border: 1px solid #444;
+            padding: 10px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            border: 1px solid rgba(102, 126, 234, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            color: #888;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        
+        .position-card {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .position-ticker {
+            font-size: 18px;
+            font-weight: 600;
+            color: white;
+        }
+        
+        .position-details {
+            color: #888;
+            font-size: 13px;
+        }
+        
+        .position-pnl {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .position-pnl.positive { color: #00c853; }
+        .position-pnl.negative { color: #ff5252; }
+        
+        .trade-log {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .trade-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px;
+            border-bottom: 1px solid #333;
+            font-size: 13px;
+        }
+        
+        .trade-row:hover {
+            background: rgba(255,255,255,0.02);
+        }
+        
+        .trade-action.buy { color: #00c853; }
+        .trade-action.sell { color: #ff5252; }
+        
+        .api-key-input {
+            font-family: monospace;
+        }
+        
+        .warning-box {
+            background: rgba(255, 152, 0, 0.1);
+            border: 1px solid #ff9800;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        
+        .warning-box.danger {
+            background: rgba(255, 82, 82, 0.1);
+            border-color: #ff5252;
+        }
+        
+        .ai-analysis-result {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 16px;
+        }
+        
+        .ai-decision {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .ai-decision-action {
+            font-size: 24px;
+            font-weight: 700;
+            padding: 8px 24px;
+            border-radius: 8px;
+        }
+        
+        .ai-decision-action.buy {
+            background: rgba(0, 200, 83, 0.2);
+            color: #00c853;
+        }
+        
+        .ai-decision-action.sell {
+            background: rgba(255, 82, 82, 0.2);
+            color: #ff5252;
+        }
+        
+        .ai-decision-action.hold {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+        }
+        
+        .confidence-bar {
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.5s ease;
+        }
+        
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <!-- ====================================================================
+         HEADER
+         ==================================================================== -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🇺🇸 US Market Pulse</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/autonomous" class="active">🤖 AI Trading</a></li>
+                        <li><a href="/">Dashboard</a></li>
+                        <li><a href="/scanners">Scanners</a></li>
+                        <li><a href="/options">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container" style="padding-top: 20px;">
+        <!-- Page Title -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <div>
+                <h1 style="margin: 0; font-size: 28px; display: flex; align-items: center; gap: 12px;">
+                    🤖 Autonomous AI Trading
+                    <span class="ai-badge" id="status-badge">
+                        <span>●</span> STOPPED
+                    </span>
+                </h1>
+                <p style="color: #888; margin-top: 8px;">
+                    Powered by DeepSeek AI • Fully automated market analysis and trade execution
+                </p>
+            </div>
+            <div>
+                <button class="btn-secondary" onclick="refreshStatus()">🔄 Refresh</button>
+            </div>
+        </div>
+
+        <!-- Warning Banner -->
+        <div class="warning-box danger" id="live-warning" style="display: none;">
+            <span style="font-size: 24px;">⚠️</span>
+            <div>
+                <strong style="color: #ff5252;">LIVE TRADING MODE ACTIVE</strong>
+                <p style="margin: 4px 0 0 0; color: #888;">
+                    Real money is at risk. The AI will execute actual trades on your brokerage account.
+                </p>
+            </div>
+        </div>
+
+        <!-- Stats Overview -->
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-positions">0</div>
+                <div class="stat-label">Active Positions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-trades">0</div>
+                <div class="stat-label">Total Trades</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-pnl">$0.00</div>
+                <div class="stat-label">Daily P&L</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-last-scan">--</div>
+                <div class="stat-label">Last Scan</div>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="card mb-20">
+            <div class="card-header">
+                <h2 class="card-title">⚙️ Control Panel</h2>
+            </div>
+            <div class="card-body">
+                <div class="control-panel">
+                    <div class="control-grid">
+                        <div class="control-item">
+                            <label>DeepSeek API Key</label>
+                            <input type="password" id="deepseek-key" class="api-key-input" 
+                                   placeholder="sk-..." autocomplete="off">
+                        </div>
+                        <div class="control-item">
+                            <label>Alpaca API Key (Optional)</label>
+                            <input type="password" id="alpaca-key" class="api-key-input" 
+                                   placeholder="PK..." autocomplete="off">
+                        </div>
+                        <div class="control-item">
+                            <label>Alpaca Secret Key</label>
+                            <input type="password" id="alpaca-secret" class="api-key-input" 
+                                   placeholder="Secret..." autocomplete="off">
+                        </div>
+                        <div class="control-item">
+                            <label>Trading Mode</label>
+                            <select id="trading-mode">
+                                <option value="paper" selected>📝 Paper Trading (Simulated)</option>
+                                <option value="live">⚠️ Live Trading (Real Money)</option>
+                            </select>
+                        </div>
+                        <div class="control-item">
+                            <label>Scan Interval (minutes)</label>
+                            <input type="number" id="scan-interval" value="5" min="1" max="60">
+                        </div>
+                        <div class="control-item">
+                            <label>Min AI Confidence (%)</label>
+                            <input type="number" id="min-confidence" value="75" min="50" max="100">
+                        </div>
+                        <div class="control-item">
+                            <label>Max Positions</label>
+                            <input type="number" id="max-positions" value="5" min="1" max="20">
+                        </div>
+                        <div class="control-item">
+                            <label>Risk Per Trade (%)</label>
+                            <input type="number" id="risk-per-trade" value="2" min="0.5" max="5" step="0.5">
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                        <button class="btn-primary" id="start-btn" onclick="startTrading()">
+                            🚀 Start Autonomous Trading
+                        </button>
+                        <button class="btn-danger hidden" id="stop-btn" onclick="stopTrading()">
+                            🛑 Stop Trading
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Analysis Tool -->
+        <div class="card mb-20">
+            <div class="card-header">
+                <h2 class="card-title">🔬 AI Analysis Tool</h2>
+            </div>
+            <div class="card-body">
+                <p style="color: #888; margin-bottom: 16px;">
+                    Test the AI analysis on any ticker before enabling autonomous trading.
+                </p>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <input type="text" id="analyze-ticker" placeholder="Enter ticker (e.g., AAPL)" 
+                           style="padding: 12px; border: 1px solid #444; border-radius: 6px; background: #1a1a2e; color: white; width: 200px;">
+                    <button class="btn-primary" onclick="analyzeStock()">
+                        🤖 Analyze with AI
+                    </button>
+                </div>
+                
+                <div id="analysis-result" class="ai-analysis-result hidden">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Two Column Layout -->
+        <div class="grid-2">
+            <!-- Active Positions -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📊 Active Positions</h2>
+                </div>
+                <div class="card-body">
+                    <div id="positions-container">
+                        <div style="text-align: center; color: #888; padding: 40px;">
+                            No active positions
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trade Log -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📜 Trade Log</h2>
+                </div>
+                <div class="card-body">
+                    <div class="trade-log" id="trade-log">
+                        <div style="text-align: center; color: #888; padding: 40px;">
+                            No trades yet
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="margin-top: 40px; padding: 30px 0; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-secondary); font-size: 13px;">
+            <p style="margin-bottom: 10px;">
+                <strong>⚠️ Risk Warning:</strong> Autonomous trading carries significant risk. 
+                AI decisions may not always be accurate. Use paper trading to test before going live.
+            </p>
+            <p>
+                Past performance is not indicative of future results. Trade responsibly.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // =====================================================================
+        // AUTONOMOUS TRADING CONTROLLER
+        // =====================================================================
+        
+        let isRunning = false;
+        let statusInterval = null;
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshStatus();
+            
+            // Auto-refresh status every 30 seconds
+            statusInterval = setInterval(refreshStatus, 30000);
+            
+            // Trading mode change warning
+            document.getElementById('trading-mode').addEventListener('change', (e) => {
+                if (e.target.value === 'live') {
+                    document.getElementById('live-warning').style.display = 'flex';
+                } else {
+                    document.getElementById('live-warning').style.display = 'none';
+                }
+            });
+        });
+        
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/autonomous/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateUI(data.data);
+                }
+            } catch (error) {
+                console.error('Failed to refresh status:', error);
+            }
+        }
+        
+        function updateUI(status) {
+            isRunning = status.running;
+            
+            // Update status badge
+            const badge = document.getElementById('status-badge');
+            if (isRunning) {
+                badge.className = 'ai-badge status-running';
+                badge.innerHTML = '<span>●</span> RUNNING';
+            } else {
+                badge.className = 'ai-badge status-stopped';
+                badge.innerHTML = '<span>●</span> STOPPED';
+            }
+            
+            // Update buttons
+            document.getElementById('start-btn').classList.toggle('hidden', isRunning);
+            document.getElementById('stop-btn').classList.toggle('hidden', !isRunning);
+            
+            // Update stats
+            document.getElementById('stat-positions').textContent = status.position_count || 0;
+            document.getElementById('stat-trades').textContent = status.trade_count || 0;
+            document.getElementById('stat-pnl').textContent = '$' + (status.daily_pnl || 0).toFixed(2);
+            document.getElementById('stat-last-scan').textContent = status.last_scan ? 
+                new Date(status.last_scan).toLocaleTimeString() : '--';
+            
+            // Update positions
+            renderPositions(status.positions || {});
+            
+            // Update trade log
+            renderTradeLog(status.trade_log || []);
+            
+            // Update settings
+            if (status.settings) {
+                document.getElementById('scan-interval').value = status.settings.scan_interval || 5;
+                document.getElementById('min-confidence').value = status.settings.min_confidence || 75;
+                document.getElementById('max-positions').value = status.settings.max_positions || 5;
+                document.getElementById('risk-per-trade').value = (status.settings.risk_per_trade || 0.02) * 100;
+                
+                if (!status.settings.paper_trading) {
+                    document.getElementById('trading-mode').value = 'live';
+                    document.getElementById('live-warning').style.display = 'flex';
+                }
+            }
+        }
+        
+        function renderPositions(positions) {
+            const container = document.getElementById('positions-container');
+            
+            if (Object.keys(positions).length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; color: #888; padding: 40px;">
+                        No active positions
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            for (const [ticker, pos] of Object.entries(positions)) {
+                const pnlClass = (pos.pnl || 0) >= 0 ? 'positive' : 'negative';
+                html += `
+                    <div class="position-card">
+                        <div>
+                            <div class="position-ticker">${ticker}</div>
+                            <div class="position-details">
+                                ${pos.shares} shares @ $${pos.entry_price.toFixed(2)}
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="position-pnl ${pnlClass}">
+                                $${(pos.pnl || 0).toFixed(2)}
+                            </div>
+                            <div class="position-details">
+                                Stop: $${pos.stop_loss.toFixed(2)} | Target: $${pos.target_price.toFixed(2)}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function renderTradeLog(trades) {
+            const container = document.getElementById('trade-log');
+            
+            if (trades.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; color: #888; padding: 40px;">
+                        No trades yet
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            for (const trade of trades.slice().reverse()) {
+                const actionClass = trade.action.toLowerCase();
+                const time = trade.timestamp ? new Date(trade.timestamp).toLocaleString() : '--';
+                
+                html += `
+                    <div class="trade-row">
+                        <div>
+                            <span class="trade-action ${actionClass}">${trade.action}</span>
+                            <strong>${trade.ticker}</strong>
+                            <span style="color: #888;">${trade.shares} shares @ $${(trade.entry_price || trade.exit_price || 0).toFixed(2)}</span>
+                        </div>
+                        <div style="color: #888; font-size: 12px;">
+                            ${time}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        async function startTrading() {
+            const deepseekKey = document.getElementById('deepseek-key').value;
+            const alpacaKey = document.getElementById('alpaca-key').value;
+            const alpacaSecret = document.getElementById('alpaca-secret').value;
+            const paperTrading = document.getElementById('trading-mode').value === 'paper';
+            const scanInterval = parseInt(document.getElementById('scan-interval').value);
+            const minConfidence = parseInt(document.getElementById('min-confidence').value);
+            
+            if (!deepseekKey) {
+                alert('Please enter your DeepSeek API key');
+                return;
+            }
+            
+            if (!paperTrading && !confirm('⚠️ WARNING: You are about to start LIVE trading with REAL MONEY. Are you sure?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/autonomous/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        deepseek_api_key: deepseekKey,
+                        alpaca_api_key: alpacaKey,
+                        alpaca_secret_key: alpacaSecret,
+                        paper_trading: paperTrading,
+                        scan_interval: scanInterval,
+                        min_confidence: minConfidence
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('✅ ' + data.message);
+                    refreshStatus();
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Failed to start trading: ' + error.message);
+            }
+        }
+        
+        async function stopTrading() {
+            if (!confirm('Are you sure you want to stop autonomous trading?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/autonomous/stop', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('✅ ' + data.message);
+                    refreshStatus();
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Failed to stop trading: ' + error.message);
+            }
+        }
+        
+        async function analyzeStock() {
+            const ticker = document.getElementById('analyze-ticker').value.trim().toUpperCase();
+            
+            if (!ticker) {
+                alert('Please enter a ticker symbol');
+                return;
+            }
+            
+            const resultDiv = document.getElementById('analysis-result');
+            resultDiv.classList.remove('hidden');
+            resultDiv.innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <div class="spinner"></div>
+                    <div style="margin-top: 12px; color: #888;">Analyzing ${ticker} with DeepSeek AI...</div>
+                </div>
+            `;
+            
+            try {
+                const response = await fetch('/api/autonomous/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    renderAnalysisResult(data.data);
+                } else {
+                    resultDiv.innerHTML = `
+                        <div style="color: #ff5252; text-align: center; padding: 20px;">
+                            ❌ ${data.error}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div style="color: #ff5252; text-align: center; padding: 20px;">
+                        ❌ Analysis failed: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        function renderAnalysisResult(data) {
+            const { ticker, market_data, ai_decision } = data;
+            const resultDiv = document.getElementById('analysis-result');
+            
+            const actionClass = ai_decision.action.toLowerCase();
+            const confidence = ai_decision.confidence || 0;
+            
+            resultDiv.innerHTML = `
+                <div class="ai-decision">
+                    <div class="ai-decision-action ${actionClass}">${ai_decision.action}</div>
+                    <div>
+                        <div style="font-size: 18px; font-weight: 600;">${ticker}</div>
+                        <div style="color: #888;">Current: $${market_data.price?.toFixed(2) || 'N/A'}</div>
+                    </div>
+                    <div style="margin-left: auto; text-align: right;">
+                        <div style="font-size: 24px; font-weight: 600; color: #667eea;">${confidence}%</div>
+                        <div style="color: #888; font-size: 12px;">Confidence</div>
+                    </div>
+                </div>
+                
+                <div class="confidence-bar">
+                    <div class="confidence-fill" style="width: ${confidence}%;"></div>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <h4 style="margin: 0 0 12px 0; color: white;">AI Reasoning</h4>
+                    <p style="color: #ccc; margin: 0;">${ai_decision.reason || 'No reason provided'}</p>
+                </div>
+                
+                ${ai_decision.action === 'BUY' ? `
+                <div style="margin-top: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+                    <div style="background: rgba(0,200,83,0.1); padding: 12px; border-radius: 8px; text-align: center;">
+                        <div style="color: #888; font-size: 12px;">Entry</div>
+                        <div style="color: #00c853; font-size: 18px; font-weight: 600;">$${ai_decision.entry_price?.toFixed(2) || market_data.price?.toFixed(2)}</div>
+                    </div>
+                    <div style="background: rgba(255,82,82,0.1); padding: 12px; border-radius: 8px; text-align: center;">
+                        <div style="color: #888; font-size: 12px;">Stop Loss</div>
+                        <div style="color: #ff5252; font-size: 18px; font-weight: 600;">$${ai_decision.stop_loss?.toFixed(2) || 'N/A'}</div>
+                    </div>
+                    <div style="background: rgba(102,126,234,0.1); padding: 12px; border-radius: 8px; text-align: center;">
+                        <div style="color: #888; font-size: 12px;">Target</div>
+                        <div style="color: #667eea; font-size: 18px; font-weight: 600;">$${ai_decision.target_price?.toFixed(2) || 'N/A'}</div>
+                    </div>
+                </div>
+                ` : ''}
+                
+                <div style="margin-top: 20px;">
+                    <h4 style="margin: 0 0 12px 0; color: white;">Market Data</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px;">
+                        <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                            <div style="color: #888; font-size: 11px;">RSI</div>
+                            <div style="color: white;">${market_data.rsi?.toFixed(1) || 'N/A'}</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                            <div style="color: #888; font-size: 11px;">MACD</div>
+                            <div style="color: white;">${market_data.macd?.toFixed(4) || 'N/A'}</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                            <div style="color: #888; font-size: 11px;">Volume Ratio</div>
+                            <div style="color: white;">${market_data.volume_ratio?.toFixed(2) || 'N/A'}x</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                            <div style="color: #888; font-size: 11px;">Change</div>
+                            <div style="color: ${(market_data.change_pct || 0) >= 0 ? '#00c853' : '#ff5252'};">${market_data.change_pct?.toFixed(2) || 0}%</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

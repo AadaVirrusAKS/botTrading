@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Dashboard - Real-Time Cryptocurrency Tracker</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='js/symbol-autocomplete.js') }}"></script>
+    <style>
+        /* Crypto Table Styles */
+        .crypto-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        
+        .crypto-table thead {
+            background: var(--bg-secondary);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .crypto-table th {
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            border-bottom: 2px solid var(--border-color);
+            white-space: nowrap;
+        }
+        
+        .crypto-table th.text-right,
+        .crypto-table td.text-right {
+            text-align: right;
+        }
+        
+        .crypto-table th.text-center,
+        .crypto-table td.text-center {
+            text-align: center;
+        }
+        
+        .crypto-table tbody tr {
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s;
+        }
+        
+        .crypto-table tbody tr:hover {
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .crypto-table td {
+            padding: 14px 16px;
+            color: var(--text-primary);
+        }
+        
+        .crypto-name-cell {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .crypto-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple, #8b5cf6));
+            flex-shrink: 0;
+        }
+        
+        .crypto-name-info {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .crypto-name-info .name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .crypto-name-info .symbol {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .price-positive {
+            color: var(--accent-green) !important;
+        }
+        
+        .price-negative {
+            color: var(--accent-red) !important;
+        }
+        
+        .change-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .change-badge.positive {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+        }
+        
+        .change-badge.negative {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+        }
+        
+        .watchlist-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 4px;
+            transition: transform 0.2s;
+        }
+        
+        .watchlist-btn:hover {
+            transform: scale(1.2);
+        }
+        
+        .watchlist-btn.active {
+            color: var(--accent-yellow);
+        }
+        
+        .search-container {
+            position: relative;
+            max-width: 400px;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 12px 16px;
+            padding-left: 45px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--card-bg);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        
+        .search-icon {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+        }
+        
+        .tab-container {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .tab-btn {
+            padding: 10px 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--card-bg);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .tab-btn:hover {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .tab-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+        
+        .badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-green {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--accent-green);
+        }
+        
+        .badge-red {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--accent-red);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 40px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .rank-cell {
+            font-weight: 600;
+            color: var(--text-secondary);
+            width: 50px;
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .crypto-table th,
+            .crypto-table td {
+                padding: 10px 8px;
+                font-size: 13px;
+            }
+            
+            .hide-mobile {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🇺🇸 US Market Pulse</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/ai-trading">🤖 AI Trading</a></li>
+                        <li><a href="/">Dashboard</a></li>
+                        <li><a href="/scanners">Scanners</a></li>
+                        <li><a href="/options">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto" class="active">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container" style="padding-top: 20px;">
+        <!-- Page Header -->
+        <div class="card mb-20">
+            <div class="card-header">
+                <h1 class="card-title">🪙 Cryptocurrency Dashboard</h1>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="refreshAll()">🔄 Refresh All</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: center;">
+                    <!-- Search -->
+                    <div class="search-container" style="flex: 1; min-width: 250px;">
+                        <span class="search-icon">🔍</span>
+                        <input 
+                            type="text" 
+                            id="crypto-search" 
+                            class="search-input symbol-search-input"
+                            placeholder="Search crypto (e.g., Bitcoin, ETH, Solana...)"
+                            autocomplete="off"
+                        />
+                    </div>
+                    
+                    <!-- Quick Stats -->
+                    <div style="display: flex; gap: 30px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: var(--text-secondary);">Market Cap</div>
+                            <div id="total-market-cap" style="font-size: 18px; font-weight: 700; color: var(--text-primary);">$--</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: var(--text-secondary);">24h Volume</div>
+                            <div id="total-volume" style="font-size: 18px; font-weight: 700; color: var(--text-primary);">$--</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: var(--text-secondary);">BTC Dominance</div>
+                            <div id="btc-dominance" style="font-size: 18px; font-weight: 700; color: var(--accent-yellow);">--%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tab-container">
+            <button class="tab-btn active" data-tab="all" onclick="switchTab('all')">📊 All Cryptos</button>
+            <button class="tab-btn" data-tab="gainers" onclick="switchTab('gainers')">🚀 Top Gainers</button>
+            <button class="tab-btn" data-tab="losers" onclick="switchTab('losers')">📉 Top Losers</button>
+            <button class="tab-btn" data-tab="watchlist" onclick="switchTab('watchlist')">⭐ My Watchlist</button>
+        </div>
+
+        <!-- All Cryptos Section -->
+        <div id="tab-all" class="tab-content">
+            <div class="card mb-20">
+                <div class="card-header">
+                    <h2 class="card-title">📊 Top Cryptocurrencies</h2>
+                    <span style="color: var(--text-secondary); font-size: 13px;">Top 50 by Market Cap</span>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container">
+                        <table class="crypto-table" id="all-cryptos-table">
+                            <thead>
+                                <tr>
+                                    <th class="rank-cell">#</th>
+                                    <th>Name</th>
+                                    <th class="text-right">Price</th>
+                                    <th class="text-right">24h Change</th>
+                                    <th class="text-right hide-mobile">Market Cap</th>
+                                    <th class="text-right hide-mobile">24h Volume</th>
+                                    <th class="text-right hide-mobile">24h High</th>
+                                    <th class="text-right hide-mobile">24h Low</th>
+                                    <th class="text-center">Watch</th>
+                                </tr>
+                            </thead>
+                            <tbody id="all-cryptos-body">
+                                <tr>
+                                    <td colspan="9" class="empty-state">
+                                        <div class="loading">
+                                            <div class="spinner"></div>
+                                            <div>Loading cryptocurrencies...</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Gainers Section -->
+        <div id="tab-gainers" class="tab-content" style="display: none;">
+            <div class="card mb-20">
+                <div class="card-header">
+                    <h2 class="card-title">🚀 Top Gainers (24h)</h2>
+                    <span class="badge badge-green">+% Gainers</span>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container">
+                        <table class="crypto-table" id="gainers-table">
+                            <thead>
+                                <tr>
+                                    <th class="rank-cell">#</th>
+                                    <th>Name</th>
+                                    <th class="text-right">Price</th>
+                                    <th class="text-right">24h Change</th>
+                                    <th class="text-right hide-mobile">Market Cap</th>
+                                    <th class="text-right hide-mobile">24h Volume</th>
+                                    <th class="text-center">Watch</th>
+                                </tr>
+                            </thead>
+                            <tbody id="gainers-body">
+                                <tr>
+                                    <td colspan="7" class="empty-state">
+                                        <div class="loading">
+                                            <div class="spinner"></div>
+                                            <div>Loading top gainers...</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Losers Section -->
+        <div id="tab-losers" class="tab-content" style="display: none;">
+            <div class="card mb-20">
+                <div class="card-header">
+                    <h2 class="card-title">📉 Top Losers (24h)</h2>
+                    <span class="badge badge-red">-% Losers</span>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container">
+                        <table class="crypto-table" id="losers-table">
+                            <thead>
+                                <tr>
+                                    <th class="rank-cell">#</th>
+                                    <th>Name</th>
+                                    <th class="text-right">Price</th>
+                                    <th class="text-right">24h Change</th>
+                                    <th class="text-right hide-mobile">Market Cap</th>
+                                    <th class="text-right hide-mobile">24h Volume</th>
+                                    <th class="text-center">Watch</th>
+                                </tr>
+                            </thead>
+                            <tbody id="losers-body">
+                                <tr>
+                                    <td colspan="7" class="empty-state">
+                                        <div class="loading">
+                                            <div class="spinner"></div>
+                                            <div>Loading top losers...</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Watchlist Section -->
+        <div id="tab-watchlist" class="tab-content" style="display: none;">
+            <div class="card mb-20">
+                <div class="card-header">
+                    <h2 class="card-title">⭐ My Crypto Watchlist</h2>
+                    <button class="btn btn-secondary" onclick="clearWatchlist()">🗑️ Clear All</button>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container">
+                        <table class="crypto-table" id="watchlist-table">
+                            <thead>
+                                <tr>
+                                    <th class="rank-cell">#</th>
+                                    <th>Name</th>
+                                    <th class="text-right">Price</th>
+                                    <th class="text-right">24h Change</th>
+                                    <th class="text-right hide-mobile">Market Cap</th>
+                                    <th class="text-right hide-mobile">24h Volume</th>
+                                    <th class="text-center">Remove</th>
+                                </tr>
+                            </thead>
+                            <tbody id="watchlist-body">
+                                <tr>
+                                    <td colspan="7">
+                                        <div class="empty-state">
+                                            <div class="icon">⭐</div>
+                                            <h3>No cryptos in watchlist</h3>
+                                            <p>Click the star icon on any crypto to add it to your watchlist</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Results -->
+        <div id="search-results" class="card mb-20" style="display: none;">
+            <div class="card-header">
+                <h2 class="card-title">🔍 Search Results</h2>
+                <button class="btn btn-secondary" onclick="clearSearch()">✕ Clear</button>
+            </div>
+            <div class="card-body" style="padding: 0;">
+                <div class="table-container">
+                    <table class="crypto-table" id="search-table">
+                        <thead>
+                            <tr>
+                                <th class="rank-cell">#</th>
+                                <th>Name</th>
+                                <th class="text-right">Price</th>
+                                <th class="text-right">24h Change</th>
+                                <th class="text-right hide-mobile">Market Cap</th>
+                                <th class="text-right hide-mobile">24h Volume</th>
+                                <th class="text-center">Watch</th>
+                            </tr>
+                        </thead>
+                        <tbody id="search-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="margin-top: 40px; padding: 30px 0; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-secondary); font-size: 13px;">
+            <p style="margin-bottom: 10px;">
+                <strong>⚠️ Disclaimer:</strong> Cryptocurrency data provided by Yahoo Finance.
+                This dashboard is for informational purposes only.
+            </p>
+            <p>
+                Crypto trading involves substantial risk. Past performance is not indicative of future results.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Crypto watchlist stored in localStorage
+        let watchlist = JSON.parse(localStorage.getItem('cryptoWatchlist') || '[]');
+        let allCryptos = [];
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadAllCryptos();
+            setupSearch();
+        });
+        
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tab);
+            });
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.style.display = 'none';
+            });
+            document.getElementById(`tab-${tab}`).style.display = 'block';
+            
+            // Load data for specific tabs
+            if (tab === 'watchlist') {
+                renderWatchlist();
+            } else if (tab === 'gainers') {
+                loadGainers();
+            } else if (tab === 'losers') {
+                loadLosers();
+            }
+        }
+        
+        // Load all cryptocurrencies
+        async function loadAllCryptos() {
+            try {
+                const response = await fetch('/api/crypto/all');
+                const data = await response.json();
+                
+                if (data.success) {
+                    allCryptos = data.cryptos;
+                    renderCryptoTable('all-cryptos-body', allCryptos, true);
+                    updateMarketStats(data.market_stats);
+                }
+            } catch (error) {
+                console.error('Error loading cryptos:', error);
+                document.getElementById('all-cryptos-body').innerHTML = 
+                    '<tr><td colspan="9"><div class="empty-state"><div class="icon">⚠️</div><p>Error loading data</p></div></td></tr>';
+            }
+        }
+        
+        // Load top gainers
+        async function loadGainers() {
+            try {
+                const response = await fetch('/api/crypto/movers/gainers');
+                const data = await response.json();
+                
+                if (data.success) {
+                    renderCryptoTable('gainers-body', data.cryptos, false);
+                }
+            } catch (error) {
+                console.error('Error loading gainers:', error);
+            }
+        }
+        
+        // Load top losers
+        async function loadLosers() {
+            try {
+                const response = await fetch('/api/crypto/movers/losers');
+                const data = await response.json();
+                
+                if (data.success) {
+                    renderCryptoTable('losers-body', data.cryptos, false);
+                }
+            } catch (error) {
+                console.error('Error loading losers:', error);
+            }
+        }
+        
+        // Render crypto table
+        function renderCryptoTable(containerId, cryptos, showHighLow = false) {
+            const container = document.getElementById(containerId);
+            
+            if (!cryptos || cryptos.length === 0) {
+                container.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">📭</div><p>No data available</p></div></td></tr>';
+                return;
+            }
+            
+            container.innerHTML = cryptos.map((crypto, index) => createCryptoRow(crypto, index + 1, showHighLow)).join('');
+        }
+        
+        // Create crypto table row HTML
+        function createCryptoRow(crypto, rank, showHighLow = false) {
+            const isInWatchlist = watchlist.includes(crypto.symbol);
+            const changeClass = crypto.change_pct >= 0 ? 'positive' : 'negative';
+            const changeIcon = crypto.change_pct >= 0 ? '▲' : '▼';
+            
+            let highLowCols = '';
+            if (showHighLow) {
+                highLowCols = `
+                    <td class="text-right hide-mobile">${formatPrice(crypto.high_24h)}</td>
+                    <td class="text-right hide-mobile">${formatPrice(crypto.low_24h)}</td>
+                `;
+            }
+            
+            return `
+                <tr data-symbol="${crypto.symbol}">
+                    <td class="rank-cell">${rank}</td>
+                    <td>
+                        <div class="crypto-name-cell">
+                            <div class="crypto-icon">${crypto.icon || '🪙'}</div>
+                            <div class="crypto-name-info">
+                                <span class="name">${crypto.name}</span>
+                                <span class="symbol">${crypto.symbol.replace('-USD', '')}</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="text-right" style="font-weight: 600;">${formatPrice(crypto.price)}</td>
+                    <td class="text-right">
+                        <span class="change-badge ${changeClass}">
+                            ${changeIcon} ${Math.abs(crypto.change_pct).toFixed(2)}%
+                        </span>
+                    </td>
+                    <td class="text-right hide-mobile">${formatLargeNumber(crypto.market_cap)}</td>
+                    <td class="text-right hide-mobile">${formatLargeNumber(crypto.volume)}</td>
+                    ${highLowCols}
+                    <td class="text-center">
+                        <button class="watchlist-btn ${isInWatchlist ? 'active' : ''}" 
+                                onclick="toggleWatchlist('${crypto.symbol}')" 
+                                title="${isInWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}">
+                            ${isInWatchlist ? '⭐' : '☆'}
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }
+        
+        // Toggle watchlist
+        function toggleWatchlist(symbol) {
+            const index = watchlist.indexOf(symbol);
+            if (index > -1) {
+                watchlist.splice(index, 1);
+            } else {
+                watchlist.push(symbol);
+            }
+            localStorage.setItem('cryptoWatchlist', JSON.stringify(watchlist));
+            
+            // Update button state across all tables
+            document.querySelectorAll(`tr[data-symbol="${symbol}"] .watchlist-btn`).forEach(btn => {
+                const isInList = watchlist.includes(symbol);
+                btn.classList.toggle('active', isInList);
+                btn.innerHTML = isInList ? '⭐' : '☆';
+                btn.title = isInList ? 'Remove from watchlist' : 'Add to watchlist';
+            });
+        }
+        
+        // Render watchlist
+        function renderWatchlist() {
+            const container = document.getElementById('watchlist-body');
+            
+            if (watchlist.length === 0) {
+                container.innerHTML = `
+                    <tr>
+                        <td colspan="7">
+                            <div class="empty-state">
+                                <div class="icon">⭐</div>
+                                <h3>No cryptos in watchlist</h3>
+                                <p>Click the star icon on any crypto to add it to your watchlist</p>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            const watchlistCryptos = allCryptos.filter(c => watchlist.includes(c.symbol));
+            renderCryptoTable('watchlist-body', watchlistCryptos, false);
+        }
+        
+        // Clear watchlist
+        function clearWatchlist() {
+            if (confirm('Are you sure you want to clear your watchlist?')) {
+                watchlist = [];
+                localStorage.setItem('cryptoWatchlist', JSON.stringify(watchlist));
+                renderWatchlist();
+                // Update all star buttons
+                document.querySelectorAll('.watchlist-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                    btn.innerHTML = '☆';
+                    btn.title = 'Add to watchlist';
+                });
+            }
+        }
+        
+        // Setup search
+        function setupSearch() {
+            const searchInput = document.getElementById('crypto-search');
+            let debounceTimer;
+            
+            searchInput.addEventListener('input', function() {
+                clearTimeout(debounceTimer);
+                const query = this.value.trim().toLowerCase();
+                
+                if (query.length < 2) {
+                    document.getElementById('search-results').style.display = 'none';
+                    return;
+                }
+                
+                debounceTimer = setTimeout(() => searchCryptos(query), 300);
+            });
+        }
+        
+        // Search cryptos
+        async function searchCryptos(query) {
+            try {
+                const response = await fetch(`/api/crypto/search?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                if (data.success && data.cryptos.length > 0) {
+                    document.getElementById('search-results').style.display = 'block';
+                    renderCryptoTable('search-body', data.cryptos, false);
+                } else {
+                    document.getElementById('search-results').style.display = 'block';
+                    document.getElementById('search-body').innerHTML = 
+                        '<tr><td colspan="7"><div class="empty-state"><div class="icon">🔍</div><p>No results found</p></div></td></tr>';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+            }
+        }
+        
+        // Clear search
+        function clearSearch() {
+            document.getElementById('crypto-search').value = '';
+            document.getElementById('search-results').style.display = 'none';
+        }
+        
+        // Update market stats
+        function updateMarketStats(stats) {
+            if (stats) {
+                document.getElementById('total-market-cap').textContent = formatLargeNumber(stats.total_market_cap);
+                document.getElementById('total-volume').textContent = formatLargeNumber(stats.total_volume);
+                document.getElementById('btc-dominance').textContent = (stats.btc_dominance || 0).toFixed(1) + '%';
+            }
+        }
+        
+        // Refresh all data
+        function refreshAll() {
+            loadAllCryptos();
+            const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
+            if (activeTab === 'gainers') loadGainers();
+            if (activeTab === 'losers') loadLosers();
+            if (activeTab === 'watchlist') renderWatchlist();
+        }
+        
+        // Format helpers
+        function formatPrice(price) {
+            if (!price) return '$0.00';
+            if (price >= 1) return '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            if (price >= 0.01) return '$' + price.toFixed(4);
+            return '$' + price.toFixed(6);
+        }
+        
+        function formatLargeNumber(num) {
+            if (!num) return '$0';
+            if (num >= 1e12) return '$' + (num / 1e12).toFixed(2) + 'T';
+            if (num >= 1e9) return '$' + (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return '$' + (num / 1e6).toFixed(2) + 'M';
+            if (num >= 1e3) return '$' + (num / 1e3).toFixed(2) + 'K';
+            return '$' + num.toFixed(2);
+        }
+        
+        // Auto-refresh every 60 seconds (pause when tab hidden to save API calls)
+        let cryptoRefreshInterval = setInterval(refreshAll, 60000);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                clearInterval(cryptoRefreshInterval);
+                cryptoRefreshInterval = null;
+            } else {
+                refreshAll(); // immediate refresh on tab focus
+                cryptoRefreshInterval = setInterval(refreshAll, 60000);
+            }
+        });
+    </script>
+</body>
+</html>

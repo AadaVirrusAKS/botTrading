@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Monitoring API</title>
+</head>
+<body>
+    <h1>Testing /api/positions/active</h1>
+    <pre id="output">Loading...</pre>
+    
+    <script>
+        fetch('/api/positions/active')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+                console.log('API Response:', data);
+                console.log('Active positions:', data.positions);
+                console.log('Closed positions:', data.closed_positions);
+            })
+            .catch(error => {
+                document.getElementById('output').textContent = 'Error: ' + error;
+                console.error('Error:', error);
+            });
+    </script>
+</body>
+</html>

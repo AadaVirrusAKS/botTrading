@@ -1,0 +1,3421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trading Bot - US Market Pulse</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='js/symbol-autocomplete.js') }}"></script>
+    
+    <style>
+        /* Account Mode Toggle */
+        .account-toggle {
+            display: flex;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 4px;
+            gap: 4px;
+        }
+        
+        .account-btn {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .account-btn.demo {
+            background: transparent;
+            color: var(--text-secondary);
+        }
+        
+        .account-btn.demo.active {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+        }
+        
+        .account-btn.real {
+            background: transparent;
+            color: var(--text-secondary);
+        }
+        
+        .account-btn.real.active {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+        
+        /* Bot Status */
+        .bot-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .bot-status.running {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+            animation: pulse 2s infinite;
+        }
+        
+        .bot-status.stopped {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .bot-status .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        /* Account Balance Card */
+        .balance-card {
+            background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .balance-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 200px;
+            height: 200px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
+        }
+        
+        .balance-card.demo-mode {
+            border-color: #10b981;
+        }
+        
+        .balance-card.real-mode {
+            border-color: #ef4444;
+        }
+        
+        .balance-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        
+        .balance-amount {
+            font-size: 36px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .balance-change {
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+        
+        .balance-change.positive { color: #10b981; }
+        .balance-change.negative { color: #ef4444; }
+        
+        /* Strategy Cards */
+        .strategy-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        
+        .strategy-card {
+            background: var(--card-bg);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .strategy-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
+        }
+        
+        .strategy-card.selected {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .strategy-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
+        
+        .strategy-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+        
+        .strategy-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        
+        .strategy-stats {
+            display: flex;
+            gap: 16px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        .strategy-stat {
+            text-align: center;
+        }
+        
+        .strategy-stat-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--accent-green);
+        }
+        
+        .strategy-stat-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        
+        /* Control Panel */
+        .control-panel {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+        }
+        
+        .control-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+        }
+        
+        .control-item label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+        
+        .control-item input, .control-item select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        
+        .control-item input:focus, .control-item select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+        
+        /* Bot Controls */
+        .bot-controls {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        
+        .btn-start {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-start:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(16, 185, 129, 0.3);
+        }
+        
+        .btn-stop {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-stop:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(239, 68, 68, 0.3);
+        }
+        
+        /* Position Table */
+        .position-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .position-table th {
+            text-align: left;
+            padding: 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-color);
+            text-transform: uppercase;
+        }
+        
+        .position-table td {
+            padding: 14px 12px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+        
+        .position-table tr:hover {
+            background: rgba(59, 130, 246, 0.05);
+        }
+        
+        .position-symbol {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .position-pnl.positive { color: #10b981; font-weight: 600; }
+        .position-pnl.negative { color: #ef4444; font-weight: 600; }
+        
+        /* Trade Log */
+        .trade-log-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .trade-log-item:last-child {
+            border-bottom: none;
+        }
+        
+        .trade-action {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .trade-action.buy {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+        
+        .trade-action.sell {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        /* Trade Type Badges */
+        .trade-type-badge {
+            font-size: 9px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .trade-type-badge.day {
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+            color: #000;
+        }
+        .trade-type-badge.swing {
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            color: #fff;
+        }
+        .trade-type-badge.positional {
+            background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
+            color: #fff;
+        }
+        .bot-badge {
+            font-size: 9px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .bot-badge::before {
+            content: '🤖';
+            font-size: 10px;
+        }
+        
+        /* Monthly P&L Calendar */
+        /* Monthly P&L Calendar - In-page card style */
+        .calendar-section {
+            background: linear-gradient(135deg, #1e1e2e 0%, #252538 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            margin: 20px auto;
+            max-width: 1400px;
+            overflow: hidden;
+        }
+        .calendar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: linear-gradient(135deg, #2d2d44 0%, #3d3d5c 100%);
+            cursor: pointer;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .calendar-header:hover {
+            background: linear-gradient(135deg, #3d3d5c 0%, #4d4d6c 100%);
+        }
+        .calendar-header h3 {
+            margin: 0;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-primary);
+        }
+        .calendar-toggle {
+            background: rgba(139, 92, 246, 0.2);
+            border: 1px solid #8b5cf6;
+            color: #8b5cf6;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+        .calendar-toggle:hover {
+            background: rgba(139, 92, 246, 0.4);
+        }
+        .calendar-section.minimized .calendar-toggle {
+            transform: rotate(180deg);
+        }
+        .calendar-section.minimized .calendar-body {
+            display: none;
+        }
+        .calendar-body {
+            padding: 20px 24px;
+        }
+        .calendar-nav {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .calendar-nav button {
+            background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+            border: none;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .calendar-nav button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        }
+        .calendar-month-year {
+            font-weight: 700;
+            font-size: 18px;
+            color: var(--text-primary);
+            min-width: 180px;
+            text-align: center;
+        }
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .calendar-day-header {
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: #8b5cf6;
+            padding: 8px;
+            text-transform: uppercase;
+        }
+        .calendar-day {
+            aspect-ratio: 1.2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--card-bg);
+            border-radius: 10px;
+            font-size: 12px;
+            position: relative;
+            border: 2px solid transparent;
+            min-height: 65px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .calendar-day:not(.empty):hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .calendar-day.empty {
+            background: transparent;
+            border: none;
+        }
+        .calendar-day.today {
+            border: 2px solid #8b5cf6;
+            box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+        }
+        .calendar-day.profit {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.25) 100%);
+            border-color: #10b981;
+        }
+        .calendar-day.loss {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(220, 38, 38, 0.25) 100%);
+            border-color: #ef4444;
+        }
+        .calendar-day .day-num {
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+        .calendar-day .day-pnl {
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .calendar-day .day-pnl.positive { color: #10b981; }
+        .calendar-day .day-pnl.negative { color: #ef4444; }
+        .calendar-day .trade-count {
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .calendar-summary {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            padding: 20px;
+            background: rgba(45, 45, 68, 0.5);
+            border-radius: 12px;
+            flex-wrap: wrap;
+        }
+        .cal-stat {
+            text-align: center;
+            min-width: 100px;
+        }
+        .cal-stat-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .cal-stat-value {
+            font-size: 20px;
+            font-weight: 700;
+        }
+        .cal-stat-value.positive { color: #10b981; }
+        .cal-stat-value.negative { color: #ef4444; }
+        
+        /* Live Signal */
+        .signal-card {
+            background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        
+        .signal-card.bullish {
+            border-left: 4px solid #10b981;
+        }
+        
+        .signal-card.bearish {
+            border-left: 4px solid #ef4444;
+        }
+        
+        .signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .signal-symbol {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .signal-confidence {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .signal-details {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+        
+        .signal-detail {
+            text-align: center;
+        }
+        
+        .signal-detail-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        
+        .signal-detail-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        /* Warning Banner */
+        .warning-banner {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .warning-banner.hidden { display: none; }
+        
+        .warning-icon {
+            font-size: 24px;
+        }
+        
+        .warning-text strong {
+            color: #ef4444;
+        }
+        
+        .warning-text p {
+            margin: 4px 0 0;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        
+        /* Trend Indicator */
+        .trend-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .trend-badge.bullish {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+        
+        .trend-badge.bearish {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .trend-badge.neutral {
+            background: rgba(251, 191, 36, 0.2);
+            color: #fbbf24;
+        }
+        
+        .hidden { display: none !important; }
+
+        /* Intraday Scanner Styles */
+        .scanner-tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            padding: 4px;
+        }
+        .scanner-tab {
+            flex: 1;
+            padding: 10px 18px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .scanner-tab.active {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: white;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+        }
+        .scanner-tab:hover:not(.active) {
+            background: var(--bg-tertiary);
+        }
+        .scanner-panel { display: none; }
+        .scanner-panel.active { display: block; }
+
+        /* Intraday Scanner Table */
+        .scan-table-wrap {
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        .scan-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        .scan-table th {
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            background: var(--bg-secondary);
+            border-bottom: 2px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .scan-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+        .scan-table tbody tr:hover {
+            background: rgba(99, 102, 241, 0.06);
+        }
+        .scan-table tbody tr.bull-row { border-left: 3px solid #10b981; }
+        .scan-table tbody tr.bear-row { border-left: 3px solid #ef4444; }
+        .scan-table .sym-cell { font-weight: 700; font-size: 14px; }
+        .scan-table .price-cell { font-weight: 600; }
+
+        .score-pill {
+            display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 700;
+        }
+        .score-pill.high { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+        .score-pill.med  { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+
+        .signal-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+        .sig-tag {
+            padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;
+            background: rgba(99, 102, 241, 0.15); color: #a5b4fc;
+        }
+
+        .opt-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;
+        }
+        .opt-badge.call { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+        .opt-badge.put  { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+        .action-btn-sm {
+            padding: 4px 10px; border: none; border-radius: 6px; font-size: 11px;
+            font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .action-btn-sm.buy  { background: rgba(16,185,129,0.2); color: #10b981; }
+        .action-btn-sm.sell { background: rgba(239,68,68,0.2); color: #ef4444; }
+        .action-btn-sm:hover { filter: brightness(1.2); }
+    </style>
+</head>
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🇺🇸 US Market Pulse</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/ai-trading" class="active">🤖 AI Trading</a></li>
+                        <li><a href="/">Dashboard</a></li>
+                        <li><a href="/scanners">Scanners</a></li>
+                        <li><a href="/options">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container" style="padding-top: 20px; padding-bottom: 20px;">
+        <!-- Page Header with Account Toggle -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
+            <div>
+                <h1 style="margin: 0; font-size: 28px; display: flex; align-items: center; gap: 12px;">
+                    🤖 AI Trading Bot
+                    <div class="bot-status stopped" id="bot-status">
+                        <span class="dot"></span>
+                        <span id="bot-status-text">STOPPED</span>
+                    </div>
+                </h1>
+                <p style="color: var(--text-secondary); margin-top: 8px;">
+                    Automated trend-based trading with AI-powered analysis
+                </p>
+            </div>
+            
+            <div class="account-toggle">
+                <button class="account-btn demo active" onclick="switchAccount('demo')">
+                    📝 Demo Account
+                </button>
+                <button class="account-btn real" onclick="switchAccount('real')">
+                    💰 Real Account
+                </button>
+            </div>
+        </div>
+
+        <!-- Real Account Warning -->
+        <div class="warning-banner hidden" id="real-warning">
+            <span class="warning-icon">⚠️</span>
+            <div class="warning-text">
+                <strong>LIVE TRADING MODE ACTIVE</strong>
+                <p>Real money is at risk. Ensure you understand the risks before starting the bot.</p>
+            </div>
+        </div>
+
+        <!-- Account Summary Row -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 24px;">
+            <!-- Balance Card -->
+            <div class="balance-card demo-mode" id="balance-card">
+                <div class="balance-label">
+                    <span id="account-type-label">DEMO</span> PORTFOLIO VALUE
+                    <button onclick="resetDemoAccount()" style="margin-left: 10px; padding: 2px 8px; font-size: 11px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); cursor: pointer;" title="Reset to $10,000">🔄 Reset</button>
+                </div>
+                <div class="balance-amount" id="account-balance">$10,000.00</div>
+                <div class="balance-change positive" id="account-pnl">+$0.00 (0.00%) P&L</div>
+                <div style="display: flex; gap: 15px; margin-top: 8px; font-size: 12px;">
+                    <div style="color: var(--text-secondary);">
+                        💵 Cash: <span id="cash-available" style="color: var(--text-primary);">$10,000.00</span>
+                    </div>
+                    <div style="color: var(--text-secondary);">
+                        📊 Invested: <span id="amount-invested" style="color: #3b82f6;">$0.00</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Stats Cards -->
+            <div class="card" style="margin: 0;">
+                <div class="card-body" style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);" id="stat-positions">0</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Positions</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);" id="stat-trades">0</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Completed</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--accent-green);" id="stat-win-rate">0%</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Win Rate</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);" id="stat-last-scan">--</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Last Scan</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trading Strategies -->
+        <div class="card mb-20">
+            <div class="card-header">
+                <h2 class="card-title">📈 Trading Strategies</h2>
+                <span style="color: var(--text-secondary); font-size: 13px;">Select a strategy for the bot</span>
+            </div>
+            <div class="card-body">
+                <div class="strategy-grid">
+                    <div class="strategy-card selected" data-strategy="trend_following" onclick="selectStrategy('trend_following')">
+                        <div class="strategy-icon">📊</div>
+                        <div class="strategy-name">Trend Following</div>
+                        <div class="strategy-desc">
+                            Follows market momentum using EMA crossovers, RSI, and MACD. Enters on confirmed trends.
+                        </div>
+                        <div class="strategy-stats">
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">72%</div>
+                                <div class="strategy-stat-label">Win Rate</div>
+                            </div>
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">2.1</div>
+                                <div class="strategy-stat-label">Reward/Risk</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="strategy-card" data-strategy="mean_reversion" onclick="selectStrategy('mean_reversion')">
+                        <div class="strategy-icon">🔄</div>
+                        <div class="strategy-name">Mean Reversion</div>
+                        <div class="strategy-desc">
+                            Buys oversold dips and sells overbought rallies using Bollinger Bands and RSI extremes.
+                        </div>
+                        <div class="strategy-stats">
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">68%</div>
+                                <div class="strategy-stat-label">Win Rate</div>
+                            </div>
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">1.8</div>
+                                <div class="strategy-stat-label">Reward/Risk</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="strategy-card" data-strategy="breakout" onclick="selectStrategy('breakout')">
+                        <div class="strategy-icon">🚀</div>
+                        <div class="strategy-name">Breakout Trading</div>
+                        <div class="strategy-desc">
+                            Catches explosive moves when price breaks key support/resistance with volume confirmation.
+                        </div>
+                        <div class="strategy-stats">
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">58%</div>
+                                <div class="strategy-stat-label">Win Rate</div>
+                            </div>
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">3.2</div>
+                                <div class="strategy-stat-label">Reward/Risk</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="strategy-card" data-strategy="scalping" onclick="selectStrategy('scalping')">
+                        <div class="strategy-icon">⚡</div>
+                        <div class="strategy-name">Scalping</div>
+                        <div class="strategy-desc">
+                            Quick in-and-out trades capturing small price movements. High frequency, low exposure.
+                        </div>
+                        <div class="strategy-stats">
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">65%</div>
+                                <div class="strategy-stat-label">Win Rate</div>
+                            </div>
+                            <div class="strategy-stat">
+                                <div class="strategy-stat-value">1.5</div>
+                                <div class="strategy-stat-label">Reward/Risk</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bot Control Panel -->
+        <div class="card mb-20">
+            <div class="card-header">
+                <h2 class="card-title">⚙️ Bot Configuration</h2>
+            </div>
+            <div class="card-body">
+                <div class="control-panel">
+                    <div class="control-grid">
+                        <div class="control-item">
+                            <label>Instrument Type</label>
+                            <select id="instrument-type" onchange="onInstrumentTypeChange()">
+                                <option value="stocks" selected>📊 Stocks</option>
+                                <option value="options">📞 Options</option>
+                                <option value="both">📊📞 Both</option>
+                            </select>
+                        </div>
+                        <div class="control-item">
+                            <label>Watchlist</label>
+                            <select id="watchlist" onchange="saveSettingsToServer()">
+                                <option value="top_50">Top 50 Liquid Stocks</option>
+                                <option value="sp500">S&P 500</option>
+                                <option value="tech">Tech Giants</option>
+                                <option value="intraday_stocks">⚡ Intraday Stocks</option>
+                                <option value="intraday_options">⚡ Intraday Options</option>
+                                <option value="custom">Custom Watchlist</option>
+                            </select>
+                        </div>
+                        <div class="control-item">
+                            <label>Scan Interval</label>
+                            <select id="scan-interval" onchange="saveSettingsToServer()">
+                                <option value="1">Every 1 minute</option>
+                                <option value="5" selected>Every 5 minutes</option>
+                                <option value="15">Every 15 minutes</option>
+                                <option value="30">Every 30 minutes</option>
+                            </select>
+                        </div>
+                        <div class="control-item">
+                            <label>Min Confidence (%)</label>
+                            <input type="number" id="min-confidence" value="75" min="50" max="100" onchange="saveSettingsToServer()">
+                        </div>
+                        <div class="control-item">
+                            <label>Min Option DTE</label>
+                            <input type="number" id="min-option-dte" value="1" min="1" max="30" step="1" onchange="saveSettingsToServer()">
+                        </div>
+                        <div class="control-item">
+                            <label>Max Positions</label>
+                            <input type="number" id="max-positions" value="5" min="1" max="20" onchange="saveSettingsToServer()">
+                        </div>
+                        <div class="control-item">
+                            <label>Max Trades / Day</label>
+                            <input type="number" id="max-daily-trades" value="20" min="1" max="100" onchange="saveSettingsToServer()">
+                            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+                                Limits bot auto-entry trades per day.
+                            </div>
+                        </div>
+                        <div class="control-item">
+                            <label>Max / Symbol / Day</label>
+                            <input type="number" id="max-per-symbol-daily" value="6" min="1" max="50" step="1" onchange="saveSettingsToServer()">
+                            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+                                Caps repeated entries per symbol each day.
+                            </div>
+                        </div>
+                        <div class="control-item">
+                            <label>Re-entry Cooldown (min)</label>
+                            <input type="number" id="reentry-cooldown" value="10" min="0" max="120" step="1" onchange="saveSettingsToServer()">
+                            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+                                Wait after auto-exit before re-entering same symbol.
+                            </div>
+                        </div>
+                        <div class="control-item">
+                            <label>Position Size ($)</label>
+                            <input type="number" id="position-size" value="1000" min="100" step="100" onchange="saveSettingsToServer()">
+                        </div>
+                        <div class="control-item">
+                            <label>Stop Loss (%)</label>
+                            <input type="number" id="stop-loss" value="2" min="0.5" max="10" step="0.5" onchange="saveSettingsToServer()">
+                        </div>
+                        <div class="control-item">
+                            <label>Take Profit (%)</label>
+                            <input type="number" id="take-profit" value="4" min="1" max="20" step="0.5" onchange="saveSettingsToServer()">
+                        </div>
+                        <div class="control-item">
+                            <label>Trailing Stop</label>
+                            <select id="trailing-stop" onchange="saveSettingsToServer()">
+                                <option value="none">Disabled</option>
+                                <option value="1">1% Trail</option>
+                                <option value="2" selected>2% Trail</option>
+                                <option value="3">3% Trail</option>
+                            </select>
+                        </div>
+                        <div class="control-item" style="grid-column: span 2;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="auto-trade" style="width: 20px; height: 20px; accent-color: #10b981;" onchange="saveAutoTradeSetting(this.checked)">
+                                <span>🤖 Auto-Execute Trades</span>
+                                <span style="font-size: 11px; color: #f59e0b;">(Auto-buys when signals meet criteria)</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Auto-Trade Status Indicator -->
+                    <div id="auto-trade-status" class="hidden" style="background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 8px; padding: 10px 15px; margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 20px;">🤖</span>
+                        <div>
+                            <div style="font-weight: 600; color: #10b981;">Auto-Trading ACTIVE</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Bot will automatically execute trades</div>
+                        </div>
+                    </div>
+                    
+                    <div class="bot-controls">
+                        <button class="btn-start" id="start-btn" onclick="startBot()">
+                            🚀 Start Trading Bot
+                        </button>
+                        <button class="btn-stop hidden" id="stop-btn" onclick="stopBot()">
+                            🛑 Stop Bot
+                        </button>
+                        <button class="btn btn-secondary" onclick="runManualScan()">
+                            🔍 Manual Scan
+                        </button>
+                        <button class="btn btn-secondary" onclick="testAutoTrade()" style="background: #f59e0b;">
+                            🧪 Test Trade
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Two Column Layout -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">
+            <!-- Live Signals -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📡 Live Trading Signals</h2>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="color: var(--text-secondary); font-size: 12px;" id="signals-timestamp">--</span>
+                        <button class="btn btn-secondary" onclick="runInitialScan()" style="font-size: 11px; padding: 4px 8px;">
+                            🔄 Refresh
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body" style="max-height: 400px; overflow-y: auto; padding: 0;">
+                    <div id="signals-container">
+                        <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                            Start the bot to see live signals
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Positions -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📊 Active Positions</h2>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-primary" onclick="importPositions()" style="font-size: 12px;">📥 Import from Monitor</button>
+                        <button class="btn btn-secondary" onclick="closeAllPositions()" style="font-size: 12px;">Close All</button>
+                    </div>
+                </div>
+                <div class="card-body" style="max-height: 400px; overflow-y: auto; padding: 0;">
+                    <table class="position-table" id="positions-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Type</th>
+                                <th>Qty</th>
+                                <th>Entry</th>
+                                <th>Current</th>
+                                <th>Updated</th>
+                                <th style="color: #ef4444;">SL</th>
+                                <th style="color: #10b981;">Target</th>
+                                <th>P&L</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="positions-body">
+                            <tr>
+                                <td colspan="10" style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                                    No active positions
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trade History -->
+        <div class="card mt-20">
+            <div class="card-header">
+                <h2 class="card-title">📜 Trade History</h2>
+                <button class="btn btn-secondary" onclick="exportTrades()">📥 Export CSV</button>
+            </div>
+            <div class="card-body" style="max-height: 300px; overflow-y: auto; padding: 0;">
+                <div id="trade-log">
+                    <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                        No trades yet
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- End-of-Day Analysis -->
+        <div class="card mt-20">
+            <div class="card-header">
+                <h2 class="card-title">📊 End-of-Day Analysis</h2>
+                <span id="eod-analysis-date" style="color: var(--text-secondary); font-size: 12px;">Awaiting 3:00 PM CT analysis</span>
+            </div>
+            <div class="card-body">
+                <div id="eod-analysis-container" style="color: var(--text-secondary); font-size: 13px;">
+                    End-of-session summary will appear here after 3:00 PM CT.
+                </div>
+            </div>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- INTRADAY TRADING SCANNER SECTION -->
+        <!-- ================================================================ -->
+        <div class="card mt-20">
+            <div class="card-header">
+                <h2 class="card-title">⚡ Intraday Trading Scanner</h2>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="color: var(--text-secondary); font-size: 12px;" id="intraday-ts">--</span>
+                    <button class="btn btn-primary" onclick="runIntradayScan()" id="intraday-scan-btn" style="font-size: 12px;">
+                        🔍 Scan Now
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Tabs: Stocks / Options -->
+                <div class="scanner-tabs" style="margin-bottom: 16px;">
+                    <button class="scanner-tab active" onclick="switchScannerTab('stocks')" id="tab-stocks">📊 Intraday Stocks</button>
+                    <button class="scanner-tab" onclick="switchScannerTab('options')" id="tab-options">📞 Intraday Options</button>
+                </div>
+
+                <!-- Stocks Panel -->
+                <div class="scanner-panel active" id="panel-stocks">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div style="font-size: 13px; color: var(--text-secondary);">
+                            VWAP + EMA + MACD + RSI + Volume on 5-min bars
+                        </div>
+                        <div style="font-size: 12px;" id="stock-scan-count"></div>
+                    </div>
+                    <div class="scan-table-wrap" style="max-height: 480px; overflow-y: auto;">
+                        <div id="intraday-stock-results">
+                            <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                                Click <b>Scan Now</b> to find live intraday stock setups
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Options Panel -->
+                <div class="scanner-panel" id="panel-options">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div style="font-size: 13px; color: var(--text-secondary);">
+                            0-2 DTE options with momentum confirmation · ATM strikes
+                        </div>
+                        <div style="font-size: 12px;" id="opt-scan-count"></div>
+                    </div>
+                    <div class="scan-table-wrap" style="max-height: 480px; overflow-y: auto;">
+                        <div id="intraday-option-results">
+                            <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                                Click <b>Scan Now</b> to find live intraday option setups
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Intraday Rules -->
+                <div style="margin-top: 16px; padding: 12px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; font-size: 12px; color: var(--text-secondary);">
+                    <strong style="color: #a5b4fc;">⏰ Intraday Rules:</strong>
+                    Enter within 5-10 min of scan &nbsp;•&nbsp;
+                    Close ALL positions by 3:50 PM ET &nbsp;•&nbsp;
+                    Use tight stops &nbsp;•&nbsp;
+                    Take profits at T1/T2 quickly &nbsp;•&nbsp;
+                    Re-scan every 30 min–1 hr
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="margin-top: 40px; padding: 30px 0; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-secondary); font-size: 13px;">
+            <p>
+                <strong>⚠️ Risk Disclaimer:</strong> Trading involves substantial risk of loss. 
+                Past performance does not guarantee future results. Only trade with money you can afford to lose.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let accountMode = 'demo';
+        let selectedStrategy = 'trend_following';
+        let instrumentType = 'stocks';
+        let botRunning = false;
+        let autoTradeEnabled = false;
+        let refreshInterval = null;
+        let autoCycleInterval = null;
+        let statusRefreshCount = 0;
+        
+        // Demo account state
+        let demoAccount = {
+            balance: 10000,
+            initialBalance: 10000,
+            positions: [],
+            trades: [],
+            pnl: 0
+        };
+        
+        // Real account state (would connect to broker API)
+        let realAccount = {
+            balance: 0,
+            positions: [],
+            trades: [],
+            pnl: 0
+        };
+
+        // ── Resilient fetch with timeout, retry, and auto-reconnect ──
+        let _serverOnline = true;
+        let _reconnectTimer = null;
+
+        async function resilientFetch(url, options = {}, {
+            timeoutMs = 30000,
+            retries = 2,
+            retryDelay = 1000,
+            label = url
+        } = {}) {
+            for (let attempt = 0; attempt <= retries; attempt++) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), timeoutMs);
+                try {
+                    const resp = await fetch(url, { ...options, signal: controller.signal });
+                    clearTimeout(timer);
+                    if (!_serverOnline) {
+                        _serverOnline = true;
+                        console.log('🟢 Server reconnected');
+                        showNotification('🟢 Server reconnected', 'success');
+                    }
+                    return resp;
+                } catch (err) {
+                    clearTimeout(timer);
+                    const isTimeout = err.name === 'AbortError';
+                    const isNetwork = err.message === 'Failed to fetch' || err.name === 'TypeError';
+                    if ((isTimeout || isNetwork) && attempt < retries) {
+                        console.warn(`⏳ ${label} attempt ${attempt + 1} failed (${isTimeout ? 'timeout' : 'network'}), retrying in ${retryDelay}ms...`);
+                        await new Promise(r => setTimeout(r, retryDelay));
+                        retryDelay *= 2; // exponential backoff
+                        continue;
+                    }
+                    // All retries exhausted
+                    if (isNetwork && _serverOnline) {
+                        _serverOnline = false;
+                        console.error('🔴 Server unreachable — will auto-reconnect');
+                        showNotification('🔴 Server unreachable — retrying...', 'error');
+                        _startReconnect();
+                    }
+                    throw err;
+                }
+            }
+        }
+
+        function _startReconnect() {
+            if (_reconnectTimer) return;
+            _reconnectTimer = setInterval(async () => {
+                try {
+                    const r = await fetch('/api/health', { cache: 'no-store' });
+                    if (r.ok) {
+                        _serverOnline = true;
+                        clearInterval(_reconnectTimer);
+                        _reconnectTimer = null;
+                        console.log('🟢 Server back online');
+                        showNotification('🟢 Server back online — refreshing...', 'success');
+                        refreshStatus();
+                    }
+                } catch (_) { /* still offline, will retry */ }
+            }, 5000);
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadAccountState();
+            refreshStatus(true);
+            refreshInterval = setInterval(refreshStatus, 5000);
+            
+            // Auto-cycle interval (runs when bot is running)
+            // Checks every 10 seconds - the backend handles scan interval timing
+            autoCycleInterval = setInterval(() => {
+                if (botRunning) {
+                    console.log('🤖 Running auto-cycle...');
+                    runAutoCycle();
+                }
+            }, 10000);  // 10 seconds
+            
+            // ⚠️ BOT PAGE EXCEPTION: No visibilitychange handler here.
+            // This page must keep polling at full speed (5s status, 10s auto-cycle)
+            // even when the tab is inactive/unfocused, because auto_cycle drives
+            // trade execution and exit monitoring (stop-loss, targets, EOD closes).
+            // Other pages may throttle polling on blur — this page must NOT.
+            
+            // Run initial scan to get fresh live data
+            runInitialScan();
+        });
+        
+        // Run initial scan on page load for fresh data
+        async function runInitialScan() {
+            const container = document.getElementById('signals-container');
+            container.innerHTML = `
+                <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                    <div style="font-size: 24px; margin-bottom: 10px;">🔄</div>
+                    Loading live market data...
+                </div>
+            `;
+            
+            try {
+                const response = await resilientFetch('/api/bot/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        strategy: selectedStrategy,
+                        watchlist: document.getElementById('watchlist').value,
+                        instrument_type: document.getElementById('instrument-type').value
+                    })
+                }, { timeoutMs: 60000, retries: 2, label: 'initialScan' });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const filteredSignals = filterSignalsByInstrument(data.signals || []);
+                    renderSignals(filteredSignals);
+                    document.getElementById('signals-timestamp').innerHTML = 
+                        `<span style="color: #10b981;">●</span> Live: ${new Date().toLocaleTimeString()}`;
+                } else {
+                    container.innerHTML = `
+                        <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                            Click "🔄 Refresh" to load live signals
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Initial scan error:', error);
+                container.innerHTML = `
+                    <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                        Click "🔄 Refresh" to load live signals
+                    </div>
+                `;
+            }
+        }
+        
+        // Account switching
+        async function switchAccount(mode) {
+            accountMode = mode;
+            
+            // Update server-side account mode
+            try {
+                await fetch('/api/bot/switch_account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_mode: mode })
+                });
+            } catch (error) {
+                console.error('Failed to switch account on server:', error);
+            }
+            
+            // Update UI
+            document.querySelectorAll('.account-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`.account-btn.${mode}`).classList.add('active');
+            
+            const balanceCard = document.getElementById('balance-card');
+            const realWarning = document.getElementById('real-warning');
+            const accountLabel = document.getElementById('account-type-label');
+            
+            if (mode === 'demo') {
+                balanceCard.classList.remove('real-mode');
+                balanceCard.classList.add('demo-mode');
+                realWarning.classList.add('hidden');
+                accountLabel.textContent = 'DEMO';
+                updateAccountDisplay(demoAccount);
+            } else {
+                balanceCard.classList.remove('demo-mode');
+                balanceCard.classList.add('real-mode');
+                realWarning.classList.remove('hidden');
+                accountLabel.textContent = 'LIVE';
+                updateAccountDisplay(realAccount);
+            }
+            
+            // Save preference
+            localStorage.setItem('tradingAccountMode', mode);
+            
+            // Refresh status to get positions for the new account mode
+            await refreshStatus();
+        }
+        
+        // Strategy selection
+        function selectStrategy(strategy) {
+            selectedStrategy = strategy;
+            document.querySelectorAll('.strategy-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.querySelector(`[data-strategy="${strategy}"]`).classList.add('selected');
+        }
+        
+        // Update account display
+        function updateAccountDisplay(account) {
+            const initialBalance = account.initial_balance || account.initialBalance || 10000;
+            const cashBalance = account.balance || 0;
+            const positions = account.positions || [];
+            
+            // Calculate invested amount (at entry price) and current market value
+            // Handle LONG and SHORT positions differently
+            let investedAmount = 0;
+            let currentMarketValue = 0;
+            
+            positions.forEach(pos => {
+                const isOption = pos.instrument_type === 'option';
+                const multiplier = isOption ? 100 : 1;
+                const isShort = pos.side === 'SHORT';
+                const entryValue = (pos.entry_price || 0) * (pos.quantity || 0) * multiplier;
+                const currentValue = (pos.current_price || pos.entry_price || 0) * (pos.quantity || 0) * multiplier;
+                
+                if (isShort) {
+                    // SHORT positions: invested = entry proceeds (already in cash), market value = cover liability
+                    // Don't add to invested or market value — the cash already has proceeds,
+                    // and we need to subtract the cover cost
+                    currentMarketValue -= currentValue;  // Liability (need to buy back)
+                    investedAmount -= entryValue;         // Proceeds received (already in cash)
+                } else {
+                    // LONG positions: invested = purchase cost, market value = current worth
+                    investedAmount += entryValue;
+                    currentMarketValue += currentValue;
+                }
+            });
+            
+            // Portfolio value = cash + current market value of positions
+            // For LONG: cash already has entry cost deducted, add current market value
+            // For SHORT: cash already has entry proceeds added, subtract cover liability
+            const portfolioValue = cashBalance + currentMarketValue;
+            
+            // Unrealized P&L = current market value - invested amount
+            const unrealizedPnl = currentMarketValue - investedAmount;
+            
+            // Total P&L = portfolio value - initial balance
+            const totalPnl = portfolioValue - initialBalance;
+            const totalPnlPct = ((totalPnl / initialBalance) * 100).toFixed(2);
+            
+            // Update display
+            document.getElementById('account-balance').textContent = formatCurrency(portfolioValue);
+            document.getElementById('cash-available').textContent = formatCurrency(cashBalance);
+            document.getElementById('amount-invested').textContent = formatCurrency(investedAmount);
+            
+            const pnlEl = document.getElementById('account-pnl');
+            if (positions.length > 0 && unrealizedPnl !== 0) {
+                pnlEl.innerHTML = `${totalPnl >= 0 ? '+' : ''}${formatCurrency(totalPnl)} (${totalPnlPct}%) <span style="font-size: 11px; opacity: 0.7;">| Open P&L: ${unrealizedPnl >= 0 ? '+' : ''}${formatCurrency(unrealizedPnl)}</span>`;
+            } else {
+                pnlEl.textContent = `${totalPnl >= 0 ? '+' : ''}${formatCurrency(totalPnl)} (${totalPnlPct}%) P&L`;
+            }
+            pnlEl.className = `balance-change ${totalPnl >= 0 ? 'positive' : 'negative'}`;
+            
+            document.getElementById('stat-positions').textContent = account.positions ? account.positions.length : 0;
+            
+            // Count completed trades (round-trips: BUY + CLOSE = 1 trade)
+            // Only CLOSE/BUY_TO_COVER actions or SELL with auto_exit represent completed trades
+            const trades = account.trades || [];
+            const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED'];
+            const completedTrades = trades.filter(t => 
+                t.action === 'CLOSE' || 
+                t.action === 'BUY_TO_COVER' || 
+                (t.action === 'SELL' && (t.auto_exit || exitReasons.includes(t.reason)))
+            );
+            document.getElementById('stat-trades').textContent = completedTrades.length;
+            
+            // Calculate win rate from completed trades only
+            const wins = completedTrades.filter(t => t.pnl > 0).length;
+            const losses = completedTrades.filter(t => t.pnl !== undefined && t.pnl <= 0).length;
+            const totalCompleted = wins + losses;
+            const winRate = totalCompleted > 0 ? Math.round((wins / totalCompleted) * 100) : 0;
+            document.getElementById('stat-win-rate').textContent = `${winRate}%`;
+        }
+        
+        // Start bot
+        async function startBot() {
+            if (accountMode === 'real') {
+                if (!confirm('⚠️ WARNING: You are about to start LIVE trading with REAL MONEY. Are you absolutely sure?')) {
+                    return;
+                }
+            }
+            
+            const autoTrade = document.getElementById('auto-trade').checked;
+            console.log('🤖 Starting bot with auto_trade:', autoTrade);
+            
+            if (autoTrade && !confirm('🤖 Auto-Trade is ENABLED. The bot will automatically execute BUY orders when signals meet your criteria. Continue?')) {
+                return;
+            }
+            
+            instrumentType = document.getElementById('instrument-type').value;
+            const settings = {
+                strategy: selectedStrategy,
+                account_mode: accountMode,
+                auto_trade: autoTrade,
+                instrument_type: instrumentType,
+                watchlist: document.getElementById('watchlist').value,
+                scan_interval: parseInt(document.getElementById('scan-interval').value),
+                min_confidence: parseInt(document.getElementById('min-confidence').value),
+                min_option_dte_days: parseInt(document.getElementById('min-option-dte').value),
+                max_positions: parseInt(document.getElementById('max-positions').value),
+                max_daily_trades: parseInt(document.getElementById('max-daily-trades').value),
+                max_per_symbol_daily: parseInt(document.getElementById('max-per-symbol-daily').value),
+                reentry_cooldown_minutes: parseInt(document.getElementById('reentry-cooldown').value),
+                position_size: parseFloat(document.getElementById('position-size').value),
+                stop_loss: parseFloat(document.getElementById('stop-loss').value),
+                take_profit: parseFloat(document.getElementById('take-profit').value),
+                trailing_stop: document.getElementById('trailing-stop').value
+            };
+            
+            console.log('🤖 Bot settings:', settings);
+            
+            try {
+                const response = await fetch('/api/bot/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                
+                const data = await response.json();
+                console.log('🤖 Bot start response:', data);
+                
+                if (data.success) {
+                    botRunning = true;
+                    autoTradeEnabled = autoTrade;
+                    updateBotStatus(true);
+                    
+                    // Restart fast polling intervals
+                    if (refreshInterval) clearInterval(refreshInterval);
+                    refreshInterval = setInterval(refreshStatus, 5000);
+                    
+                    if (!autoCycleInterval) {
+                        autoCycleInterval = setInterval(() => {
+                            if (botRunning) {
+                                console.log('🤖 Running auto-cycle...');
+                                runAutoCycle();
+                            }
+                        }, 10000);
+                        console.log('🟢 Auto-cycle interval restarted');
+                    }
+                    
+                    showNotification(`✅ Bot started ${autoTrade ? 'with AUTO-TRADE' : ''}`, 'success');
+                    
+                    // Immediately trigger first auto-cycle
+                    console.log('🤖 Triggering immediate auto-cycle...');
+                    setTimeout(() => runAutoCycle(), 1000);  // Small delay to ensure state is saved
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Failed to start bot: ' + error.message, 'error');
+            }
+        }
+        
+        // Stop bot
+        async function stopBot() {
+            if (!confirm('Are you sure you want to stop the trading bot?')) return;
+            
+            try {
+                const response = await fetch('/api/bot/stop', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    botRunning = false;
+                    updateBotStatus(false);
+                    
+                    // Stop auto-cycle polling (no need to hit backend when stopped)
+                    if (autoCycleInterval) {
+                        clearInterval(autoCycleInterval);
+                        autoCycleInterval = null;
+                        console.log('🛑 Auto-cycle interval cleared');
+                    }
+                    // Slow down status refresh to 30s when stopped (was 5s)
+                    if (refreshInterval) {
+                        clearInterval(refreshInterval);
+                        refreshInterval = setInterval(refreshStatus, 30000);
+                        console.log('🛑 Status refresh slowed to 30s');
+                    }
+                    
+                    showNotification('✅ Bot stopped', 'success');
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Failed to stop bot: ' + error.message, 'error');
+            }
+        }
+        
+        // Update bot status UI
+        function updateBotStatus(running) {
+            const statusEl = document.getElementById('bot-status');
+            const statusText = document.getElementById('bot-status-text');
+            const startBtn = document.getElementById('start-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            
+            if (running) {
+                statusEl.classList.remove('stopped');
+                statusEl.classList.add('running');
+                statusText.textContent = 'RUNNING';
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else {
+                statusEl.classList.remove('running');
+                statusEl.classList.add('stopped');
+                statusText.textContent = 'STOPPED';
+                startBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+            }
+            
+            // Update auto-trade status indicator
+            const autoTradeStatus = document.getElementById('auto-trade-status');
+            if (running && autoTradeEnabled) {
+                autoTradeStatus.classList.remove('hidden');
+                autoTradeStatus.style.display = 'flex';
+            } else {
+                autoTradeStatus.classList.add('hidden');
+                autoTradeStatus.style.display = 'none';
+            }
+        }
+        
+        // Test auto-trade execution
+        async function testAutoTrade() {
+            showNotification('🧪 Testing trade execution...', 'info');
+            
+            try {
+                const response = await fetch('/api/bot/test_trade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: 'AAPL',
+                        action: 'BUY',
+                        quantity: 1,
+                        price: 250.00,
+                        account_mode: accountMode
+                    })
+                });
+                
+                const data = await response.json();
+                console.log('🧪 Test trade response:', data);
+                
+                if (data.success) {
+                    showNotification(`✅ Test trade executed: ${data.message}`, 'success');
+                    await refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Test trade failed: ' + error.message, 'error');
+            }
+        }
+        
+        // Reset demo account to starting balance
+        async function resetDemoAccount() {
+            if (!confirm('Reset demo account to $10,000 and clear all positions?')) return;
+            
+            try {
+                const response = await fetch('/api/bot/reset_demo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                console.log('🔄 Reset demo response:', data);
+                
+                if (data.success) {
+                    showNotification('✅ Demo account reset to $10,000', 'success');
+                    await refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Reset failed: ' + error.message, 'error');
+            }
+        }
+        
+        let isSyncing = false;  // Prevent infinite recursion
+        let isAutoCycleInFlight = false;
+        
+        // Refresh status
+        async function refreshStatus(forceLive = false) {
+            try {
+            statusRefreshCount += 1;
+            const periodicForceLive = (statusRefreshCount % 6 === 0); // ~every 30s at 5s polling
+            const useForceLive = forceLive || periodicForceLive;
+            const response = await resilientFetch(`/api/bot/status?_ts=${Date.now()}${useForceLive ? '&force_live=1' : ''}`, { cache: 'no-store' }, { timeoutMs: 15000, retries: 1, label: 'refreshStatus' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    const wasRunning = botRunning;
+                    botRunning = data.running;
+                    const hasOpenPositions = Array.isArray(data.positions) && data.positions.length > 0;
+                    
+                    // Auto-clean intervals if server says bot stopped (e.g. stopped from another tab)
+                    if (wasRunning && !botRunning) {
+                        if (autoCycleInterval) {
+                            clearInterval(autoCycleInterval);
+                            autoCycleInterval = null;
+                            console.log('🛑 Bot stopped externally — auto-cycle cleared');
+                        }
+                        // Slow down refresh polling
+                        if (refreshInterval) {
+                            clearInterval(refreshInterval);
+                            refreshInterval = setInterval(refreshStatus, hasOpenPositions ? 5000 : 30000);
+                        }
+                    }
+                    
+                    // ALWAYS sync auto_trade from server to persist setting across page loads
+                    // The server is the source of truth for this setting
+                    autoTradeEnabled = data.auto_trade || false;
+                    document.getElementById('auto-trade').checked = autoTradeEnabled;
+                    
+                    updateBotStatus(data.running);
+                    if (data.last_scan) {
+                        const scanTime = new Date(data.last_scan);
+                        const ageSeconds = Math.floor((Date.now() - scanTime.getTime()) / 1000);
+                        const ageStr = ageSeconds < 60 ? `${ageSeconds}s ago` : 
+                                       ageSeconds < 3600 ? `${Math.floor(ageSeconds/60)}m ago` :
+                                       `${Math.floor(ageSeconds/3600)}h ago`;
+                        
+                        document.getElementById('stat-last-scan').textContent = scanTime.toLocaleTimeString();
+                        
+                        // Update signals timestamp with age indicator
+                        const freshness = ageSeconds < 120 ? '#10b981' : ageSeconds < 600 ? '#f59e0b' : '#ef4444';
+                        document.getElementById('signals-timestamp').innerHTML = 
+                            `<span style="color: ${freshness};">●</span> ${ageStr}`;
+                    }
+                    
+                    if (data.signals && data.signals.length > 0) {
+                        renderSignals(filterSignalsByInstrument(data.signals));
+                    }
+
+                    renderDailyAnalysis(data.daily_analysis || null);
+                    
+                    const latestPositions = Array.isArray(data.positions)
+                        ? data.positions
+                        : (Array.isArray((data.demo_account || {}).positions) ? data.demo_account.positions : []);
+                    renderPositions(latestPositions);
+                    
+                    if (data.trades) {
+                        renderTradeLog(data.trades);
+                    }
+                    
+                    // Sync accountMode with server's account_mode to ensure close operations work correctly
+                    // Use flag to prevent infinite recursion
+                    if (data.account_mode && data.account_mode !== accountMode && !isSyncing) {
+                        isSyncing = true;
+                        await switchAccount(data.account_mode);
+                        isSyncing = false;
+                    }
+                    
+                    // Update account based on mode
+                    if (accountMode === 'demo' && data.demo_account) {
+                        demoAccount = data.demo_account;
+                        updateAccountDisplay(demoAccount);
+                    }
+                }
+            } catch (error) {
+                console.error('Status refresh error:', error);
+                isSyncing = false;  // Reset flag on error
+            }
+        }
+        
+        // Auto trading cycle - scans and auto-executes trades when bot is running
+        async function runAutoCycle() {
+            if (!botRunning) {
+                console.log('🤖 Auto-cycle skipped: bot not running');
+                return;
+            }
+
+            if (isAutoCycleInFlight) {
+                return;
+            }
+            isAutoCycleInFlight = true;
+            
+            console.log('🤖 Running auto-cycle, autoTradeEnabled:', autoTradeEnabled);
+            
+            try {
+                const response = await resilientFetch('/api/bot/auto_cycle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                }, { timeoutMs: 60000, retries: 1, label: 'autoCycle' });
+                
+                const data = await response.json();
+                console.log('🤖 Auto-cycle response:', data);
+                
+                if (data.success) {
+                    // Update last scan time
+                    if (data.timestamp) {
+                        document.getElementById('stat-last-scan').textContent = 
+                            new Date(data.timestamp).toLocaleTimeString();
+                    }
+                    
+                    // Update signals
+                    if (data.signals && data.signals.length > 0) {
+                        renderSignals(filterSignalsByInstrument(data.signals));
+                        document.getElementById('signals-timestamp').innerHTML = 
+                            `<span style="color: #10b981;">●</span> Live: ${new Date().toLocaleTimeString()}`;
+                    }
+
+                    if (data.daily_analysis) {
+                        renderDailyAnalysis(data.daily_analysis);
+                    }
+                    
+                    // Notify about auto-triggered exits (SL/Target hits)
+                    if (data.exits_triggered && data.exits_triggered.length > 0) {
+                        console.log('🛑 EXITS TRIGGERED:', data.exits_triggered);
+                        for (const exit of data.exits_triggered) {
+                            const emoji = exit.reason === 'TARGET_HIT' ? '🎯' : '🛑';
+                            const reasonText = exit.reason === 'TARGET_HIT' ? 'TARGET HIT' : 'STOP LOSS';
+                            const pnlColor = exit.pnl >= 0 ? '#10b981' : '#ef4444';
+                            const pnlSign = exit.pnl >= 0 ? '+' : '';
+                            showNotification(
+                                `${emoji} AUTO-EXIT: ${exit.symbol} - ${reasonText} | Entry: $${exit.entry_price.toFixed(2)} → Exit: $${exit.exit_price.toFixed(2)} | P&L: ${pnlSign}$${exit.pnl.toFixed(2)} (${pnlSign}${exit.pnl_pct.toFixed(1)}%)`,
+                                exit.pnl >= 0 ? 'success' : 'error'
+                            );
+                        }
+                        // Refresh status to update positions/balance
+                        await refreshStatus();
+                    }
+                    
+                    // Notify about auto-executed trades
+                    if (data.trades_executed && data.trades_executed.length > 0) {
+                        console.log('🤖 TRADES EXECUTED:', data.trades_executed);
+                        for (const trade of data.trades_executed) {
+                            const emoji = trade.action === 'BUY' ? '🟢' : '🔴';
+                            const actionText = trade.side === 'LONG' ? 'Bought' : 'Shorted';
+                            showNotification(
+                                `🤖 AUTO-TRADE: ${emoji} ${actionText} ${trade.quantity} ${trade.symbol} @ $${trade.price.toFixed(2)} (${trade.confidence}% conf)`,
+                                'success'
+                            );
+                        }
+                        // Refresh status to update positions/balance
+                        await refreshStatus();
+                    }
+                    
+                    // Log skipped reasons for debugging
+                    if (data.skipped_reasons && data.skipped_reasons.length > 0) {
+                        console.log('🤖 Signals skipped:', data.skipped_reasons);
+                        // Show first skip reason to user if no trades executed and auto-trade is on
+                        if ((!data.trades_executed || data.trades_executed.length === 0) && data.auto_trade_enabled) {
+                            showNotification(`ℹ️ ${data.skipped_reasons[0]}`, 'info');
+                        }
+                    }
+                    
+                    // Show status message
+                    if (data.skipped_scan && data.message) {
+                        console.log('🤖 Auto-cycle:', data.message);
+                    }
+                } else {
+                    console.log('🤖 Auto-cycle failed:', data.message);
+                }
+            } catch (error) {
+                console.error('🤖 Auto-cycle error:', error);
+            } finally {
+                isAutoCycleInFlight = false;
+            }
+        }
+        
+        // Manual scan
+        async function runManualScan() {
+            showNotification('🔍 Running manual scan...', 'info');
+            
+            try {
+                const response = await resilientFetch('/api/bot/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        strategy: selectedStrategy,
+                        watchlist: document.getElementById('watchlist').value,
+                        instrument_type: document.getElementById('instrument-type').value
+                    })
+                }, { timeoutMs: 60000, retries: 2, label: 'manualScan' });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const filteredSignals = filterSignalsByInstrument(data.signals || []);
+                    renderSignals(filteredSignals);
+                    document.getElementById('signals-timestamp').innerHTML = 
+                        `<span style="color: #10b981;">●</span> Live: ${new Date().toLocaleTimeString()}`;
+                    showNotification(`✅ Found ${filteredSignals.length} signals`, 'success');
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Scan failed: ' + error.message + ' — server may be restarting, will auto-retry', 'error');
+            }
+        }
+        
+        // Render signals
+        function renderSignals(signals) {
+            const container = document.getElementById('signals-container');
+            
+            if (!signals || signals.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                        No signals at the moment - try adjusting confidence threshold
+                    </div>
+                `;
+                return;
+            }
+            
+            // Build table header - different columns for options vs stocks
+            const hasOptions = signals.some(s => s.instrument_type === 'option');
+            const hasStocks = signals.some(s => s.instrument_type !== 'option');
+            
+            container.innerHTML = `
+            <div class="scan-table-wrap">
+                <table class="scan-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Symbol</th>
+                            <th>Type</th>
+                            <th>Direction</th>
+                            <th>Confidence</th>
+                            <th>Entry</th>
+                            <th>Updated</th>
+                            <th style="color:#ef4444;">Stop</th>
+                            <th style="color:#10b981;">Target</th>
+                            <th>RSI</th>
+                            <th>Vol</th>
+                            <th>Signals</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${signals.map((signal, i) => {
+                            const isOption = signal.instrument_type === 'option';
+                            const displayName = isOption ? signal.symbol : signal.symbol;
+                            const isBull = signal.action === 'BUY' || signal.direction === 'BULLISH';
+                            const dirColor = isBull ? '#10b981' : '#ef4444';
+                            const priceSuffix = isOption ? '/ct' : '';
+
+                            let signalUpdateDisplay = '--';
+                            if (signal.live_price_update) {
+                                const updateTime = new Date(signal.live_price_update);
+                                if (!isNaN(updateTime.getTime())) {
+                                    const ageSec = Math.floor((Date.now() - updateTime.getTime()) / 1000);
+                                    const stale = ageSec > 60;
+                                    signalUpdateDisplay = `${updateTime.toLocaleTimeString()}${stale ? ' ⚠️' : ''}`;
+                                }
+                            }
+                            
+                            // Type badge
+                            const typeBadge = isOption
+                                ? '<span class="opt-badge ' + (signal.option_type || 'call') + '">' + (signal.option_type || 'OPT').toUpperCase() + '</span>'
+                                : '<span style="background:rgba(99,102,241,0.2);color:#a5b4fc;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;">STOCK</span>';
+                            
+                            // Scan type badge
+                            const scanBadge = signal.scan_type === 'intraday'
+                                ? '<span style="background:rgba(245,158,11,0.2);color:#f59e0b;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;">INTRADAY</span>'
+                                : '';
+                            
+                            // Direction badge
+                            const dirBadge = '<span class="trend-badge ' + (isBull ? 'bullish' : 'bearish') + '">' + 
+                                (isBull ? '📈' : '📉') + ' ' + (signal.direction || signal.action) + '</span>';
+                            
+                            // Confidence pill
+                            const isBelowThreshold = signal._below_threshold || false;
+                            const confColor = isBelowThreshold ? '#6b7280' : (signal.confidence >= 80 ? '#10b981' : signal.confidence >= 60 ? '#f59e0b' : '#ef4444');
+                            const confBg = isBelowThreshold ? '107,114,128' : (signal.confidence >= 80 ? '16,185,129' : signal.confidence >= 60 ? '245,158,11' : '239,68,68');
+                            const belowLabel = isBelowThreshold ? ' ⚠️' : '';
+                            const confPill = '<span style="background:rgba(' + confBg + ',0.2);color:' + confColor + ';padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;">' + signal.confidence + '%' + belowLabel + '</span>'
+                                + (isBelowThreshold ? '<span style="color:#6b7280;font-size:9px;margin-left:4px;">DISPLAY ONLY</span>' : '');
+                            
+                            // Option details for display
+                            const optDetails = isOption 
+                                ? '<div style="font-size:10px;color:var(--text-secondary);margin-top:2px;">$' + signal.strike + ' ' + (signal.option_type||'').toUpperCase() + ' · DTE ' + signal.dte + '</div>'
+                                : '';
+                            
+                            // Trade button
+                            let tradeBtn;
+                            if (isOption) {
+                                const optData = encodeURIComponent(JSON.stringify({
+                                    symbol: signal.symbol,
+                                    contract: signal.contract || '',
+                                    option_type: signal.option_type || 'call',
+                                    strike: signal.strike || 0,
+                                    expiry: signal.expiry || '',
+                                    dte: signal.dte || 0,
+                                    premium: signal.entry,
+                                    direction: signal.direction || 'BULLISH',
+                                    stop_premium: signal.stop_loss,
+                                    target_1_premium: signal.target,
+                                    target_2_premium: signal.target_2 || signal.target * 1.5
+                                }));
+                                tradeBtn = '<button class="action-btn-sm buy" onclick="executeOptionTrade(JSON.parse(decodeURIComponent(\'' + optData + '\')))">🟢 Buy ' + (signal.option_type || 'call').toUpperCase() + '</button>';
+                            } else {
+                                tradeBtn = '<button class="action-btn-sm ' + (isBull ? 'buy' : 'sell') + '" onclick="executeTrade(\'' + signal.symbol + '\', \'' + signal.action + '\', ' + signal.entry + ')">' + 
+                                    (isBull ? '🟢 Buy' : '🔴 Short') + '</button>';
+                            }
+                            
+                            return '<tr class="' + (isBull ? 'bull-row' : 'bear-row') + '">' +
+                                '<td style="color:var(--text-secondary);">' + (i + 1) + '</td>' +
+                                '<td class="sym-cell">' + displayName + optDetails + '</td>' +
+                                '<td>' + typeBadge + scanBadge + '</td>' +
+                                '<td>' + dirBadge + '</td>' +
+                                '<td>' + confPill + '</td>' +
+                                '<td class="price-cell">$' + (signal.entry?.toFixed(2) || '--') + priceSuffix + '</td>' +
+                                '<td style="font-size:11px;color:var(--text-secondary);white-space:nowrap;">' + signalUpdateDisplay + '</td>' +
+                                '<td style="color:#ef4444;font-weight:600;">$' + (signal.stop_loss?.toFixed(2) || '--') + priceSuffix + '</td>' +
+                                '<td style="color:#10b981;font-weight:600;">$' + (signal.target?.toFixed(2) || '--') + priceSuffix + '</td>' +
+                                '<td style="color:' + (signal.rsi > 70 ? '#ef4444' : signal.rsi < 30 ? '#10b981' : 'var(--text-primary)') + ';font-weight:600;">' + (signal.rsi?.toFixed(1) || '--') + '</td>' +
+                                '<td style="color:' + (signal.volume_ratio > 1.5 ? '#f59e0b' : 'var(--text-primary)') + ';font-weight:600;">' + (signal.volume_ratio?.toFixed(1) || '--') + 'x</td>' +
+                                '<td><div class="signal-tags">' + (signal.reason || '').split(', ').slice(0, 2).map(s => '<span class="sig-tag">' + s + '</span>').join('') + '</div></td>' +
+                                '<td>' + tradeBtn + '</td>' +
+                            '</tr>';
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+        }
+
+        function filterSignalsByInstrument(signals) {
+            const selectedInstrument = document.getElementById('instrument-type')?.value || 'stocks';
+            if (!Array.isArray(signals) || signals.length === 0) {
+                return [];
+            }
+
+            if (selectedInstrument === 'options') {
+                return signals.filter(s => s && s.instrument_type === 'option');
+            }
+
+            if (selectedInstrument === 'stocks') {
+                return signals.filter(s => s && s.instrument_type !== 'option');
+            }
+
+            return signals;
+        }
+        
+        // Render positions
+        function renderPositions(positions) {
+            const tbody = document.getElementById('positions-body');
+            
+            if (!positions || positions.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="10" style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                            No active positions
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = positions.map(pos => {
+                const isOption = pos.instrument_type === 'option';
+                const displaySymbol = isOption ? (pos.contract || pos.symbol) : pos.symbol;
+                const quantityNum = Number(pos.quantity || 0);
+                const entryNum = Number(pos.entry_price || 0);
+                const currentRaw = Number(pos.current_price);
+                const currentNum = Number.isFinite(currentRaw) && currentRaw > 0 ? currentRaw : entryNum;
+                const sideMult = pos.side === 'SHORT' ? -1 : 1;
+                const qty = isOption ? `${quantityNum} ct` : quantityNum;
+
+                let pnl = 0;
+                let pnlPct = '0.00';
+
+                if (entryNum > 0 && quantityNum > 0) {
+                    if (isOption) {
+                        pnl = (currentNum - entryNum) * quantityNum * 100 * sideMult;
+                    } else {
+                        pnl = (currentNum - entryNum) * quantityNum * sideMult;
+                    }
+
+                    const denom = entryNum * quantityNum * (isOption ? 100 : 1);
+                    const pct = denom > 0 ? (pnl / denom) * 100 : 0;
+                    pnlPct = Number.isFinite(pct) ? pct.toFixed(2) : '0.00';
+                }
+                
+                // Check if near SL or target
+                const stopNum = Number(pos.stop_loss || 0);
+                const targetNum = Number(pos.target || 0);
+                const nearSL = stopNum > 0 && (pos.side === 'SHORT' ? currentNum >= stopNum * 0.98 : currentNum <= stopNum * 1.02);
+                const nearTarget = targetNum > 0 && (pos.side === 'SHORT' ? currentNum <= targetNum * 1.02 : currentNum >= targetNum * 0.98);
+
+                const typeBadge = isOption
+                    ? `<span class="opt-badge ${pos.option_type || 'call'}" style="font-size:10px;">${(pos.option_type || 'OPT').toUpperCase()}</span>`
+                    : `<span class="trend-badge ${pos.side === 'LONG' ? 'bullish' : 'bearish'}">${pos.side}</span>`;
+                
+                // Trade type badge (day/swing/positional)
+                const tradeType = pos.trade_type || 'swing';
+                const tradeTypeBadge = `<span class="trade-type-badge ${tradeType}">${tradeType === 'day' ? 'INTRADAY' : tradeType.toUpperCase()}</span>`;
+                
+                // Bot auto-trade indicator
+                const sourceBadge = pos.source === 'bot' || pos.auto_trade 
+                    ? '<span class="bot-badge">BOT</span>' 
+                    : '<span class="bot-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8;">MANUAL</span>';
+
+                // Price update timestamp + freshness marker
+                let updateDisplay = '--';
+                if (pos.last_price_update) {
+                    const updateTime = new Date(pos.last_price_update);
+                    if (!isNaN(updateTime.getTime())) {
+                        const ageSec = Math.floor((Date.now() - updateTime.getTime()) / 1000);
+                        const stale = ageSec > 60;
+                        updateDisplay = `${updateTime.toLocaleTimeString()}${stale ? ' ⚠️' : ''}`;
+                    }
+                }
+                
+                return `
+                    <tr style="${nearSL ? 'background: rgba(239, 68, 68, 0.1);' : nearTarget ? 'background: rgba(16, 185, 129, 0.1);' : ''}">
+                        <td class="position-symbol">
+                            ${displaySymbol}
+                            <div style="display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap;">
+                                ${tradeTypeBadge}
+                                ${sourceBadge}
+                            </div>
+                        </td>
+                        <td>${typeBadge}</td>
+                        <td>${qty}</td>
+                        <td>${formatCurrency(entryNum)}${isOption ? ' <span style="color:var(--text-secondary);font-size:10px;">/ct</span>' : ''}</td>
+                        <td style="font-weight: 600;">
+                            ${formatCurrency(currentNum)}${isOption ? ' <span style="color:var(--text-secondary);font-size:10px;">/ct</span>' : ''}
+                            ${isOption && pos.underlying_price ? '<br><span style="color:var(--text-secondary);font-size:10px;">Stock: $' + pos.underlying_price.toFixed(2) + '</span>' : ''}
+                        </td>
+                        <td style="font-size: 11px; color: var(--text-secondary); white-space: nowrap;">${updateDisplay}</td>
+                        <td style="color: #ef4444; font-size: 11px;">
+                            ${stopNum > 0 ? formatCurrency(stopNum) : '-'}
+                            ${nearSL ? ' 🚨' : ''}
+                        </td>
+                        <td style="color: #10b981; font-size: 11px;">
+                            ${targetNum > 0 ? formatCurrency(targetNum) : '-'}
+                            ${nearTarget ? ' 🎯' : ''}
+                        </td>
+                        <td class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">
+                            ${pnl >= 0 ? '+' : ''}${formatCurrency(pnl)} (${pnlPct}%)
+                        </td>
+                        <td>
+                            <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" 
+                                    onclick="closePosition('${pos.symbol}', '${pos.instrument_type || 'stock'}', '${(pos.contract || '').replace(/'/g, "\\'")}', '${pos.source || 'manual'}')">${isOption ? 'Close Option' : 'Close'}</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        // Render trade log
+        function renderTradeLog(trades) {
+            const container = document.getElementById('trade-log');
+            
+            if (!trades || trades.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; color: var(--text-secondary); padding: 40px;">
+                        No trades yet
+                    </div>
+                `;
+                return;
+            }
+            
+            // Group trades into round trips (LONG: BUY→CLOSE, SHORT: SELL→CLOSE)
+            const roundTrips = [];
+            const openPositions = {}; // Track open positions by key (symbol or contract)
+            
+            trades.forEach(trade => {
+                // Determine side: use explicit side field, or for auto-exit closings infer from action
+                // SELL with auto_exit/exit-reason = closing a LONG, BUY_TO_COVER = closing a SHORT
+                const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED', 'END_OF_DAY'];
+                const isAutoExit = trade.auto_exit || exitReasons.includes(trade.reason);
+                const side = trade.side || (isAutoExit 
+                    ? (trade.action === 'BUY_TO_COVER' ? 'SHORT' : 'LONG')
+                    : (trade.action === 'BUY' ? 'LONG' : 'SHORT'));
+                const isOption = trade.instrument_type === 'option';
+                const key = isOption ? (trade.contract || trade.symbol + '_opt') : trade.symbol;
+                
+                // Auto-exit trades have auto_exit=true, or specific exit reasons (STOP_LOSS, TARGET_HIT)
+                // Note: entry trades also have 'reason' field (signal reasons), so we check for specific exit reasons
+                const isClosing = trade.action === 'CLOSE' || (trade.action === 'SELL' && isAutoExit) || trade.action === 'BUY_TO_COVER';
+                const isOpening = !isClosing && (
+                    (trade.action === 'BUY' && side === 'LONG') || 
+                    (trade.action === 'SELL' && side === 'SHORT')
+                );
+                
+                if (isOpening) {
+                    if (!openPositions[key]) {
+                        openPositions[key] = [];
+                    }
+                    openPositions[key].push({
+                        ...trade,
+                        side: side,
+                        _key: key
+                    });
+                } else if (isClosing) {
+                    // For auto-exit trades: try to match by contract first, then by symbol
+                    let closeKey = key;
+                    // If auto-exit doesn't have instrument_type, check if there's an open option position for this symbol
+                    if (!isOption && isAutoExit && !openPositions[key]?.length) {
+                        // Look for an option open position for same symbol
+                        const optKey = Object.keys(openPositions).find(k => 
+                            k.includes(trade.symbol) && k !== trade.symbol && openPositions[k]?.length > 0
+                        );
+                        if (optKey) closeKey = optKey;
+                    }
+                    const openTrade = (() => {
+                        const bucket = openPositions[closeKey];
+                        if (!bucket || bucket.length === 0) return undefined;
+                        const closeQty = trade.quantity || 0;
+                        const closeSrc = trade.source || (trade.auto_exit ? 'bot' : 'manual');
+                        const getSrc = (o) => o.source || (o.auto_trade ? 'bot' : 'manual');
+
+                        // 1. Exact match: same source AND same quantity (most precise)
+                        const exactIdx = bucket.findIndex(o => getSrc(o) === closeSrc && o.quantity === closeQty);
+                        if (exactIdx >= 0) return bucket.splice(exactIdx, 1)[0];
+
+                        // 2. Same quantity, any source
+                        const qtyIdx = bucket.findIndex(o => o.quantity === closeQty);
+                        if (qtyIdx >= 0) return bucket.splice(qtyIdx, 1)[0];
+
+                        // 3. Merged exit: one close covers multiple opens (e.g. SELL 12 closing 2×BUY 6)
+                        if (closeQty > 0) {
+                            let remaining = closeQty;
+                            const consumed = [];
+                            // First pass: same source
+                            for (let i = 0; remaining > 0 && i < bucket.length; ) {
+                                if (getSrc(bucket[i]) === closeSrc && (bucket[i].quantity || 0) <= remaining) {
+                                    remaining -= bucket[i].quantity || 0;
+                                    consumed.push(bucket.splice(i, 1)[0]);
+                                } else { i++; }
+                            }
+                            // Second pass: any source
+                            for (let i = 0; remaining > 0 && i < bucket.length; ) {
+                                if ((bucket[i].quantity || 0) <= remaining) {
+                                    remaining -= bucket[i].quantity || 0;
+                                    consumed.push(bucket.splice(i, 1)[0]);
+                                } else { i++; }
+                            }
+                            if (consumed.length > 0) {
+                                // Return merged entry with weighted-average price
+                                const merged = { ...consumed[0] };
+                                const totalQty = consumed.reduce((s, c) => s + (c.quantity || 0), 0);
+                                const totalCost = consumed.reduce((s, c) => s + (c.price || 0) * (c.quantity || 0), 0);
+                                merged.quantity = totalQty;
+                                merged.price = totalQty > 0 ? totalCost / totalQty : merged.price;
+                                return merged;
+                            }
+                        }
+
+                        // 4. Same source FIFO
+                        const srcIdx = bucket.findIndex(o => getSrc(o) === closeSrc);
+                        if (srcIdx >= 0) return bucket.splice(srcIdx, 1)[0];
+
+                        // 5. Pure FIFO fallback
+                        return bucket.shift();
+                    })();
+                    const openSide = openTrade?.side || 'LONG';
+                    const tradeIsOption = isOption || openTrade?.instrument_type === 'option';
+                    
+                    roundTrips.push({
+                        symbol: trade.symbol,
+                        contract: trade.contract || openTrade?.contract || '',
+                        instrument_type: tradeIsOption ? 'option' : 'stock',
+                        option_type: trade.option_type || openTrade?.option_type || '',
+                        side: openSide,
+                        quantity: trade.quantity,
+                        entryPrice: trade.entry_price || (openTrade ? openTrade.price : null),
+                        entryTime: openTrade ? openTrade.timestamp : null,
+                        exitPrice: trade.exit_price || trade.price,
+                        exitTime: trade.timestamp,
+                        pnl: trade.pnl,
+                        completed: true,
+                        trade_type: openTrade?.trade_type || trade.trade_type || 'swing',
+                        auto_trade: openTrade?.auto_trade || trade.auto_trade || false,
+                        source: trade.source || openTrade?.source || ''
+                    });
+                }
+            });
+            
+            // Add open positions (entries without matching close)
+            Object.entries(openPositions).forEach(([key, positions]) => {
+                const mergedByKey = {};
+                positions.forEach(pos => {
+                    const mergeKey = [
+                        pos.symbol || '',
+                        pos.contract || '',
+                        pos.instrument_type || 'stock',
+                        pos.option_type || '',
+                        pos.side || 'LONG',
+                        pos.trade_type || 'swing',
+                        pos.source || '',
+                        pos.auto_trade ? '1' : '0'
+                    ].join('|');
+
+                    const qty = Number(pos.quantity || 0);
+                    const px = Number(pos.price || 0);
+                    if (!mergedByKey[mergeKey]) {
+                        mergedByKey[mergeKey] = {
+                            ...pos,
+                            quantity: 0,
+                            _cost: 0,
+                            _earliest: pos.timestamp || ''
+                        };
+                    }
+
+                    mergedByKey[mergeKey].quantity += qty;
+                    mergedByKey[mergeKey]._cost += qty * px;
+                    if (pos.timestamp && (!mergedByKey[mergeKey]._earliest || pos.timestamp < mergedByKey[mergeKey]._earliest)) {
+                        mergedByKey[mergeKey]._earliest = pos.timestamp;
+                    }
+                });
+
+                Object.values(mergedByKey).forEach(pos => {
+                    const isOpt = pos.instrument_type === 'option';
+                    const qty = Number(pos.quantity || 0);
+                    const avgEntry = qty > 0 ? (pos._cost / qty) : Number(pos.price || 0);
+                    roundTrips.push({
+                        symbol: pos.symbol,
+                        contract: pos.contract || '',
+                        instrument_type: isOpt ? 'option' : 'stock',
+                        option_type: pos.option_type || '',
+                        side: pos.side || 'LONG',
+                        quantity: qty,
+                        entryPrice: avgEntry,
+                        entryTime: pos._earliest || pos.timestamp,
+                        exitPrice: null,
+                        exitTime: null,
+                        pnl: null,
+                        completed: false,
+                        trade_type: pos.trade_type || 'swing',
+                        auto_trade: pos.auto_trade || false,
+                        source: pos.source || ''
+                    });
+                });
+            });
+            
+            // Sort by most recent activity (exit time or entry time)
+            roundTrips.sort((a, b) => {
+                const timeA = new Date(a.exitTime || a.entryTime);
+                const timeB = new Date(b.exitTime || b.entryTime);
+                return timeB - timeA;
+            });
+            
+            container.innerHTML = roundTrips.slice(0, 50).map(rt => {
+                const isShort = rt.side === 'SHORT';
+                const isOption = rt.instrument_type === 'option';
+                const displayName = isOption ? (rt.contract || rt.symbol) : rt.symbol;
+                const actionLabel = isShort ? 'Short' : 'Buy';
+                const actionColor = isShort ? '#ef4444' : '#3b82f6';
+                const qtyLabel = isOption ? `${rt.quantity} contract${rt.quantity > 1 ? 's' : ''}` : `${rt.quantity} shares`;
+                
+                // Option type badge
+                const optBadge = isOption
+                    ? `<span class="opt-badge ${rt.option_type || 'call'}" style="font-size:10px; padding:2px 6px;">${(rt.option_type || 'OPT').toUpperCase()}</span>`
+                    : '';
+                
+                // Instrument badge
+                const instrBadge = isOption
+                    ? '<span style="background:rgba(139,92,246,0.2); color:#8b5cf6; font-size:10px; padding:2px 6px; border-radius:4px;">OPTION</span>'
+                    : '<span style="background:rgba(59,130,246,0.15); color:#3b82f6; font-size:10px; padding:2px 6px; border-radius:4px;">STOCK</span>';
+                
+                // Trade type badge (day/swing/positional) - try to get from trade data
+                const tradeType = rt.trade_type || 'swing';
+                const tradeTypeBadge = `<span class="trade-type-badge ${tradeType}">${tradeType === 'day' ? 'INTRADAY' : tradeType.toUpperCase()}</span>`;
+                
+                // Bot auto-trade indicator
+                const botBadge = (rt.auto_trade || rt.source === 'bot') ? '<span class="bot-badge">BOT</span>' : '';
+                
+                const priceLabel = isOption ? '/ct' : '';
+                
+                return `
+                <div class="trade-log-item" style="border-left: 3px solid ${rt.completed ? (rt.pnl >= 0 ? '#10b981' : '#ef4444') : '#f59e0b'}; flex-direction: column; align-items: flex-start;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <strong>${displayName}</strong>
+                        ${instrBadge}
+                        ${optBadge}
+                        ${tradeTypeBadge}
+                        ${botBadge}
+                        <span class="trend-badge ${isShort ? 'bearish' : 'bullish'}" style="font-size: 10px; padding: 2px 6px;">
+                            ${rt.side}
+                        </span>
+                        <span style="color: var(--text-secondary); font-size: 12px;">
+                            ${qtyLabel}
+                        </span>
+                        ${rt.entryPrice ? `
+                            <span style="color: ${actionColor};">
+                                ${actionLabel}: ${formatCurrency(rt.entryPrice)}${priceLabel}
+                            </span>
+                        ` : ''}
+                        ${rt.completed ? `
+                            <span style="color: #8b5cf6;">→</span>
+                            <span style="color: #8b5cf6;">
+                                Close: ${formatCurrency(rt.exitPrice)}${priceLabel}
+                            </span>
+                            <span class="${rt.pnl >= 0 ? 'position-pnl positive' : 'position-pnl negative'}" style="font-weight: 600;">
+                                ${rt.pnl >= 0 ? '+' : ''}${formatCurrency(rt.pnl)}
+                            </span>
+                        ` : `
+                            <span class="trend-badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">OPEN</span>
+                        `}
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 12px;">
+                        ${rt.completed ? 
+                            `Closed: ${new Date(rt.exitTime).toLocaleString()}` : 
+                            `Opened: ${new Date(rt.entryTime).toLocaleString()}`
+                        }
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        function renderDailyAnalysis(analysis) {
+            const container = document.getElementById('eod-analysis-container');
+            const dateEl = document.getElementById('eod-analysis-date');
+
+            if (!analysis || !analysis.date) {
+                dateEl.textContent = 'Awaiting 3:00 PM CT analysis';
+                container.innerHTML = 'End-of-session summary will appear here after 3:00 PM CT.';
+                return;
+            }
+
+            const overall = analysis.overall || {};
+            const stocks = analysis.stocks || {};
+            const options = analysis.options || {};
+            const notes = Array.isArray(analysis.notes) ? analysis.notes : [];
+
+            const fmtPnl = (val) => {
+                const num = Number(val || 0);
+                const sign = num >= 0 ? '+' : '';
+                const color = num >= 0 ? '#10b981' : '#ef4444';
+                return `<span style="color:${color}; font-weight:600;">${sign}${formatCurrency(num)}</span>`;
+            };
+
+            dateEl.textContent = `Analysis Date: ${analysis.date}`;
+
+            container.innerHTML = `
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-bottom:12px;">
+                    <div style="padding:12px; border:1px solid var(--border-color); border-radius:8px; background: rgba(59,130,246,0.06);">
+                        <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase;">Overall</div>
+                        <div style="margin-top:6px;">Win Rate: <strong>${overall.win_rate || 0}%</strong></div>
+                        <div>Wins/Losses: ${overall.wins || 0}/${overall.losses || 0}</div>
+                        <div>Net P&L: ${fmtPnl(overall.net_pnl)}</div>
+                    </div>
+                    <div style="padding:12px; border:1px solid var(--border-color); border-radius:8px; background: rgba(239,68,68,0.08);">
+                        <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase;">Stocks</div>
+                        <div style="margin-top:6px;">Win Rate: <strong>${stocks.win_rate || 0}%</strong></div>
+                        <div>SL Hits: <strong>${stocks.stop_loss_count || 0}</strong></div>
+                        <div>Target Hits: <strong>${stocks.target_hit_count || 0}</strong></div>
+                        <div>Net P&L: ${fmtPnl(stocks.net_pnl)}</div>
+                    </div>
+                    <div style="padding:12px; border:1px solid var(--border-color); border-radius:8px; background: rgba(139,92,246,0.08);">
+                        <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase;">Options</div>
+                        <div style="margin-top:6px;">Win Rate: <strong>${options.win_rate || 0}%</strong></div>
+                        <div>SL Hits: <strong>${options.stop_loss_count || 0}</strong></div>
+                        <div>Target Hits: <strong>${options.target_hit_count || 0}</strong></div>
+                        <div>Net P&L: ${fmtPnl(options.net_pnl)}</div>
+                    </div>
+                </div>
+                <div style="padding:12px; border:1px solid var(--border-color); border-radius:8px; background: rgba(245,158,11,0.08);">
+                    <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; margin-bottom:6px;">Key Notes</div>
+                    ${notes.length > 0 ? notes.map(n => `<div style="margin:4px 0;">• ${n}</div>`).join('') : '<div>No major warnings for the session.</div>'}
+                </div>
+            `;
+        }
+        
+        // Execute stock trade
+        async function executeTrade(symbol, action, price) {
+            const quantity = Math.floor(parseFloat(document.getElementById('position-size').value) / price);
+            
+            if (!confirm(`${action} ${quantity} shares of ${symbol} at $${price.toFixed(2)}?`)) return;
+            
+            try {
+                const response = await fetch('/api/bot/trade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol,
+                        action,
+                        quantity,
+                        price,
+                        instrument_type: 'stock',
+                        account_mode: accountMode
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const fill = Number(data.executed_price || price || 0);
+                    showNotification(`✅ ${action} ${symbol} filled @ $${fill.toFixed(2)}`, 'success');
+                    refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Trade failed: ' + error.message, 'error');
+            }
+        }
+
+        // Execute option trade from intraday options scanner
+        async function executeOptionTrade(optionData) {
+            const posSize = parseFloat(document.getElementById('position-size').value);
+            const contracts = Math.max(1, Math.floor(posSize / (optionData.premium * 100)));
+            const cost = contracts * optionData.premium * 100;
+
+            const msg = `BUY ${contracts} x ${optionData.contract}\n` +
+                        `Premium: $${optionData.premium.toFixed(2)} per contract\n` +
+                        `Total Cost: $${cost.toFixed(2)}\n` +
+                        `SL: $${optionData.stop_premium.toFixed(2)} | TP: $${optionData.target_1_premium.toFixed(2)}/$${optionData.target_2_premium.toFixed(2)}`;
+
+            if (!confirm(msg)) return;
+
+            try {
+                const response = await fetch('/api/bot/trade_option', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: optionData.symbol,
+                        contract: optionData.contract,
+                        option_type: optionData.option_type,
+                        strike: optionData.strike,
+                        expiry: optionData.expiry,
+                        dte: optionData.dte,
+                        premium: optionData.premium,
+                        contracts: contracts,
+                        direction: optionData.direction,
+                        stop_premium: optionData.stop_premium,
+                        target_1_premium: optionData.target_1_premium,
+                        target_2_premium: optionData.target_2_premium,
+                        account_mode: accountMode
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    const fill = Number(data.executed_premium || optionData.premium || 0);
+                    const sl = Number(data.executed_stop_premium || optionData.stop_premium || 0);
+                    showNotification(`✅ Bought ${contracts} x ${optionData.contract} @ $${fill.toFixed(2)} (SL $${sl.toFixed(2)})`, 'success');
+                    refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Option trade failed: ' + error.message, 'error');
+            }
+        }
+
+        // Handle instrument type change
+        function onInstrumentTypeChange() {
+            instrumentType = document.getElementById('instrument-type').value;
+            const wl = document.getElementById('watchlist');
+            // Auto-select matching intraday watchlist based on instrument type
+            if (instrumentType === 'options') {
+                wl.value = 'intraday_options';
+            } else if (instrumentType === 'stocks' && wl.value === 'intraday_options') {
+                wl.value = 'intraday_stocks';
+            }
+            console.log('Instrument type:', instrumentType, 'Watchlist:', wl.value);
+            
+            // Save settings to server for persistence
+            saveSettingsToServer();
+
+            // Fetch fresh signals for selected instrument type
+            runManualScan();
+        }
+        
+        // Save current settings to server (for persistence across page navigation)
+        async function saveSettingsToServer() {
+            try {
+                const settings = {
+                    instrument_type: document.getElementById('instrument-type').value,
+                    watchlist: document.getElementById('watchlist').value,
+                    scan_interval: parseInt(document.getElementById('scan-interval').value),
+                    min_confidence: parseInt(document.getElementById('min-confidence').value),
+                    min_option_dte_days: parseInt(document.getElementById('min-option-dte').value),
+                    max_positions: parseInt(document.getElementById('max-positions').value),
+                    max_daily_trades: parseInt(document.getElementById('max-daily-trades').value),
+                    max_per_symbol_daily: parseInt(document.getElementById('max-per-symbol-daily').value),
+                    reentry_cooldown_minutes: parseInt(document.getElementById('reentry-cooldown').value),
+                    position_size: parseFloat(document.getElementById('position-size').value),
+                    stop_loss: parseFloat(document.getElementById('stop-loss').value),
+                    take_profit: parseFloat(document.getElementById('take-profit').value),
+                    trailing_stop: document.getElementById('trailing-stop').value
+                };
+                
+                const response = await fetch('/api/bot/update_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    console.log('✅ Settings saved to server');
+                }
+            } catch (error) {
+                console.error('❌ Failed to save settings:', error);
+            }
+        }
+        
+        // Close position (handles both stocks and options)
+        async function closePosition(symbol, instrumentType = 'stock', contract = '', source = '') {
+            const displayName = instrumentType === 'option' ? (contract || symbol) : symbol;
+            if (!confirm(`Close ${instrumentType === 'option' ? 'option' : 'stock'} position: ${displayName}?`)) return;
+            
+            try {
+                const response = await fetch('/api/bot/close', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, account_mode: accountMode, instrument_type: instrumentType, contract: contract, source: source })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification(`✅ Position closed for ${symbol}`, 'success');
+                    refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Failed to close: ' + error.message, 'error');
+            }
+        }
+        
+        // Close all positions
+        async function closeAllPositions() {
+            if (!confirm('Close ALL positions?')) return;
+            
+            try {
+                const response = await fetch('/api/bot/close-all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_mode: accountMode })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('✅ All positions closed', 'success');
+                    refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Failed: ' + error.message, 'error');
+            }
+        }
+        
+        // Import positions from monitoring system
+        async function importPositions() {
+            if (!confirm('Import active positions from Monitoring page?')) return;
+            
+            try {
+                const response = await fetch('/api/bot/import_positions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_mode: accountMode })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    if (data.imported && data.imported.length > 0) {
+                        showNotification(`✅ ${data.message}`, 'success');
+                    } else {
+                        showNotification('ℹ️ ' + data.message, 'info');
+                    }
+                    await refreshStatus();
+                } else {
+                    showNotification('❌ ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('❌ Import failed: ' + error.message, 'error');
+            }
+        }
+        
+        // Export trades as round-trips (LONG: BUY→CLOSE, SHORT: SELL→CLOSE)
+        function exportTrades() {
+            const account = accountMode === 'demo' ? demoAccount : realAccount;
+            if (!account.trades || account.trades.length === 0) {
+                showNotification('No trades to export', 'info');
+                return;
+            }
+            
+            // Group trades into round trips
+            const roundTrips = [];
+            const openPositions = {};
+            const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED'];
+            
+            account.trades.forEach(trade => {
+                const side = trade.side || (trade.action === 'BUY' ? 'LONG' : 'SHORT');
+                const isOption = trade.instrument_type === 'option';
+                const key = isOption ? (trade.contract || trade.symbol + '_opt') : trade.symbol;
+                
+                const isAutoExit = trade.auto_exit || exitReasons.includes(trade.reason);
+                const isClosing = trade.action === 'CLOSE' || (trade.action === 'SELL' && isAutoExit) || trade.action === 'BUY_TO_COVER';
+                const isOpening = !isClosing && (
+                    (trade.action === 'BUY' && side === 'LONG') || 
+                    (trade.action === 'SELL' && side === 'SHORT')
+                );
+                
+                if (isOpening) {
+                    if (!openPositions[key]) {
+                        openPositions[key] = [];
+                    }
+                    openPositions[key].push({ ...trade, side, _key: key });
+                } else if (isClosing) {
+                    const openTrade = openPositions[key]?.shift();
+                    const tradeIsOption = isOption || openTrade?.instrument_type === 'option';
+                    roundTrips.push({
+                        symbol: trade.symbol,
+                        contract: trade.contract || openTrade?.contract || '',
+                        instrument_type: tradeIsOption ? 'option' : 'stock',
+                        side: openTrade?.side || 'LONG',
+                        quantity: trade.quantity,
+                        entryPrice: openTrade ? openTrade.price : '',
+                        entryTime: openTrade ? openTrade.timestamp : '',
+                        exitPrice: trade.price,
+                        exitTime: trade.timestamp,
+                        pnl: trade.pnl || 0,
+                        status: 'CLOSED'
+                    });
+                }
+            });
+            
+            // Add open positions
+            Object.entries(openPositions).forEach(([key, positions]) => {
+                positions.forEach(pos => {
+                    const isOpt = pos.instrument_type === 'option';
+                    roundTrips.push({
+                        symbol: pos.symbol,
+                        contract: pos.contract || '',
+                        instrument_type: isOpt ? 'option' : 'stock',
+                        side: pos.side || 'LONG',
+                        quantity: pos.quantity,
+                        entryPrice: pos.price,
+                        entryTime: pos.timestamp,
+                        exitPrice: '',
+                        exitTime: '',
+                        pnl: '',
+                        status: 'OPEN'
+                    });
+                });
+            });
+            
+            const csv = ['Symbol,Contract,Type,Side,Quantity,Entry Price,Entry Time,Exit Price,Exit Time,P&L,Status'];
+            roundTrips.forEach(rt => {
+                csv.push(`${rt.symbol},${rt.contract || ''},${rt.instrument_type || 'stock'},${rt.side},${rt.quantity},${rt.entryPrice},${rt.entryTime},${rt.exitPrice},${rt.exitTime},${rt.pnl},${rt.status}`);
+            });
+            
+            const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `trades_${accountMode}_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+        }
+        
+        // Load account state from localStorage
+        function loadAccountState() {
+            const savedMode = localStorage.getItem('tradingAccountMode');
+            if (savedMode) {
+                switchAccount(savedMode);
+            }
+            
+            const savedDemo = localStorage.getItem('demoAccount');
+            if (savedDemo) {
+                try {
+                    demoAccount = JSON.parse(savedDemo);
+                    updateAccountDisplay(demoAccount);
+                } catch (e) {}
+            }
+            
+            // Restore settings from server (persisted in ai_bot_state.json)
+            restoreSettingsFromServer();
+        }
+        
+        // Restore bot settings from server on page load
+        // This ensures settings persist across page navigation
+        async function restoreSettingsFromServer() {
+            try {
+                const response = await resilientFetch(`/api/bot/status?force_live=1&_ts=${Date.now()}`, { cache: 'no-store' }, { timeoutMs: 15000, retries: 1, label: 'restoreSettings' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('🔧 Restoring settings from server:', data.settings);
+                    
+                    // Restore bot running state
+                    botRunning = data.running;
+                    updateBotStatus(data.running);
+                    
+                    // ALWAYS restore auto_trade from server - this persists across page loads
+                    autoTradeEnabled = data.auto_trade || false;
+                    document.getElementById('auto-trade').checked = autoTradeEnabled;
+                    
+                    // Restore strategy
+                    if (data.strategy) {
+                        selectedStrategy = data.strategy;
+                        document.querySelectorAll('.strategy-card').forEach(card => {
+                            card.classList.remove('selected');
+                        });
+                        const strategyCard = document.querySelector(`[data-strategy="${data.strategy}"]`);
+                        if (strategyCard) strategyCard.classList.add('selected');
+                    }
+                    
+                    // Restore all settings from server
+                    if (data.settings) {
+                        const s = data.settings;
+                        
+                        // Watchlist
+                        if (s.watchlist) {
+                            document.getElementById('watchlist').value = s.watchlist;
+                        }
+                        
+                        // Instrument type
+                        if (s.instrument_type) {
+                            instrumentType = s.instrument_type;
+                            document.getElementById('instrument-type').value = s.instrument_type;
+                        }
+                        
+                        // Scan interval
+                        if (s.scan_interval) {
+                            document.getElementById('scan-interval').value = s.scan_interval;
+                        }
+                        
+                        // Min confidence
+                        if (s.min_confidence) {
+                            document.getElementById('min-confidence').value = s.min_confidence;
+                        }
+
+                        // Minimum option DTE
+                        if (s.min_option_dte_days !== undefined && s.min_option_dte_days !== null) {
+                            document.getElementById('min-option-dte').value = s.min_option_dte_days;
+                        }
+                        
+                        // Max positions
+                        if (s.max_positions) {
+                            document.getElementById('max-positions').value = s.max_positions;
+                        }
+
+                        // Max daily trades
+                        if (s.max_daily_trades) {
+                            document.getElementById('max-daily-trades').value = s.max_daily_trades;
+                        }
+
+                        // Max entries per symbol daily
+                        if (s.max_per_symbol_daily !== undefined && s.max_per_symbol_daily !== null) {
+                            document.getElementById('max-per-symbol-daily').value = s.max_per_symbol_daily;
+                        }
+
+                        // Re-entry cooldown
+                        if (s.reentry_cooldown_minutes !== undefined && s.reentry_cooldown_minutes !== null) {
+                            document.getElementById('reentry-cooldown').value = s.reentry_cooldown_minutes;
+                        }
+                        
+                        // Position size
+                        if (s.position_size) {
+                            document.getElementById('position-size').value = s.position_size;
+                        }
+                        
+                        // Stop loss
+                        if (s.stop_loss) {
+                            document.getElementById('stop-loss').value = s.stop_loss;
+                        }
+                        
+                        // Take profit
+                        if (s.take_profit) {
+                            document.getElementById('take-profit').value = s.take_profit;
+                        }
+                        
+                        // Trailing stop
+                        if (s.trailing_stop) {
+                            document.getElementById('trailing-stop').value = s.trailing_stop;
+                        }
+                    }
+                    
+                    // Restore account mode
+                    if (data.account_mode && data.account_mode !== accountMode) {
+                        await switchAccount(data.account_mode);
+                    }
+                    
+                    console.log('✅ Settings restored from server');
+                }
+            } catch (error) {
+                console.error('Failed to restore settings from server:', error);
+            }
+        }
+        
+        // Save auto-trade setting to server immediately when checkbox changes
+        // This ensures the setting persists across page navigation
+        async function saveAutoTradeSetting(enabled) {
+            autoTradeEnabled = enabled;
+            console.log('🔧 Saving auto_trade setting:', enabled);
+            
+            try {
+                const response = await fetch('/api/bot/update_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ auto_trade: enabled })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('✅ Auto-trade setting saved:', enabled);
+                    // Update auto-trade status indicator
+                    const autoTradeStatus = document.getElementById('auto-trade-status');
+                    if (botRunning && enabled) {
+                        autoTradeStatus.classList.remove('hidden');
+                        autoTradeStatus.style.display = 'flex';
+                    } else {
+                        autoTradeStatus.classList.add('hidden');
+                        autoTradeStatus.style.display = 'none';
+                    }
+                } else {
+                    console.error('Failed to save auto-trade setting:', data.error);
+                }
+            } catch (error) {
+                console.error('Error saving auto-trade setting:', error);
+            }
+        }
+        
+        // Helpers
+        function formatCurrency(value) {
+            return '$' + (value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        
+        function showNotification(message, type) {
+            // Simple alert for now, could be enhanced with toast notifications
+            console.log(`[${type}] ${message}`);
+            if (type === 'error') {
+                alert(message);
+            }
+        }
+
+        // ==================================================================
+        // INTRADAY SCANNER FUNCTIONS
+        // ==================================================================
+        let activeTab = 'stocks';
+
+        function switchScannerTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.scanner-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.scanner-panel').forEach(p => p.classList.remove('active'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            document.getElementById('panel-' + tab).classList.add('active');
+        }
+
+        async function runIntradayScan() {
+            const btn = document.getElementById('intraday-scan-btn');
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Scanning...';
+
+            // Fire both scans in parallel
+            const [stockRes, optRes] = await Promise.allSettled([
+                fetchIntradayStocks(),
+                fetchIntradayOptions()
+            ]);
+
+            btn.disabled = false;
+            btn.innerHTML = '🔍 Scan Now';
+            document.getElementById('intraday-ts').innerHTML =
+                `<span style="color:#10b981;">●</span> ${new Date().toLocaleTimeString()}`;
+        }
+
+        async function fetchIntradayStocks() {
+            const container = document.getElementById('intraday-stock-results');
+            container.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px;">
+                <div style="font-size:24px;margin-bottom:10px;">🔄</div>Scanning stocks...</div>`;
+
+            try {
+                // First call starts the scan; poll until results appear
+                let data = await (await resilientFetch('/api/bot/intraday-stocks', {}, { timeoutMs: 30000, retries: 2, label: 'intradayStocks' })).json();
+                let attempts = 0;
+                while (data.running && attempts < 20) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    data = await (await resilientFetch('/api/bot/intraday-stocks', {}, { timeoutMs: 15000, retries: 1, label: 'intradayStocksPoll' })).json();
+                    attempts++;
+                }
+
+                if (data.success && data.data && data.data.length > 0) {
+                    renderIntradayStocks(data.data);
+                    document.getElementById('stock-scan-count').innerHTML =
+                        `<span style="color:#10b981;">${data.data.length}</span> setups found`;
+                } else {
+                    container.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px;">
+                        No intraday stock setups right now — try again during market hours</div>`;
+                    document.getElementById('stock-scan-count').textContent = '';
+                }
+            } catch (e) {
+                console.error('Stock scan error:', e);
+                container.innerHTML = `<div style="text-align:center;color:#ef4444;padding:40px;">
+                    Scan failed: ${e.message}</div>`;
+            }
+        }
+
+        async function fetchIntradayOptions() {
+            const container = document.getElementById('intraday-option-results');
+            container.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px;">
+                <div style="font-size:24px;margin-bottom:10px;">🔄</div>Scanning options...</div>`;
+
+            try {
+                let data = await (await resilientFetch('/api/bot/intraday-options', {}, { timeoutMs: 30000, retries: 2, label: 'intradayOptions' })).json();
+                let attempts = 0;
+                while (data.running && attempts < 25) {
+                    await new Promise(r => setTimeout(r, 2500));
+                    data = await (await resilientFetch('/api/bot/intraday-options', {}, { timeoutMs: 15000, retries: 1, label: 'intradayOptionsPoll' })).json();
+                    attempts++;
+                }
+
+                if (data.success && data.data && data.data.length > 0) {
+                    renderIntradayOptions(data.data);
+                    document.getElementById('opt-scan-count').innerHTML =
+                        `<span style="color:#10b981;">${data.data.length}</span> setups found`;
+                } else {
+                    container.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:40px;">
+                        No option setups right now — try again during market hours</div>`;
+                    document.getElementById('opt-scan-count').textContent = '';
+                }
+            } catch (e) {
+                console.error('Option scan error:', e);
+                container.innerHTML = `<div style="text-align:center;color:#ef4444;padding:40px;">
+                    Scan failed: ${e.message}</div>`;
+            }
+        }
+
+        function renderIntradayStocks(results) {
+            const container = document.getElementById('intraday-stock-results');
+            container.innerHTML = `
+            <table class="scan-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Symbol</th>
+                        <th>Direction</th>
+                        <th>Score</th>
+                        <th>Price</th>
+                        <th>VWAP</th>
+                        <th>RSI</th>
+                        <th>Vol</th>
+                        <th>R:R</th>
+                        <th style="color:#ef4444;">Stop</th>
+                        <th style="color:#10b981;">Target 1</th>
+                        <th style="color:#10b981;">Target 2</th>
+                        <th>Signals</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${results.map((r, i) => {
+                        const isBull = r.direction === 'BULLISH';
+                        const dirColor = isBull ? '#10b981' : '#ef4444';
+                        const scoreCls = r.score >= 10 ? 'high' : 'med';
+                        return `
+                        <tr class="${isBull ? 'bull-row' : 'bear-row'}">
+                            <td style="color:var(--text-secondary);">${i + 1}</td>
+                            <td class="sym-cell">${r.symbol}</td>
+                            <td>
+                                <span class="trend-badge ${isBull ? 'bullish' : 'bearish'}">
+                                    ${isBull ? '📈' : '📉'} ${r.direction}
+                                </span>
+                            </td>
+                            <td><span class="score-pill ${scoreCls}">${r.score}/15</span></td>
+                            <td class="price-cell">$${r.price.toFixed(2)}</td>
+                            <td>$${r.vwap.toFixed(2)}</td>
+                            <td style="color:${r.rsi > 70 ? '#ef4444' : r.rsi < 30 ? '#10b981' : 'var(--text-primary)'}; font-weight:600;">${r.rsi.toFixed(1)}</td>
+                            <td style="color:${r.volume_ratio > 1.5 ? '#f59e0b' : 'var(--text-primary)'}; font-weight:600;">${r.volume_ratio.toFixed(1)}x</td>
+                            <td style="color:#8b5cf6; font-weight:600;">${r.risk_reward}</td>
+                            <td style="color:#ef4444;">$${r.stop_loss.toFixed(2)}</td>
+                            <td style="color:#10b981;">$${r.target_1.toFixed(2)}</td>
+                            <td style="color:#10b981;">$${r.target_2.toFixed(2)}</td>
+                            <td>
+                                <div class="signal-tags">
+                                    ${r.signals.slice(0, 3).map(s => `<span class="sig-tag">${s}</span>`).join('')}
+                                </div>
+                            </td>
+                            <td>
+                                <button class="action-btn-sm ${isBull ? 'buy' : 'sell'}"
+                                    onclick="executeTrade('${r.symbol}', '${isBull ? 'BUY' : 'SELL'}', ${r.price})">
+                                    ${isBull ? '🟢 Buy' : '🔴 Short'}
+                                </button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>`;
+        }
+
+        function renderIntradayOptions(results) {
+            const container = document.getElementById('intraday-option-results');
+            container.innerHTML = `
+            <table class="scan-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Symbol</th>
+                        <th>Type</th>
+                        <th>Contract</th>
+                        <th>DTE</th>
+                        <th>Score</th>
+                        <th>Stock $</th>
+                        <th>Premium</th>
+                        <th>Bid/Ask</th>
+                        <th>IV</th>
+                        <th>OI</th>
+                        <th>RSI</th>
+                        <th>Vol</th>
+                        <th style="color:#ef4444;">SL 50%</th>
+                        <th style="color:#10b981;">TP 2x</th>
+                        <th style="color:#10b981;">TP 3x</th>
+                        <th>Signals</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${results.map((r, i) => {
+                        const isBull = r.direction === 'BULLISH';
+                        const scoreCls = r.score >= 10 ? 'high' : 'med';
+                        // Encode option data as a safe JSON string for onclick
+                        const optDataAttr = encodeURIComponent(JSON.stringify({
+                            symbol: r.symbol, contract: r.contract, option_type: r.option_type,
+                            strike: r.strike, expiry: r.expiry, dte: r.dte,
+                            premium: r.premium, direction: r.direction,
+                            stop_premium: r.stop_premium,
+                            target_1_premium: r.target_1_premium,
+                            target_2_premium: r.target_2_premium
+                        }));
+                        return `
+                        <tr class="${isBull ? 'bull-row' : 'bear-row'}">
+                            <td style="color:var(--text-secondary);">${i + 1}</td>
+                            <td class="sym-cell">${r.symbol}</td>
+                            <td><span class="opt-badge ${r.option_type}">${r.option_type.toUpperCase()}</span></td>
+                            <td style="font-size:12px;">${r.contract}</td>
+                            <td style="font-weight:600;">${r.dte}</td>
+                            <td><span class="score-pill ${scoreCls}">${r.score}/15</span></td>
+                            <td class="price-cell">$${r.price.toFixed(2)}</td>
+                            <td style="color:#8b5cf6; font-weight:700;">$${r.premium.toFixed(2)}</td>
+                            <td>$${r.bid}/$${r.ask}</td>
+                            <td style="color:#f59e0b; font-weight:600;">${r.iv}%</td>
+                            <td>${r.open_interest.toLocaleString()}</td>
+                            <td style="color:${r.rsi > 70 ? '#ef4444' : r.rsi < 30 ? '#10b981' : 'var(--text-primary)'}; font-weight:600;">${r.rsi}</td>
+                            <td style="color:${r.volume_ratio > 1.5 ? '#f59e0b' : 'var(--text-primary)'}; font-weight:600;">${r.volume_ratio}x</td>
+                            <td style="color:#ef4444;">$${r.stop_premium.toFixed(2)}</td>
+                            <td style="color:#10b981;">$${r.target_1_premium.toFixed(2)}</td>
+                            <td style="color:#10b981;">$${r.target_2_premium.toFixed(2)}</td>
+                            <td>
+                                <div class="signal-tags">
+                                    ${r.signals.slice(0, 3).map(s => `<span class="sig-tag">${s}</span>`).join('')}
+                                </div>
+                            </td>
+                            <td>
+                                <button class="action-btn-sm ${isBull ? 'buy' : 'sell'}"
+                                    onclick="executeOptionTrade(JSON.parse(decodeURIComponent('${optDataAttr}')))">
+                                    ${isBull ? '🟢 Buy Call' : '🔴 Buy Put'}
+                                </button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>`;
+        }
+    </script>
+    
+    <!-- Monthly P&L Calendar -->
+    <div class="calendar-section" id="pnlCalendar">
+        <div class="calendar-header" onclick="toggleCalendar()">
+            <h3>📅 Monthly P&L Calendar</h3>
+            <button class="calendar-toggle" id="calToggleBtn">▲ Collapse</button>
+        </div>
+        <div class="calendar-body" id="calendarBody">
+            <div class="calendar-nav">
+                <button onclick="event.stopPropagation(); changeCalendarMonth(-1)">◀ Previous</button>
+                <span class="calendar-month-year" id="calMonthYear">February 2026</span>
+                <button onclick="event.stopPropagation(); changeCalendarMonth(1)">Next ▶</button>
+            </div>
+            <div class="calendar-grid" id="calendarGrid">
+                <!-- Calendar days populated by JS -->
+            </div>
+            <div class="calendar-summary" id="calendarSummary">
+                <!-- Summary stats populated by JS -->
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Calendar state
+        let calendarDate = new Date();
+        let dailyPnLData = {};
+        
+        function toggleCalendar() {
+            const cal = document.getElementById('pnlCalendar');
+            const btn = document.getElementById('calToggleBtn');
+            cal.classList.toggle('minimized');
+            if (cal.classList.contains('minimized')) {
+                btn.textContent = '▼ Expand';
+            } else {
+                btn.textContent = '▲ Collapse';
+            }
+        }
+        
+        function changeCalendarMonth(delta) {
+            calendarDate.setMonth(calendarDate.getMonth() + delta);
+            renderPnLCalendar();
+        }
+        
+        function calculateDailyPnL(trades) {
+            const dailyData = {};
+            
+            trades.forEach(trade => {
+                // Only count closed trades (those with pnl value)
+                if (trade.pnl === undefined || trade.pnl === null) return;
+                
+                // Parse date from timestamp (ISO format: 2026-02-13T09:51:07.850422)
+                const timestamp = trade.timestamp || trade.closed_at;
+                if (!timestamp) return;
+                
+                // Handle both ISO format (with T) and space-separated format
+                const dateStr = timestamp.includes('T') 
+                    ? timestamp.split('T')[0] 
+                    : timestamp.split(' ')[0];
+                if (!dateStr) return;
+                
+                if (!dailyData[dateStr]) {
+                    dailyData[dateStr] = { pnl: 0, trades: 0, wins: 0, losses: 0 };
+                }
+                
+                dailyData[dateStr].pnl += trade.pnl;
+                dailyData[dateStr].trades += 1;
+                if (trade.pnl >= 0) {
+                    dailyData[dateStr].wins += 1;
+                } else {
+                    dailyData[dateStr].losses += 1;
+                }
+            });
+            
+            return dailyData;
+        }
+        
+        function renderPnLCalendar() {
+            const grid = document.getElementById('calendarGrid');
+            const monthYearEl = document.getElementById('calMonthYear');
+            const summaryEl = document.getElementById('calendarSummary');
+            
+            const year = calendarDate.getFullYear();
+            const month = calendarDate.getMonth();
+            
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                               'July', 'August', 'September', 'October', 'November', 'December'];
+            monthYearEl.textContent = `${monthNames[month]} ${year}`;
+            
+            // Day headers
+            const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            let html = dayNames.map(d => `<div class="calendar-day-header">${d}</div>`).join('');
+            
+            // First day of month
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = new Date();
+            
+            // Empty cells before first day
+            for (let i = 0; i < firstDay; i++) {
+                html += '<div class="calendar-day empty"></div>';
+            }
+            
+            // Calculate monthly stats
+            let monthPnL = 0;
+            let monthTrades = 0;
+            let monthWins = 0;
+            let monthLosses = 0;
+            
+            // Calendar days
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const dayData = dailyPnLData[dateStr];
+                const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+                
+                let dayClass = 'calendar-day';
+                if (isToday) dayClass += ' today';
+                
+                let pnlHtml = '';
+                let tradeCountHtml = '';
+                
+                if (dayData) {
+                    monthPnL += dayData.pnl;
+                    monthTrades += dayData.trades;
+                    monthWins += dayData.wins;
+                    monthLosses += dayData.losses;
+                    
+                    if (dayData.pnl > 0) {
+                        dayClass += ' profit';
+                        pnlHtml = `<div class="day-pnl positive">+$${dayData.pnl.toFixed(2)}</div>`;
+                    } else if (dayData.pnl < 0) {
+                        dayClass += ' loss';
+                        pnlHtml = `<div class="day-pnl negative">-$${Math.abs(dayData.pnl).toFixed(2)}</div>`;
+                    } else {
+                        pnlHtml = `<div class="day-pnl">$0</div>`;
+                    }
+                    tradeCountHtml = `<div class="trade-count">${dayData.trades} closed</div>`;
+                }
+                
+                html += `
+                    <div class="${dayClass}">
+                        <div class="day-num">${day}</div>
+                        ${pnlHtml}
+                        ${tradeCountHtml}
+                    </div>`;
+            }
+            
+            grid.innerHTML = html;
+            
+            // Monthly summary
+            const winRate = monthTrades > 0 ? ((monthWins / monthTrades) * 100).toFixed(1) : 0;
+            summaryEl.innerHTML = `
+                <div class="cal-stat">
+                    <div class="cal-stat-label">Month P&L</div>
+                    <div class="cal-stat-value ${monthPnL >= 0 ? 'positive' : 'negative'}">
+                        ${monthPnL >= 0 ? '+' : ''}$${monthPnL.toFixed(2)}
+                    </div>
+                </div>
+                <div class="cal-stat">
+                    <div class="cal-stat-label">Closed Trades</div>
+                    <div class="cal-stat-value">${monthTrades}</div>
+                </div>
+                <div class="cal-stat">
+                    <div class="cal-stat-label">Win Rate</div>
+                    <div class="cal-stat-value ${winRate >= 50 ? 'positive' : 'negative'}">${winRate}%</div>
+                </div>
+                <div class="cal-stat">
+                    <div class="cal-stat-label">Wins / Losses</div>
+                    <div class="cal-stat-value"><span class="positive">${monthWins}</span> / <span class="negative">${monthLosses}</span></div>
+                </div>
+            `;
+        }
+        
+        // Load calendar data from closed trades
+        function loadCalendarData() {
+            fetch(`/api/bot/status?force_live=1&_ts=${Date.now()}`, { cache: 'no-store' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.trades) {
+                        // Filter only closed trades (those with pnl)
+                        const closedTrades = data.trades.filter(t => t.pnl !== undefined && t.pnl !== null);
+                        console.log('Calendar: Found', closedTrades.length, 'closed trades');
+                        dailyPnLData = calculateDailyPnL(closedTrades);
+                        console.log('Calendar: Daily P&L data:', dailyPnLData);
+                        renderPnLCalendar();
+                    } else {
+                        console.log('Calendar: No trades found in response');
+                        renderPnLCalendar(); // Render empty calendar
+                    }
+                })
+                .catch(err => console.error('Failed to load calendar data:', err));
+        }
+        
+        // Initialize calendar on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadCalendarData();
+        });
+    </script>
+</body>
+</html>

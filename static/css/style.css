@@ -1,0 +1,583 @@
+/* ============================================================================
+   US Market Trading Dashboard - Main Stylesheet
+   Modern, responsive design inspired by IntradayPulse.in
+   ========================================================================== */
+
+:root {
+    /* Color Palette */
+    --bg-dark: #0a0e27;
+    --bg-card: #1a1f3a;
+    --bg-card-hover: #252b4a;
+    --text-primary: #ffffff;
+    --text-secondary: #a0a6c0;
+    --accent-blue: #4a9eff;
+    --accent-purple: #8b5cf6;
+    --accent-green: #10b981;
+    --accent-red: #ef4444;
+    --accent-orange: #f59e0b;
+    --border-color: #2d3354;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, var(--bg-dark) 0%, #0f1435 100%);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+/* ============================================================================
+   LAYOUT
+   ========================================================================== */
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.header {
+    background: var(--bg-card);
+    border-bottom: 2px solid var(--accent-blue);
+    padding: 20px 0;
+    margin-bottom: 30px;
+    box-shadow: var(--shadow);
+}
+
+.header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.logo {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.nav-links {
+    display: flex;
+    gap: 25px;
+    list-style: none;
+}
+
+.nav-links a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.3s;
+}
+
+.nav-links a:hover {
+    color: var(--accent-blue);
+}
+
+/* ============================================================================
+   MARKET STATUS BAR
+   ========================================================================== */
+
+.market-status-bar {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 15px 25px;
+    margin-bottom: 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20px;
+    box-shadow: var(--shadow);
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+}
+
+.status-dot.open {
+    background: var(--accent-green);
+}
+
+.status-dot.closed {
+    background: var(--accent-red);
+}
+
+.status-dot.pre-market,
+.status-dot.after-hours {
+    background: var(--accent-orange);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.indices-strip {
+    display: flex;
+    gap: 30px;
+    flex-wrap: wrap;
+}
+
+.index-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.index-name {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.index-value {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.index-change {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.positive {
+    color: var(--accent-green);
+}
+
+.negative {
+    color: var(--accent-red);
+}
+
+/* ============================================================================
+   GRID LAYOUTS
+   ========================================================================== */
+
+.grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+    gap: 25px;
+    margin-bottom: 30px;
+}
+
+.grid-3 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 25px;
+    margin-bottom: 30px;
+}
+
+/* ============================================================================
+   CARDS
+   ========================================================================== */
+
+.card {
+    background: var(--bg-card);
+    border-radius: 16px;
+    padding: 25px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border-color);
+    transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 12px rgba(0, 0, 0, 0.4);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.card-badge {
+    background: var(--accent-blue);
+    color: white;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.card-body {
+    position: relative;
+}
+
+/* ============================================================================
+   SECTOR HEATMAP
+   ========================================================================== */
+
+.sector-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 15px;
+}
+
+.sector-cell {
+    padding: 20px;
+    border-radius: 12px;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.2s, opacity 0.2s;
+    color: #ffffff;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sector-cell:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.sector-cell.positive {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    border-color: rgba(16, 185, 129, 0.5);
+}
+
+.sector-cell.negative {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    border-color: rgba(239, 68, 68, 0.5);
+}
+
+.sector-cell.neutral {
+    background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+    border-color: rgba(107, 114, 128, 0.5);
+}
+
+.sector-name {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: #ffffff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.sector-change {
+    font-size: 24px;
+    font-weight: 800;
+    color: #ffffff;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    margin: 5px 0;
+}
+
+.sector-symbol {
+    font-size: 11px;
+    opacity: 0.9;
+    margin-top: 5px;
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 600;
+}
+
+/* ============================================================================
+   MOVERS TABLE
+   ========================================================================== */
+
+.movers-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.movers-table thead {
+    background: var(--bg-dark);
+}
+
+.movers-table th {
+    padding: 12px;
+    text-align: left;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.movers-table td {
+    padding: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.movers-table tbody tr {
+    transition: background 0.2s;
+}
+
+.movers-table tbody tr:hover {
+    background: var(--bg-card-hover);
+}
+
+.symbol-cell {
+    font-weight: 600;
+    font-size: 15px;
+}
+
+.price-cell {
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+}
+
+.change-cell {
+    font-weight: 600;
+}
+
+.volume-cell {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+/* ============================================================================
+   SCANNER RESULTS
+   ========================================================================== */
+
+.scanner-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 15px;
+    border-left: 4px solid var(--accent-blue);
+    transition: all 0.3s;
+}
+
+.scanner-card:hover {
+    border-left-color: var(--accent-purple);
+    box-shadow: 0 4px 12px rgba(74, 158, 255, 0.2);
+}
+
+.scanner-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.scanner-symbol {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent-blue);
+}
+
+.scanner-score {
+    background: var(--accent-purple);
+    color: white;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+}
+
+.scanner-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.detail-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.detail-value {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.signals-list {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid var(--border-color);
+}
+
+.signal-badge {
+    display: inline-block;
+    background: rgba(74, 158, 255, 0.2);
+    color: var(--accent-blue);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin: 4px;
+}
+
+/* ============================================================================
+   BUTTONS & CONTROLS
+   ========================================================================== */
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    color: white;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+}
+
+.btn-secondary {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+    background: var(--border-color);
+}
+
+.refresh-btn {
+    background: transparent;
+    border: 1px solid var(--accent-blue);
+    color: var(--accent-blue);
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.refresh-btn:hover {
+    background: var(--accent-blue);
+    color: white;
+}
+
+/* ============================================================================
+   LOADING & STATES
+   ========================================================================== */
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+}
+
+.spinner {
+    border: 3px solid var(--border-color);
+    border-top: 3px solid var(--accent-blue);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 15px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-secondary);
+}
+
+.empty-state-icon {
+    font-size: 48px;
+    margin-bottom: 15px;
+    opacity: 0.5;
+}
+
+/* ============================================================================
+   RESPONSIVE
+   ========================================================================== */
+
+@media (max-width: 768px) {
+    .grid-2, .grid-3 {
+        grid-template-columns: 1fr;
+    }
+    
+    .sector-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .header-content {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .indices-strip {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .movers-table {
+        font-size: 14px;
+    }
+    
+    .movers-table th,
+    .movers-table td {
+        padding: 8px;
+    }
+}
+
+/* ============================================================================
+   UTILITIES
+   ========================================================================== */
+
+.text-center {
+    text-align: center;
+}
+
+.mb-20 {
+    margin-bottom: 20px;
+}
+
+.mt-20 {
+    margin-top: 20px;
+}
+
+.hidden {
+    display: none;
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}

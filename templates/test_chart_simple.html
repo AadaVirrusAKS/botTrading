@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Chart Test</title>
+    <script src="/static/js/lightweight-charts.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #chart {
+            width: 100%;
+            height: 500px;
+            background: #2a2a2a;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Simple Chart Test</h1>
+    <div id="status">Initializing...</div>
+    <div id="chart"></div>
+    
+    <script>
+        console.log('Script starting...');
+        
+        // Check if library loaded
+        if (typeof LightweightCharts === 'undefined') {
+            document.getElementById('status').innerHTML = '❌ LightweightCharts library not loaded!';
+            console.error('LightweightCharts not defined');
+        } else {
+            document.getElementById('status').innerHTML = '✅ LightweightCharts loaded';
+            console.log('LightweightCharts available:', LightweightCharts);
+        }
+        
+        // Wait for DOM
+        window.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded');
+            
+            const chartDiv = document.getElementById('chart');
+            console.log('Chart div:', chartDiv);
+            console.log('Chart div dimensions:', chartDiv.clientWidth, 'x', chartDiv.clientHeight);
+            
+            if (typeof LightweightCharts === 'undefined') {
+                console.error('Cannot create chart - library not loaded');
+                return;
+            }
+            
+            try {
+                // Create chart
+                const chart = LightweightCharts.createChart(chartDiv, {
+                    width: chartDiv.clientWidth,
+                    height: 500,
+                    layout: {
+                        background: { color: '#1a1a1a' },
+                        textColor: '#d1d4dc',
+                    },
+                });
+                
+                console.log('Chart created:', chart);
+                
+                // Create candlestick series
+                const candlestickSeries = chart.addCandlestickSeries({
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                    borderVisible: false,
+                    wickUpColor: '#26a69a',
+                    wickDownColor: '#ef5350',
+                });
+                
+                console.log('Series created:', candlestickSeries);
+                
+                // Sample data
+                const data = [
+                    { time: '2024-01-01', open: 100, high: 110, low: 95, close: 105 },
+                    { time: '2024-01-02', open: 105, high: 115, low: 100, close: 110 },
+                    { time: '2024-01-03', open: 110, high: 120, low: 105, close: 115 },
+                    { time: '2024-01-04', open: 115, high: 125, low: 110, close: 120 },
+                    { time: '2024-01-05', open: 120, high: 130, low: 115, close: 125 },
+                ];
+                
+                candlestickSeries.setData(data);
+                console.log('Data set');
+                
+                chart.timeScale().fitContent();
+                console.log('Chart fitted');
+                
+                document.getElementById('status').innerHTML = '✅ Chart created successfully with ' + data.length + ' candles';
+                
+            } catch (error) {
+                console.error('Error creating chart:', error);
+                document.getElementById('status').innerHTML = '❌ Error: ' + error.message;
+            }
+        });
+    </script>
+</body>
+</html>

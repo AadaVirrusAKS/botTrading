@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Options Analysis - US Market Pulse</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <style>
+        /* Tab Navigation Styles */
+        .tab-container {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            background: var(--card-bg);
+            padding: 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .tab-btn {
+            padding: 12px 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tab-btn:hover {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .tab-btn.active {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, #2563eb 100%);
+            border-color: var(--accent-blue);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+        
+        .tab-btn .tab-icon { font-size: 18px; }
+        .tab-btn .tab-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+        
+        .tab-content { animation: fadeIn 0.3s ease; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Stats Cards */
+        .options-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(145deg, var(--card-bg) 0%, var(--bg-secondary) 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+        }
+        
+        .stat-card-icon { font-size: 24px; margin-bottom: 8px; }
+        .stat-card-value { font-size: 24px; font-weight: 700; }
+        .stat-card-label { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+        
+        /* Info Boxes */
+        .info-box {
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 16px;
+        }
+        
+        .info-box-success { background: rgba(16, 185, 129, 0.1); border-left: 4px solid var(--accent-green); }
+        .info-box-warning { background: rgba(255, 165, 0, 0.1); border-left: 4px solid var(--accent-orange); }
+        .info-box-info { background: rgba(59, 130, 246, 0.1); border-left: 4px solid var(--accent-blue); }
+        
+        /* Quick Actions */
+        .quick-picks {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        
+        .quick-pick-btn {
+            padding: 6px 14px;
+            font-size: 12px;
+            border-radius: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .quick-pick-btn:hover {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+        
+        /* Expiry Filter Buttons */
+        .expiry-filters {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        
+        .expiry-btn {
+            padding: 6px 14px;
+            font-size: 12px;
+            border-radius: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .expiry-btn:hover {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: var(--accent-blue);
+        }
+        
+        .expiry-btn.active {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+        
+        /* Premium Filter Buttons */
+        .premium-filters {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        
+        .premium-btn {
+            padding: 8px 16px;
+            font-size: 13px;
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+        }
+        
+        .premium-btn:hover {
+            background: rgba(16, 185, 129, 0.15);
+            border-color: var(--accent-green);
+        }
+        
+        .premium-btn.active {
+            background: linear-gradient(135deg, var(--accent-green) 0%, #059669 100%);
+            color: white;
+            border-color: var(--accent-green);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+        
+        @media (max-width: 768px) {
+            .tab-container { flex-direction: column; }
+            .tab-btn { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🇺🇸 US Market Pulse</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/ai-trading">🤖 AI Trading</a></li>
+                        <li><a href="/">Dashboard</a></li>
+                        <li><a href="/scanners">Scanners</a></li>
+                        <li><a href="/options" class="active">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Page Header -->
+        <div class="card mb-20">
+            <div class="card-body" style="padding: 20px 24px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                    <div>
+                        <h1 style="font-size: 28px; font-weight: 800; margin-bottom: 8px;">📈 Options Analysis Center</h1>
+                        <p style="color: var(--text-secondary); margin: 0;">
+                            1DTE options predictions with 1:3 to 1:5 risk/reward • Powered by 15-point technical scoring
+                        </p>
+                    </div>
+                    <button id="refreshOptions" class="btn btn-primary" onclick="forceRefreshOptions()">
+                        🔄 Refresh All
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tab-container">
+            <button class="tab-btn active" data-tab="predictions" onclick="switchTab('predictions')">
+                <span class="tab-icon">⭐</span> Top Predictions
+                <span class="tab-badge" id="predictions-badge">10</span>
+            </button>
+            <button class="tab-btn" data-tab="custom" onclick="switchTab('custom')">
+                <span class="tab-icon">🔬</span> Custom Analysis
+            </button>
+            <button class="tab-btn" data-tab="swing" onclick="switchTab('swing')">
+                <span class="tab-icon">📈</span> Swing Trade
+            </button>
+            <button class="tab-btn" data-tab="pcr" onclick="switchTab('pcr')">
+                <span class="tab-icon">📊</span> PCR Sentiment
+            </button>
+        </div>
+
+        <!-- Tab: Top Predictions -->
+        <div id="tab-predictions" class="tab-content">
+            <!-- Expiry Type Filter -->
+            <div class="card mb-20">
+                <div class="card-body" style="padding: 14px 20px;">
+                    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <span style="font-weight: 600; color: var(--text-secondary); font-size: 13px;">📅 Expiry Type:</span>
+                        <div class="expiry-filters">
+                            <button class="expiry-btn active" data-expiry="0dte" onclick="setExpiryFilter('0dte')">🔥 0DTE</button>
+                            <button class="expiry-btn" data-expiry="daily" onclick="setExpiryFilter('daily')">📆 Daily</button>
+                            <button class="expiry-btn" data-expiry="weekly" onclick="setExpiryFilter('weekly')">📅 Weekly</button>
+                            <button class="expiry-btn" data-expiry="monthly" onclick="setExpiryFilter('monthly')">🗓️ Monthly</button>
+                        </div>
+                        <span id="expiry-info" style="font-size: 11px; color: var(--text-secondary); margin-left: auto;">Same-day expiry options</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="info-box info-box-warning">
+                <strong>⚠️ Important:</strong> <span id="expiry-warning-text">0DTE options expire TODAY. Exit all positions by 3:50 PM ET to avoid worthless expiry.</span>
+            </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">⭐ System Top 10 Picks</h3>
+                    <button id="refreshTop5" class="btn btn-secondary" style="padding: 6px 14px; font-size: 12px;">🔄 Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div id="top5Predictions">
+                        <div class="loading"><div class="spinner"></div><div style="font-size: 13px;">Loading best opportunities...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Custom Analysis -->
+        <div id="tab-custom" class="tab-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">🔬 Custom Stock Analysis</h3>
+                </div>
+                <div class="card-body">
+                    <div class="info-box info-box-info">
+                        <strong>ℹ️ How it works:</strong> Uses 15 technical indicators (EMAs, RSI, MACD, ATR, Volume) to score stocks 0-15. Score ≥7 required for recommendation. May differ from PCR sentiment.
+                    </div>
+                    
+                    <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                        <input type="text" id="custom-options-symbols" placeholder="Enter symbols: AAPL, TSLA, NVDA, AMD..." 
+                            style="flex: 1; padding: 14px 18px; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary); color: var(--text-primary); font-size: 15px;"
+                            onkeypress="if(event.key === 'Enter') analyzeCustomOptions()"/>
+                        <button id="analyzeOptionsBtn" class="btn btn-primary" onclick="analyzeCustomOptions()" style="padding: 14px 28px;">
+                            🔍 Analyze
+                        </button>
+                    </div>
+                    
+                    <div class="quick-picks">
+                        <span style="color: var(--text-secondary); font-size: 13px; display: flex; align-items: center;">Quick picks:</span>
+                        <button class="quick-pick-btn" onclick="setAndAnalyze('SPY,QQQ,IWM')">📊 Major ETFs</button>
+                        <button class="quick-pick-btn" onclick="setAndAnalyze('AAPL,MSFT,GOOGL,AMZN,NVDA')">🏢 Tech Giants</button>
+                        <button class="quick-pick-btn" onclick="setAndAnalyze('TSLA,RIVN,LCID')">🚗 EV Stocks</button>
+                        <button class="quick-pick-btn" onclick="setAndAnalyze('AMD,INTC,MU,AVGO')">💾 Semiconductors</button>
+                        <button class="quick-pick-btn" onclick="setAndAnalyze('META,NFLX,DIS')">📺 Media/Social</button>
+                    </div>
+                    
+                    <div id="customPredictions">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div>Enter symbols above or use quick picks to analyze options opportunities</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Swing Trade -->
+        <div id="tab-swing" class="tab-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">📈 Swing Trade Options</h3>
+                    <button id="refreshSwing" class="btn btn-secondary" style="padding: 6px 14px; font-size: 12px;">🔄 Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="info-box info-box-info">
+                        <strong>ℹ️ Swing Trade Strategy:</strong> Find low-premium options (under $50) for multi-day holds. Lower premiums = lower risk with potential for higher % gains. Weekly/Monthly expiry recommended.
+                    </div>
+                    
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-weight: 600; color: var(--text-secondary); font-size: 13px; margin-bottom: 10px;">📅 Expiry Preference:</div>
+                        <div class="expiry-filters">
+                            <button class="expiry-btn swing-expiry active" data-expiry="weekly" onclick="setSwingExpiry('weekly')">📅 Weekly</button>
+                            <button class="expiry-btn swing-expiry" data-expiry="monthly" onclick="setSwingExpiry('monthly')">🗓️ Monthly</button>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-weight: 600; color: var(--text-secondary); font-size: 13px; margin-bottom: 10px;">💰 Maximum Premium Filter:</div>
+                        <div class="premium-filters">
+                            <button class="premium-btn" data-max="10" onclick="setSwingPremium(10)">≤ $10</button>
+                            <button class="premium-btn" data-max="20" onclick="setSwingPremium(20)">≤ $20</button>
+                            <button class="premium-btn active" data-max="30" onclick="setSwingPremium(30)">≤ $30</button>
+                            <button class="premium-btn" data-max="40" onclick="setSwingPremium(40)">≤ $40</button>
+                            <button class="premium-btn" data-max="50" onclick="setSwingPremium(50)">≤ $50</button>
+                        </div>
+                    </div>
+                    
+                    <div class="quick-picks" style="margin-bottom: 16px;">
+                        <span style="color: var(--text-secondary); font-size: 13px; display: flex; align-items: center;">Quick sectors:</span>
+                        <button class="quick-pick-btn" onclick="loadSwingTrade('SPY,QQQ,IWM,DIA')">📊 Index ETFs</button>
+                        <button class="quick-pick-btn" onclick="loadSwingTrade('AAPL,MSFT,GOOGL,AMZN,META')">🏢 Tech Giants</button>
+                        <button class="quick-pick-btn" onclick="loadSwingTrade('TSLA,NVDA,AMD,INTC')">⚡ High Beta</button>
+                        <button class="quick-pick-btn" onclick="loadSwingTrade('XLE,XLF,XLK,XLV')">📈 Sector ETFs</button>
+                    </div>
+                    
+                    <div id="swingResults">
+                        <div class="loading"><div class="spinner"></div><div style="font-size: 12px;">Loading swing trade opportunities...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: PCR Analysis -->
+        <div id="tab-pcr" class="tab-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">📊 Put/Call Ratio Analysis</h3>
+                    <button id="refreshPCR" class="btn btn-secondary" style="padding: 6px 14px; font-size: 12px;">🔄 Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="info-box info-box-info">
+                        <strong>ℹ️ PCR Analysis:</strong> Based on options trading volume (trader sentiment). PCR < 0.7 = Bullish (more calls), PCR > 1.0 = Bearish (more puts). Different from technical analysis.
+                    </div>
+                    
+                    <div class="options-stats" id="pcr-stats">
+                        <div class="stat-card">
+                            <div class="stat-card-icon">📈</div>
+                            <div class="stat-card-value" id="bullish-count">-</div>
+                            <div class="stat-card-label">Bullish Stocks</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-card-icon">📉</div>
+                            <div class="stat-card-value" id="bearish-count">-</div>
+                            <div class="stat-card-label">Bearish Stocks</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-card-icon">⚖️</div>
+                            <div class="stat-card-value" id="neutral-count">-</div>
+                            <div class="stat-card-label">Neutral</div>
+                        </div>
+                    </div>
+                    
+                    <div id="pcrAnalysis">
+                        <div class="loading"><div class="spinner"></div><div>Loading options volume data...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=4.7"></script>
+    <script>
+        let currentTab = 'predictions';
+        let currentExpiryFilter = '0dte';
+        let swingExpiry = 'weekly';
+        let swingMaxPremium = 30;
+        
+        // Expiry filter descriptions
+        const expiryInfo = {
+            '0dte': 'Same-day expiry options (highest risk/reward)',
+            'daily': 'Next trading day expiry (1DTE)',
+            'weekly': 'Expires this Friday (2-5 DTE)',
+            'monthly': 'Monthly expiry (15-45 DTE)'
+        };
+        
+        const expiryWarnings = {
+            '0dte': '0DTE options expire TODAY. Exit all positions by 3:50 PM ET to avoid worthless expiry.',
+            'daily': '1DTE options expire tomorrow. Exit all positions by 3:50 PM ET to avoid theta decay.',
+            'weekly': 'Weekly options expire this Friday. Monitor theta decay as expiry approaches.',
+            'monthly': 'Monthly options have longer duration. Suitable for swing trades with proper risk management.'
+        };
+        
+        // Set expiry filter for predictions
+        function setExpiryFilter(expiry) {
+            currentExpiryFilter = expiry;
+            document.querySelectorAll('.expiry-btn:not(.swing-expiry)').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.expiry === expiry);
+            });
+            document.getElementById('expiry-info').textContent = expiryInfo[expiry];
+            document.getElementById('expiry-warning-text').textContent = expiryWarnings[expiry];
+            loadTop5Predictions();
+        }
+        
+        // Set expiry for swing trade
+        function setSwingExpiry(expiry) {
+            swingExpiry = expiry;
+            document.querySelectorAll('.swing-expiry').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.expiry === expiry);
+            });
+            loadSwingTrade();
+        }
+        
+        // Set premium filter for swing trade
+        function setSwingPremium(maxPremium) {
+            swingMaxPremium = maxPremium;
+            document.querySelectorAll('.premium-btn').forEach(btn => {
+                btn.classList.toggle('active', parseInt(btn.dataset.max) === maxPremium);
+            });
+            loadSwingTrade();
+        }
+        
+        // Load swing trade results
+        async function loadSwingTrade(symbols = null) {
+            const container = document.getElementById('swingResults');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><div style="font-size: 12px;">Finding low-premium opportunities...</div></div>';
+            
+            try {
+                let url = `/api/options/swing?expiry=${swingExpiry}&max_premium=${swingMaxPremium}`;
+                if (symbols) {
+                    url += `&symbols=${encodeURIComponent(symbols)}`;
+                }
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.success && data.options && data.options.length > 0) {
+                    container.innerHTML = renderSwingTable(data.options);
+                } else if (data.scanning) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🔄</div>
+                            <div style="font-size: 12px;">${data.message || 'Scanning...'}</div>
+                        </div>
+                    `;
+                    setTimeout(() => loadSwingTrade(symbols), 5000);
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div style="font-size: 12px;">No options found with premium ≤ $${swingMaxPremium}</div>
+                            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 8px;">Try increasing the premium filter or changing expiry type</div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading swing trade data:', error);
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⚠️</div>
+                        <div>Error: ${error.message}</div>
+                    </div>
+                `;
+            }
+        }
+        
+        // Render swing trade table
+        function renderSwingTable(options) {
+            return `
+                <div style="overflow-x: auto;">
+                    <table class="data-table" style="width: 100%; background: var(--bg-card); border-radius: 8px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 12px;">Symbol</th>
+                                <th style="text-align: center; padding: 12px;">Type</th>
+                                <th style="text-align: right; padding: 12px;">Stock Price</th>
+                                <th style="text-align: right; padding: 12px;">Strike</th>
+                                <th style="text-align: right; padding: 12px;">Bid/Ask</th>
+                                <th style="text-align: right; padding: 12px;">Premium</th>
+                                <th style="text-align: right; padding: 12px;">Total (1c)</th>
+                                <th style="text-align: center; padding: 12px;">Expiry</th>
+                                <th style="text-align: center; padding: 12px;">DTE</th>
+                                <th style="text-align: center; padding: 12px;">Score</th>
+                                <th style="text-align: center; padding: 12px;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${options.map(opt => {
+                                const isCall = opt.type === 'CALL';
+                                const typeColor = isCall ? 'var(--accent-green)' : 'var(--accent-red)';
+                                const scoreColor = opt.score >= 10 ? 'var(--accent-green)' : opt.score >= 7 ? '#ffa500' : 'var(--text-secondary)';
+                                const bidAsk = (opt.bid && opt.ask) ? '$' + opt.bid.toFixed(2) + ' / $' + opt.ask.toFixed(2) : 'N/A';
+                                const totalPremium = opt.total_premium || (opt.premium * 100);
+                                
+                                return `
+                                    <tr style="border-bottom: 1px solid var(--border-color);">
+                                        <td style="padding: 12px;">
+                                            <strong style="color: var(--accent-blue); font-size: 14px;">${opt.symbol}</strong>
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <span style="display: inline-block; padding: 4px 10px; background: ${typeColor}33; border-radius: 12px; font-weight: 600; color: ${typeColor}; font-size: 12px;">
+                                                ${opt.type}
+                                            </span>
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; font-weight: 600;">
+                                            $${opt.stock_price ? opt.stock_price.toFixed(2) : 'N/A'}
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-blue); font-weight: 600;">
+                                            $${opt.strike ? opt.strike.toFixed(0) : 'N/A'}
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; font-size: 11px; color: var(--text-secondary);">
+                                            ${bidAsk}
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-green); font-weight: 700;">
+                                            $${opt.premium ? opt.premium.toFixed(2) : 'N/A'}
+                                            <span style="font-size: 10px; color: var(--accent-blue); display: block;">LIVE</span>
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; font-weight: 700; color: var(--accent-orange);">
+                                            $${totalPremium.toFixed(2)}
+                                        </td>
+                                        <td style="text-align: center; padding: 12px; font-size: 11px;">
+                                            ${opt.expiry || 'N/A'}
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <span style="padding: 3px 8px; background: var(--bg-secondary); border-radius: 10px; font-size: 11px; font-weight: 600;">
+                                                ${opt.dte || 'N/A'}
+                                            </span>
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <div style="display: inline-block; padding: 4px 10px; background: ${scoreColor}33; border-radius: 12px; font-weight: 600; color: ${scoreColor};">
+                                                ${opt.score}/15
+                                            </div>
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <button class="btn btn-primary" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;"
+                                                    onclick="addToMonitor('${opt.symbol}', 'OPTION', '${opt.type}', ${opt.premium || 0}, ${(opt.premium || 0) * 0.5}, ${(opt.premium || 0) * 3}, ${opt.strike || 0}, '${opt.expiry || ''}')">
+                                                👁️ Monitor
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                <div style="margin-top: 12px; padding: 10px; background: var(--bg-secondary); border-radius: 8px; font-size: 11px; color: var(--text-secondary);">
+                    💡 <strong>Swing Trade Tips:</strong> Lower premiums reduce capital at risk. Look for options with IV < 50% and DTE of 7-30 days for optimal theta/gamma balance.
+                </div>
+            `;
+        }
+        
+        // Tab switching
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+            document.querySelectorAll('.tab-content').forEach(content => content.style.display = 'none');
+            document.getElementById(`tab-${tab}`).style.display = 'block';
+            
+            // Load swing data when tab is first opened
+            if (tab === 'swing') {
+                loadSwingTrade();
+            }
+        }
+        
+        // Quick pick helper
+        function setAndAnalyze(symbols) {
+            document.getElementById('custom-options-symbols').value = symbols;
+            analyzeCustomOptions();
+        }
+        
+        // Render predictions helper function
+        function renderPredictions(predictions, maxHeight = '500px') {
+            let html = `<div style="max-height: ${maxHeight}; overflow-y: auto;">`;
+            html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px;">';
+            
+            predictions.forEach(pred => {
+                const isWeakSignal = pred.is_weak_signal || false;
+                const isBullish = pred.signal === 'CALL';
+                const signalClass = isWeakSignal ? 'badge-warning' : (isBullish ? 'badge-success' : 'badge-danger');
+                const scoreClass = pred.signal_strength >= 7 ? 'badge-success' : pred.signal_strength >= 5 ? 'badge-warning' : 'badge-danger';
+                const bgColor = isWeakSignal ? 'rgba(255, 165, 0, 0.08)' : (isBullish ? 'rgba(0, 255, 0, 0.05)' : 'rgba(255, 0, 0, 0.05)');
+                const borderColor = isWeakSignal ? 'rgba(255, 165, 0, 0.4)' : 'var(--border-color)';
+                
+                const target3xGain = pred.target_premium_3x && pred.entry_premium 
+                    ? ((pred.target_premium_3x - pred.entry_premium) / pred.entry_premium * 100).toFixed(0) 
+                    : 0;
+                const target5xGain = pred.target_premium_5x && pred.entry_premium 
+                    ? ((pred.target_premium_5x - pred.entry_premium) / pred.entry_premium * 100).toFixed(0) 
+                    : 0;
+                
+                html += `<div style="padding: 12px; background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 8px;">`;
+                html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">`;
+                html += `<h4 style="margin: 0; font-size: 16px;">${pred.ticker}</h4>`;
+                html += `<div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">`;
+                
+                // Add "Not Recommended" badge for weak signals
+                if (isWeakSignal) {
+                    html += `<span class="badge badge-warning" style="font-size: 10px; padding: 3px 8px;">⚠️ NOT RECOMMENDED</span>`;
+                }
+                
+                html += `<span class="badge ${signalClass}" style="font-size: 11px; padding: 3px 8px;">${pred.signal}</span>`;
+                html += `<span class="badge ${scoreClass}" style="font-size: 11px; padding: 3px 8px;">${pred.signal_strength}/15</span>`;
+                html += `</div></div>`;
+                
+                // Weak signal warning explanation
+                if (isWeakSignal && pred.weak_signal_reason) {
+                    html += `<div style="margin-bottom: 10px; padding: 8px; background: rgba(255, 165, 0, 0.15); border-left: 3px solid #ffa500; border-radius: 4px; font-size: 10px; line-height: 1.4;">`;
+                    html += `<strong>⚠️ Why Not Recommended:</strong><br>${pred.weak_signal_reason}<br>`;
+                    html += `<span style="font-style: italic; font-size: 9px; opacity: 0.8;">Note: PCR sentiment may differ - it measures options volume, not price patterns.</span>`;
+                    html += `</div>`;
+                }
+                
+                // Add expiry info
+                if (pred.expiry_date && pred.expiry_type) {
+                    const expiryColor = pred.expiry_type === 'Daily' ? 'var(--accent-green)' : 'var(--accent-blue)';
+                    html += `<div style="margin-bottom: 8px; padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 11px;">`;
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+                    html += `<span>📅 <strong>Expiry:</strong> ${pred.expiry_day} ${pred.expiry_date}</span>`;
+                    html += `<span style="color: ${expiryColor}; font-weight: 600;">${pred.expiry_type}</span>`;
+                    html += `</div></div>`;
+                }
+                
+                html += `<div style="font-size: 12px; line-height: 1.6;">`;
+                html += `<div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color);">`;
+                html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">`;
+                html += `<div><strong>Stock:</strong> $${pred.entry_price ? pred.entry_price.toFixed(2) : 'N/A'}</div>`;
+                html += `<div><strong>Strike:</strong> $${pred.strike_price ? pred.strike_price.toFixed(0) : 'N/A'}</div>`;
+                html += `</div></div>`;
+                
+                // Premium with LIVE/ESTIMATED indicator
+                const premiumBadge = pred.premium_source === 'LIVE' 
+                    ? '<span style="background: var(--accent-green); color: #000; font-size: 9px; padding: 2px 5px; border-radius: 3px; font-weight: 600; margin-left: 5px;">🔴 LIVE</span>'
+                    : '<span style="background: var(--text-secondary); color: #fff; font-size: 9px; padding: 2px 5px; border-radius: 3px; margin-left: 5px;">EST</span>';
+                
+                html += `<div style="background: rgba(255, 255, 255, 0.05); padding: 8px; border-radius: 4px;">`;
+                html += `<div style="font-weight: 600; margin-bottom: 6px; color: var(--accent-blue); font-size: 11px;">📊 PREMIUM TARGETS</div>`;
+                html += `<div style="display: grid; gap: 4px; font-size: 11px;">`;
+                html += `<div style="display: flex; justify-content: space-between;">`;
+                html += `<span>Entry:</span><strong>$${pred.entry_premium ? pred.entry_premium.toFixed(2) : 'N/A'}${premiumBadge}</strong>`;
+                html += `</div>`;
+                html += `<div style="display: flex; justify-content: space-between; color: var(--accent-green);">`;
+                html += `<span>🎯 1:3:</span><strong>$${pred.target_premium_3x ? pred.target_premium_3x.toFixed(2) : 'N/A'} (+${target3xGain}%)</strong>`;
+                html += `</div>`;
+                html += `<div style="display: flex; justify-content: space-between; color: var(--accent-green);">`;
+                html += `<span>🎯 1:5:</span><strong>$${pred.target_premium_5x ? pred.target_premium_5x.toFixed(2) : 'N/A'} (+${target5xGain}%)</strong>`;
+                html += `</div>`;
+                html += `<div style="display: flex; justify-content: space-between; color: var(--accent-red);">`;
+                html += `<span>🛑 Stop:</span><strong>$${pred.stop_loss_premium ? pred.stop_loss_premium.toFixed(2) : 'N/A'}</strong>`;
+                html += `</div>`;
+                html += `</div></div>`;
+                
+                // Add to Monitor button - disabled for weak signals
+                html += `<div style="margin-top: 10px;">`;
+                if (isWeakSignal) {
+                    html += `<button class="btn btn-secondary" style="width: 100%; padding: 6px 12px; font-size: 11px; opacity: 0.5; cursor: not-allowed;" disabled title="Not recommended - weak signal">`;
+                    html += `⚠️ Not Recommended for Trading`;
+                    html += `</button>`;
+                } else {
+                    html += `<button class="btn btn-primary" style="width: 100%; padding: 6px 12px; font-size: 11px;" onclick="addToMonitor('${pred.ticker}', 'OPTION', '${pred.signal}', ${pred.entry_premium || 0}, ${pred.stop_loss_premium || 0}, ${pred.target_premium_5x || 0}, ${pred.strike_price || 0}, '${pred.expiry_date || ''}')">`;
+                    html += `👁️ Add to Monitor`;
+                    html += `</button>`;
+                }
+                html += `</div>`;
+                
+                html += `</div></div>`;
+            });
+            
+            html += '</div></div>';
+            return html;
+        }
+        
+        function renderPredictionsTable(predictions) {
+            return `
+                <div style="overflow-x: auto;">
+                    <table class="data-table" style="width: 100%; background: var(--bg-card); border-radius: 8px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 12px;">Symbol</th>
+                                <th style="text-align: center; padding: 12px;">Signal</th>
+                                <th style="text-align: center; padding: 12px;">Score</th>
+                                <th style="text-align: right; padding: 12px;">Stock</th>
+                                <th style="text-align: right; padding: 12px;">Strike</th>
+                                <th style="text-align: right; padding: 12px;">Entry Premium</th>
+                                <th style="text-align: right; padding: 12px;">Target (1:3)</th>
+                                <th style="text-align: right; padding: 12px;">Target (1:5)</th>
+                                <th style="text-align: right; padding: 12px;">Stop Loss</th>
+                                <th style="text-align: center; padding: 12px;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${predictions.map(pred => {
+                                const isBullish = pred.signal === 'CALL';
+                                const scoreColor = pred.signal_strength >= 12 ? 'var(--accent-green)' : pred.signal_strength >= 9 ? '#ffa500' : 'var(--text-secondary)';
+                                const signalColor = isBullish ? 'var(--accent-green)' : 'var(--accent-red)';
+                                const target3xGain = pred.target_premium_3x && pred.entry_premium ? ((pred.target_premium_3x - pred.entry_premium) / pred.entry_premium * 100).toFixed(0) : 0;
+                                const target5xGain = pred.target_premium_5x && pred.entry_premium ? ((pred.target_premium_5x - pred.entry_premium) / pred.entry_premium * 100).toFixed(0) : 0;
+                                const premiumBadge = pred.premium_source === 'LIVE' ? '🔴' : '';
+                                
+                                return `
+                                    <tr style="border-bottom: 1px solid var(--border-color);">
+                                        <td style="padding: 12px;">
+                                            <div style="display: flex; flex-direction: column;">
+                                                <strong style="color: var(--accent-blue); font-size: 14px;">${pred.ticker}</strong>
+                                                ${pred.expiry_date ? `<span style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">Exp: ${pred.expiry_date}</span>` : ''}
+                                            </div>
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <span style="display: inline-block; padding: 4px 10px; background: ${signalColor}33; border-radius: 12px; font-weight: 600; color: ${signalColor}; font-size: 12px;">
+                                                ${pred.signal}
+                                            </span>
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <div style="display: inline-block; padding: 4px 10px; background: ${scoreColor}33; border-radius: 12px; font-weight: 600; color: ${scoreColor};">
+                                                ${pred.signal_strength}/15
+                                            </div>
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; font-weight: 600;">
+                                            $${pred.entry_price ? pred.entry_price.toFixed(2) : 'N/A'}
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-blue);">
+                                            $${pred.strike_price ? pred.strike_price.toFixed(0) : 'N/A'}
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-blue); font-weight: 600;">
+                                            $${pred.entry_premium ? pred.entry_premium.toFixed(2) : 'N/A'} ${premiumBadge}
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-green);">
+                                            <div>$${pred.target_premium_3x ? pred.target_premium_3x.toFixed(2) : 'N/A'}</div>
+                                            <div style="font-size: 10px; color: var(--text-secondary);">+${target3xGain}%</div>
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-green);">
+                                            <div>$${pred.target_premium_5x ? pred.target_premium_5x.toFixed(2) : 'N/A'}</div>
+                                            <div style="font-size: 10px; color: var(--text-secondary);">+${target5xGain}%</div>
+                                        </td>
+                                        <td style="text-align: right; padding: 12px; color: var(--accent-red);">
+                                            $${pred.stop_loss_premium ? pred.stop_loss_premium.toFixed(2) : 'N/A'}
+                                        </td>
+                                        <td style="text-align: center; padding: 12px;">
+                                            <button class="btn btn-primary" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;"
+                                                    onclick="addToMonitor('${pred.ticker}', 'OPTION', '${pred.signal}', ${pred.entry_premium || 0}, ${pred.stop_loss_premium || 0}, ${pred.target_premium_5x || 0}, ${pred.strike_price || 0}, '${pred.expiry_date || ''}')">
+                                                👁️ Monitor
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+        
+        // Force refresh with live premiums (clear cache)
+        async function forceRefreshOptions() {
+            const btn = document.getElementById('refreshOptions');
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Clearing cache...';
+            
+            try {
+                // Clear cache on server
+                const response = await fetch('/api/options/refresh', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    btn.innerHTML = '✅ Cache cleared! Reloading...';
+                    
+                    // Wait 1 second then reload both sections
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    await Promise.all([
+                        loadTop5Predictions(),
+                        loadPCRAnalysis()
+                    ]);
+                    
+                    btn.innerHTML = '🔄 Force Refresh (Clear Cache)';
+                    btn.disabled = false;
+                    
+                    alert('✅ Options data refreshed with latest live premiums!');
+                } else {
+                    throw new Error(data.error || 'Failed to clear cache');
+                }
+            } catch (error) {
+                console.error('Error force refreshing:', error);
+                alert(`❌ Error: ${error.message}`);
+                btn.innerHTML = '🔄 Force Refresh (Clear Cache)';
+                btn.disabled = false;
+            }
+        }
+        
+        // Load top 5 system picks
+        async function loadTop5Predictions() {
+            console.log('=== loadTop5Predictions called with expiry:', currentExpiryFilter, '===');
+            try {
+                const container = document.getElementById('top5Predictions');
+                if (!container) {
+                    console.error('ERROR: top5Predictions container not found!');
+                    return;
+                }
+                console.log('Container found:', container);
+                
+                container.innerHTML = '<div class="loading"><div class="spinner"></div><div style="font-size: 12px;">Finding best picks...</div></div>';
+                
+                console.log('Fetching top 10 system picks from /api/options/analysis');
+                const response = await fetch(`/api/options/analysis?expiry=${currentExpiryFilter}`);
+                console.log('Response received:', response.status, response.statusText);
+                
+                const data = await response.json();
+                console.log('Top 10 data parsed:', {
+                    success: data.success,
+                    scanning: data.scanning,
+                    predictions_count: data.predictions ? data.predictions.length : 0,
+                    cached: data.cached
+                });
+                
+                if (data.success && data.predictions && data.predictions.length > 0) {
+                    console.log('Rendering top 10 predictions...');
+                    const top10 = data.predictions.slice(0, 10);
+                    console.log('Top 10 tickers:', top10.map(p => p.ticker));
+                    container.innerHTML = renderPredictionsTable(top10);
+                    
+                    if (data.cached) {
+                        const cacheMsg = `<div style="margin-top: 10px; padding: 8px; background: var(--bg-secondary); border-radius: 4px; text-align: center; font-size: 11px; color: var(--text-secondary);">`;
+                        container.innerHTML += cacheMsg + `📊 Cached (${Math.floor(data.age_seconds / 60)} min old)</div>`;
+                    }
+                    console.log('Top 10 rendered successfully');
+                } else if (data.scanning) {
+                    console.log('Scanning in progress, will retry in 10 seconds');
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🔄</div>
+                            <div style="font-size: 12px;">${data.message || 'Analyzing...'}</div>
+                        </div>
+                    `;
+                    setTimeout(() => loadTop5Predictions(), 10000);
+                } else {
+                    console.log('No predictions available');
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div style="font-size: 12px;">No picks available</div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('ERROR in loadTop5Predictions:', error);
+                console.error('Error stack:', error.stack);
+                const container = document.getElementById('top5Predictions');
+                if (container) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">⚠️</div>
+                            <div style="font-size: 12px;">Error: ${error.message}</div>
+                        </div>
+                    `;
+                }
+            }
+        }
+        
+        // Load custom predictions
+        async function loadCustomPredictions(customSymbols) {
+            try {
+                const container = document.getElementById('customPredictions');
+                console.log('🔍 loadCustomPredictions called with:', customSymbols);
+                
+                container.innerHTML = '<div class="loading"><div class="spinner"></div><div style="font-size: 12px;">Analyzing symbols...</div></div>';
+                
+                let url = '/api/options/analysis?symbols=' + encodeURIComponent(customSymbols.join(','));
+                
+                console.log('📡 Fetching custom predictions from:', url);
+                const response = await fetch(url);
+                console.log('📥 Response status:', response.status, response.statusText);
+                
+                const data = await response.json();
+                console.log('📊 Custom data received:', {
+                    success: data.success,
+                    scanning: data.scanning,
+                    predictions: data.predictions ? data.predictions.length : 0,
+                    weak_signals: data.weak_signals ? data.weak_signals.length : 0,
+                    cached: data.cached
+                });
+                
+                if (data.success && data.predictions && data.predictions.length > 0) {
+                    console.log('✅ Rendering', data.predictions.length, 'predictions');
+                    container.innerHTML = renderPredictions(data.predictions, '400px');
+                    
+                    if (data.cached) {
+                        const cacheMsg = `<div style="margin-top: 10px; padding: 8px; background: var(--bg-secondary); border-radius: 4px; text-align: center; font-size: 11px; color: var(--text-secondary);">`;
+                        container.innerHTML += cacheMsg + `📊 Cached (${Math.floor(data.age_seconds / 60)} min old)</div>`;
+                    }
+                } else if (data.success && data.weak_signals && data.weak_signals.length > 0) {
+                    console.log('⚠️ Rendering', data.weak_signals.length, 'weak signals');
+                    // Show weak signals if no strong predictions
+                    container.innerHTML = `
+                        <div style="padding: 16px; background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); border-radius: 8px; margin-bottom: 12px; text-align: center;">
+                            <div style="font-size: 14px; color: #ffa500; margin-bottom: 8px; font-weight: 600;">⚠️ Weak Signals Detected</div>
+                            <div style="font-size: 11px; color: var(--text-secondary);">The following stocks have low confidence scores. Review carefully before trading.</div>
+                        </div>
+                    `;
+                    container.innerHTML += renderPredictions(data.weak_signals, '400px');
+                } else if (data.scanning) {
+                    console.log('🔄 Still scanning, will retry in 10 seconds');
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🔄</div>
+                            <div style="font-size: 12px;">${data.message || 'Analyzing...'}</div>
+                        </div>
+                    `;
+                    setTimeout(() => loadCustomPredictions(customSymbols), 10000);
+                } else {
+                    console.log('❌ No data to display');
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div style="font-size: 12px;">No predictions available</div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('❌ Error loading custom predictions:', error);
+                document.getElementById('customPredictions').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⚠️</div>
+                        <div style="font-size: 12px;">Error loading data: ${error.message}</div>
+                    </div>
+                `;
+            }
+        }
+        
+        // Analyze custom options symbols
+        function analyzeCustomOptions() {
+            const input = document.getElementById('custom-options-symbols');
+            const btn = document.getElementById('analyzeOptionsBtn');
+            const symbolsText = input.value.trim();
+            
+            console.log('Analyze button clicked, symbols:', symbolsText);
+            
+            if (!symbolsText) {
+                alert('Please enter stock symbols to analyze');
+                return;
+            }
+            
+            const symbols = symbolsText.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+            
+            if (symbols.length === 0) {
+                alert('No valid symbols found');
+                return;
+            }
+            
+            if (symbols.length > 20) {
+                alert('Maximum 20 symbols allowed');
+                return;
+            }
+            
+            // Disable button during analysis
+            btn.textContent = '🔄 Analyzing...';
+            btn.disabled = true;
+            
+            console.log('Starting custom analysis for:', symbols);
+            loadCustomPredictions(symbols).finally(() => {
+                btn.textContent = 'Analyze';
+                btn.disabled = false;
+            });
+        }
+
+        // Load Put/Call Ratio data
+        async function loadPCRAnalysis() {
+            try {
+                const response = await fetch('/api/options/pcr');
+                const data = await response.json();
+                
+                const container = document.getElementById('pcrAnalysis');
+                
+                if (data.success && (data.stock_pcr || data.etf_pcr)) {
+                    // Update stats
+                    let bullish = 0, bearish = 0, neutral = 0;
+                    [...(data.stock_pcr || []), ...(data.etf_pcr || [])].forEach(item => {
+                        if (item.sentiment === 'Bullish') bullish++;
+                        else if (item.sentiment === 'Bearish') bearish++;
+                        else neutral++;
+                    });
+                    document.getElementById('bullish-count').textContent = bullish;
+                    document.getElementById('bearish-count').textContent = bearish;
+                    document.getElementById('neutral-count').textContent = neutral;
+                    
+                    let html = '<div style="display: flex; flex-direction: column; gap: 20px;">';
+                    
+                    // Stock Options Section
+                    if (data.stock_pcr && data.stock_pcr.length > 0) {
+                        html += '<div>';
+                        html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">📈 Stock Options (Top 5)</h4>';
+                        html += '<table class="data-table">';
+                        html += '<thead><tr>';
+                        html += '<th>Symbol</th><th>PCR</th><th>Sentiment</th><th>Puts</th><th>Calls</th><th>Total</th>';
+                        html += '</tr></thead><tbody>';
+                        
+                        data.stock_pcr.forEach(item => {
+                            const sentimentClass = 
+                                item.sentiment === 'Bullish' ? 'badge-success' :
+                                item.sentiment === 'Bearish' ? 'badge-danger' : 'badge-warning';
+                            
+                            html += '<tr>';
+                            html += `<td><strong>${item.symbol}</strong></td>`;
+                            html += `<td><strong>${item.pcr.toFixed(2)}</strong></td>`;
+                            html += `<td><span class="badge ${sentimentClass}">${item.sentiment}</span></td>`;
+                            html += `<td style="color: #ff6b6b;">${(item.put_volume || 0).toLocaleString()}</td>`;
+                            html += `<td style="color: #51cf66;">${(item.call_volume || 0).toLocaleString()}</td>`;
+                            html += `<td>${item.volume.toLocaleString()}</td>`;
+                            html += '</tr>';
+                        });
+                        
+                        html += '</tbody></table></div>';
+                    }
+                    
+                    // ETF Options Section
+                    if (data.etf_pcr && data.etf_pcr.length > 0) {
+                        html += '<div>';
+                        html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">📊 ETF Options (Top 5)</h4>';
+                        html += '<table class="data-table">';
+                        html += '<thead><tr>';
+                        html += '<th>Symbol</th><th>PCR</th><th>Sentiment</th><th>Puts</th><th>Calls</th><th>Total</th>';
+                        html += '</tr></thead><tbody>';
+                        
+                        data.etf_pcr.forEach(item => {
+                            const sentimentClass = 
+                                item.sentiment === 'Bullish' ? 'badge-success' :
+                                item.sentiment === 'Bearish' ? 'badge-danger' : 'badge-warning';
+                            
+                            html += '<tr>';
+                            html += `<td><strong>${item.symbol}</strong></td>`;
+                            html += `<td><strong>${item.pcr.toFixed(2)}</strong></td>`;
+                            html += `<td><span class="badge ${sentimentClass}">${item.sentiment}</span></td>`;
+                            html += `<td style="color: #ff6b6b;">${(item.put_volume || 0).toLocaleString()}</td>`;
+                            html += `<td style="color: #51cf66;">${(item.call_volume || 0).toLocaleString()}</td>`;
+                            html += `<td>${item.volume.toLocaleString()}</td>`;
+                            html += '</tr>';
+                        });
+                        
+                        html += '</tbody></table></div>';
+                    }
+                    
+                    html += '</div>';
+                    
+                    // Add timestamp
+                    if (data.timestamp) {
+                        const updateTime = new Date(data.timestamp).toLocaleString();
+                        html += `<div style="margin-top: 10px; font-size: 11px; color: var(--text-secondary); text-align: right;">📅 Last updated: ${updateTime}</div>`;
+                    }
+                    
+                    html += '<div style="margin-top: 15px; padding: 10px; background: var(--bg-secondary); border-radius: 8px; font-size: 12px;">';
+                    html += '<strong>📖 PCR Guide:</strong><br>';
+                    html += 'PCR < 0.7 = Bullish (more calls) | PCR 0.7-1.0 = Neutral | PCR > 1.0 = Bearish (more puts)';
+                    html += '</div>';
+                    
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div>No PCR data available</div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading PCR:', error);
+                document.getElementById('pcrAnalysis').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⚠️</div>
+                        <div>Error loading PCR data</div>
+                    </div>
+                `;
+            }
+        }
+
+        // Refresh button handlers
+        document.getElementById('refreshOptions').addEventListener('click', () => {
+            loadTop5Predictions();
+            loadPCRAnalysis();
+        });
+
+        document.getElementById('refreshTop5').addEventListener('click', () => {
+            loadTop5Predictions();
+        });
+        
+        document.getElementById('refreshSwing').addEventListener('click', () => {
+            const btn = document.getElementById('refreshSwing');
+            btn.textContent = '🔄 Refreshing...';
+            btn.disabled = true;
+            
+            loadSwingTrade().finally(() => {
+                btn.textContent = '🔄 Refresh';
+                btn.disabled = false;
+            });
+        });
+
+        document.getElementById('refreshPCR').addEventListener('click', () => {
+            const btn = document.getElementById('refreshPCR');
+            btn.textContent = '🔄 Refreshing...';
+            btn.disabled = true;
+            
+            loadPCRAnalysis().finally(() => {
+                btn.textContent = '🔄 Refresh';
+                btn.disabled = false;
+            });
+        });
+
+        // Initial load
+        loadTop5Predictions();
+        loadPCRAnalysis();
+
+        // Auto-refresh every 10 minutes
+        setInterval(() => {
+            loadTop5Predictions();
+            loadPCRAnalysis();
+        }, 600000);
+        
+        // Add position to monitoring
+        async function addToMonitor(symbol, type, direction, entryPrice, stopLoss, target, strikePrice = null, expiryDate = '') {
+            try {
+                const quantity = prompt(`How many ${type === 'OPTION' ? 'contracts' : 'shares'} of ${symbol}?`, type === 'OPTION' ? '1' : '10');
+                if (!quantity || isNaN(quantity) || quantity <= 0) {
+                    return;
+                }
+                
+                const payload = {
+                    symbol: symbol,
+                    type: type,
+                    direction: direction,
+                    entry_price: entryPrice,
+                    quantity: parseInt(quantity),
+                    stop_loss: stopLoss,
+                    target: target
+                };
+                
+                // Add option-specific fields
+                if (type === 'OPTION' && strikePrice) {
+                    payload.strike = strikePrice;  // Use 'strike' not 'strike_price'
+                    payload.expiration = expiryDate;  // Add expiration date
+                }
+                
+                console.log('Adding to monitor:', payload);
+                
+                const response = await fetch('/api/positions/add', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ ${symbol} added to monitoring!\n\nGo to Positions page to track it.`);
+                } else {
+                    alert(`❌ Error: ${data.error || 'Failed to add position'}`);
+                }
+            } catch (error) {
+                console.error('Error adding to monitor:', error);
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

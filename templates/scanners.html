@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Scanners - US Market Pulse</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <style>
+        /* Tab Navigation Styles */
+        .tab-container {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            background: var(--card-bg);
+            padding: 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .tab-btn {
+            padding: 12px 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tab-btn:hover {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .tab-btn.active {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, #2563eb 100%);
+            border-color: var(--accent-blue);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+        
+        .tab-btn .tab-icon { font-size: 18px; }
+        
+        .tab-content { animation: fadeIn 0.3s ease; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Scanner Cards */
+        .scanner-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        
+        .scanner-card {
+            background: linear-gradient(145deg, var(--card-bg) 0%, var(--bg-secondary) 100%);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .scanner-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+            border-color: var(--accent-blue);
+        }
+        
+        .scanner-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .scanner-card:hover::before { opacity: 1; }
+        
+        .scanner-card-icon { font-size: 32px; margin-bottom: 12px; }
+        .scanner-card-title { font-size: 18px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }
+        .scanner-card-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+        
+        .scanner-card-badge {
+            position: absolute;
+            top: 12px; right: 12px;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .badge-popular { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
+        .badge-new { background: rgba(139, 92, 246, 0.2); color: var(--accent-purple); }
+        
+        /* Results Section */
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .results-title { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+        .results-count { background: var(--accent-blue); color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        
+        /* Custom Analyzer */
+        .custom-analyzer-input { display: flex; gap: 12px; margin-bottom: 16px; }
+        
+        .custom-analyzer-input input {
+            flex: 1;
+            padding: 14px 18px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 15px;
+            transition: all 0.2s;
+        }
+        
+        .custom-analyzer-input input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        
+        .custom-analyzer-input button { padding: 14px 28px; white-space: nowrap; }
+        
+        /* Loading state */
+        .scanner-loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .scanner-loading .spinner {
+            width: 48px; height: 48px;
+            border: 4px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* Empty state */
+        .empty-results { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+        .empty-results-icon { font-size: 64px; margin-bottom: 16px; }
+        
+        /* Recent scans */
+        .recent-scan-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 16px;
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            margin-bottom: 10px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        
+        .recent-scan-item:hover { background: var(--card-bg); transform: translateX(4px); }
+        .recent-scan-info { display: flex; align-items: center; gap: 12px; }
+        .recent-scan-icon { font-size: 24px; }
+        .recent-scan-name { font-weight: 600; color: var(--text-primary); }
+        .recent-scan-meta { font-size: 12px; color: var(--text-secondary); }
+        .recent-scan-count { background: var(--accent-green); color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .tab-container { flex-direction: column; }
+            .tab-btn { width: 100%; justify-content: center; }
+            .scanner-grid { grid-template-columns: 1fr; }
+            .custom-analyzer-input { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🇺🇸 US Market Pulse</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/ai-trading">🤖 AI Trading</a></li>
+                        <li><a href="/">Dashboard</a></li>
+                        <li><a href="/scanners" class="active">Scanners</a></li>
+                        <li><a href="/options">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Page Header -->
+        <div class="card mb-20">
+            <div class="card-body" style="padding: 20px 24px;">
+                <h1 style="font-size: 28px; font-weight: 800; margin-bottom: 8px;">🔍 Trading System Scanners</h1>
+                <p style="color: var(--text-secondary); margin: 0;">
+                    Powerful market scanners powered by proprietary algorithms to find the best trading opportunities
+                </p>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tab-container">
+            <button class="tab-btn active" data-tab="scanners" onclick="switchTab('scanners')">
+                <span class="tab-icon">🎯</span> All Scanners
+            </button>
+            <button class="tab-btn" data-tab="results" onclick="switchTab('results')">
+                <span class="tab-icon">📊</span> Results
+                <span class="results-count" id="tab-results-count" style="display: none;">0</span>
+            </button>
+            <button class="tab-btn" data-tab="custom" onclick="switchTab('custom')">
+                <span class="tab-icon">🔬</span> Custom Analyzer
+            </button>
+            <button class="tab-btn" data-tab="history" onclick="switchTab('history')">
+                <span class="tab-icon">📜</span> Recent Scans
+            </button>
+        </div>
+
+        <!-- Tab: All Scanners -->
+        <div id="tab-scanners" class="tab-content">
+            <div class="scanner-grid">
+                <div class="scanner-card" onclick="runScanner('unified')">
+                    <span class="scanner-card-badge badge-popular">Popular</span>
+                    <div class="scanner-card-icon">🎯</div>
+                    <div class="scanner-card-title">Unified Trading System</div>
+                    <div class="scanner-card-desc">Complete market scanner using 15-point scoring system with technical indicators, volume, and momentum analysis.</div>
+                </div>
+                
+                <div class="scanner-card" onclick="runScanner('short-squeeze')">
+                    <span class="scanner-card-badge badge-popular">Hot</span>
+                    <div class="scanner-card-icon">💥</div>
+                    <div class="scanner-card-title">Short Squeeze Scanner</div>
+                    <div class="scanner-card-desc">Find stocks with high short interest (>20%) and increasing volume that may be primed for a squeeze.</div>
+                </div>
+                
+                <div class="scanner-card" onclick="runScanner('quality-stocks')">
+                    <div class="scanner-card-icon">⭐</div>
+                    <div class="scanner-card-title">Quality Stocks Scanner</div>
+                    <div class="scanner-card-desc">Discover beaten-down quality stocks trading below fair value with strong fundamentals.</div>
+                </div>
+                
+                <div class="scanner-card" onclick="runScanner('weekly-screener')">
+                    <div class="scanner-card-icon">📊</div>
+                    <div class="scanner-card-title">Weekly Screener (Top 100)</div>
+                    <div class="scanner-card-desc">Comprehensive weekly analysis of top 100 US stocks with momentum and trend indicators.</div>
+                </div>
+                
+                <div class="scanner-card" onclick="runScanner('golden-cross')">
+                    <div class="scanner-card-icon">🌟</div>
+                    <div class="scanner-card-title">Golden Cross Scanner</div>
+                    <div class="scanner-card-desc">Identify stocks where 50-day MA crosses above 200-day MA - a classic bullish signal.</div>
+                </div>
+                
+                <div class="scanner-card" onclick="runScanner('triple-confirmation-all')">
+                    <span class="scanner-card-badge badge-new">New</span>
+                    <div class="scanner-card-icon">✅</div>
+                    <div class="scanner-card-title">Triple Confirmation</div>
+                    <div class="scanner-card-desc">Multi-timeframe analysis requiring SuperTrend, VWAP, and MACD alignment for high-probability setups.</div>
+                </div>
+                
+                <div class="scanner-card" onclick="runScanner('etf-scanner')">
+                    <span class="scanner-card-badge badge-new">New</span>
+                    <div class="scanner-card-icon">📦</div>
+                    <div class="scanner-card-title">ETF Scanner</div>
+                    <div class="scanner-card-desc">Scan ETFs across Stock Indices, Sectors, Commodities (Gold, Oil, Silver), and Crypto (Bitcoin, Ethereum).</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Results -->
+        <div id="tab-results" class="tab-content" style="display: none;">
+            <div class="card">
+                <div class="results-header">
+                    <div class="results-title">
+                        <span id="results-icon">📊</span>
+                        <span id="results-title">Scanner Results</span>
+                    </div>
+                    <span class="results-count" id="results-count">0 Results</span>
+                </div>
+                <div id="scanner-results">
+                    <div class="empty-results">
+                        <div class="empty-results-icon">📭</div>
+                        <h3>No Results Yet</h3>
+                        <p>Run a scanner from the "All Scanners" tab to see results here</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Custom Analyzer -->
+        <div id="tab-custom" class="tab-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🔬 Custom Stock Analyzer</h2>
+                </div>
+                <div class="card-body">
+                    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                        Analyze your own custom list of stocks using our proprietary scoring system. Enter comma-separated symbols (max 20).
+                    </p>
+                    
+                    <div class="custom-analyzer-input">
+                        <input type="text" id="custom-symbols" placeholder="AAPL, TSLA, NVDA, AMD, GOOGL, META..." onkeypress="if(event.key === 'Enter') runCustomAnalyzer()"/>
+                        <button class="btn btn-primary" onclick="runCustomAnalyzer()">🔍 Analyze Stocks</button>
+                    </div>
+                    
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px;">
+                        <span style="color: var(--text-secondary); font-size: 13px;">Quick picks:</span>
+                        <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="setCustomSymbols('AAPL,MSFT,GOOGL,AMZN,NVDA')">Tech Giants</button>
+                        <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="setCustomSymbols('SPY,QQQ,IWM,DIA')">Major ETFs</button>
+                        <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="setCustomSymbols('TSLA,RIVN,LCID,NIO,F')">EV Stocks</button>
+                        <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="setCustomSymbols('AMD,INTC,MU,AVGO,QCOM')">Semiconductors</button>
+                    </div>
+                    
+                    <div id="custom-results">
+                        <div class="empty-results">
+                            <div class="empty-results-icon">🔍</div>
+                            <h3>Enter Symbols to Analyze</h3>
+                            <p>Type stock symbols above or use quick picks to get started</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Recent Scans History -->
+        <div id="tab-history" class="tab-content" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📜 Recent Scan History</h2>
+                    <button class="btn btn-secondary" onclick="clearHistory()" style="padding: 6px 14px; font-size: 12px;">🗑️ Clear History</button>
+                </div>
+                <div class="card-body">
+                    <div id="scan-history">
+                        <div class="empty-results" style="padding: 40px 20px;">
+                            <div class="empty-results-icon">📭</div>
+                            <h3>No Recent Scans</h3>
+                            <p>Your scan history will appear here after running scanners</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=4.7"></script>
+    <script>
+        let dashboard = null;
+        let currentTab = 'scanners';
+        let scanHistory = JSON.parse(localStorage.getItem('scanHistory') || '[]');
+        
+        const scannerIcons = {
+            'unified': '🎯', 'short-squeeze': '💥', 'quality-stocks': '⭐',
+            'weekly-screener': '📊', 'golden-cross': '🌟', 'triple-confirmation-all': '✅', 'custom-analyzer': '🔬', 'etf-scanner': '📦'
+        };
+        
+        const scannerNames = {
+            'unified': 'Unified Trading System', 'short-squeeze': 'Short Squeeze Scanner',
+            'quality-stocks': 'Quality Stocks', 'weekly-screener': 'Weekly Screener (Top 100)',
+            'golden-cross': 'Golden Cross Signals', 'triple-confirmation-all': 'Triple Confirmation', 'custom-analyzer': 'Custom Analysis', 'etf-scanner': 'ETF Scanner'
+        };
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            dashboard = new TradingDashboard(false);
+            window.dashboard = dashboard;
+            renderScanHistory();
+            
+            const urlParams = new URLSearchParams(window.location.search);
+            const scannerType = urlParams.get('type');
+            if (scannerType) setTimeout(() => runScanner(scannerType), 500);
+        });
+        
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+            document.querySelectorAll('.tab-content').forEach(content => content.style.display = 'none');
+            document.getElementById(`tab-${tab}`).style.display = 'block';
+        }
+        
+        function runScanner(type) {
+            switchTab('results');
+            document.getElementById('results-icon').textContent = scannerIcons[type] || '📊';
+            document.getElementById('results-title').textContent = scannerNames[type] || 'Scanner Results';
+            document.getElementById('results-count').textContent = 'Loading...';
+            document.getElementById('tab-results-count').style.display = 'none';
+            
+            document.getElementById('scanner-results').innerHTML = `
+                <div class="scanner-loading">
+                    <div class="spinner"></div>
+                    <div>Running ${scannerNames[type]}...</div>
+                    <div style="font-size: 12px; margin-top: 8px;">This may take 30-60 seconds</div>
+                </div>
+            `;
+            
+            const scanStartTime = Date.now();
+            dashboard.loadScanner(type, (results) => {
+                const count = results?.length || 0;
+                document.getElementById('results-count').textContent = `${count} Results`;
+                document.getElementById('tab-results-count').textContent = count;
+                document.getElementById('tab-results-count').style.display = count > 0 ? 'inline' : 'none';
+                addToHistory(type, count, scanStartTime);
+            });
+        }
+        
+        function runCustomAnalyzer() {
+            const input = document.getElementById('custom-symbols');
+            const symbolsText = input.value.trim();
+            if (!symbolsText) { alert('Please enter at least one stock symbol'); return; }
+            
+            const symbols = symbolsText.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+            if (symbols.length === 0) { alert('No valid symbols found'); return; }
+            if (symbols.length > 20) { alert('Maximum 20 symbols allowed'); return; }
+            
+            document.getElementById('custom-results').innerHTML = `
+                <div class="scanner-loading"><div class="spinner"></div><div>Analyzing ${symbols.length} stocks...</div></div>
+            `;
+            
+            const scanStartTime = Date.now();
+            fetch('/api/scanner/custom-analyzer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbols: symbols })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.stocks && data.stocks.length > 0) {
+                    dashboard.renderScannerResults(data.stocks, 'custom-analyzer', document.getElementById('custom-results'));
+                    addToHistory('custom-analyzer', data.stocks.length, scanStartTime, symbols.join(', '));
+                } else {
+                    document.getElementById('custom-results').innerHTML = `
+                        <div class="empty-results"><div class="empty-results-icon">😕</div><h3>No Results</h3><p>${data.error || 'No trading opportunities found'}</p></div>
+                    `;
+                }
+            })
+            .catch(error => {
+                document.getElementById('custom-results').innerHTML = `
+                    <div class="empty-results"><div class="empty-results-icon">❌</div><h3>Error</h3><p>${error.message}</p></div>
+                `;
+            });
+        }
+        
+        function setCustomSymbols(symbols) {
+            document.getElementById('custom-symbols').value = symbols;
+            runCustomAnalyzer();
+        }
+        
+        function addToHistory(type, count, startTime, customSymbols = null) {
+            const historyItem = {
+                type, name: scannerNames[type] || type, icon: scannerIcons[type] || '📊',
+                count, duration: Math.round((Date.now() - startTime) / 1000),
+                timestamp: new Date().toISOString(), customSymbols
+            };
+            scanHistory.unshift(historyItem);
+            scanHistory = scanHistory.slice(0, 10);
+            localStorage.setItem('scanHistory', JSON.stringify(scanHistory));
+            renderScanHistory();
+        }
+        
+        function renderScanHistory() {
+            const container = document.getElementById('scan-history');
+            if (scanHistory.length === 0) {
+                container.innerHTML = `<div class="empty-results" style="padding: 40px 20px;"><div class="empty-results-icon">📭</div><h3>No Recent Scans</h3><p>Your scan history will appear here after running scanners</p></div>`;
+                return;
+            }
+            
+            container.innerHTML = scanHistory.map((item, index) => {
+                const timestamp = new Date(item.timestamp);
+                return `
+                    <div class="recent-scan-item" onclick="rerunScan(${index})">
+                        <div class="recent-scan-info">
+                            <span class="recent-scan-icon">${item.icon}</span>
+                            <div>
+                                <div class="recent-scan-name">${item.name}</div>
+                                <div class="recent-scan-meta">${timestamp.toLocaleDateString()} at ${timestamp.toLocaleTimeString()} • ${item.duration}s${item.customSymbols ? ` • ${item.customSymbols}` : ''}</div>
+                            </div>
+                        </div>
+                        <span class="recent-scan-count">${item.count} results</span>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function rerunScan(index) {
+            const item = scanHistory[index];
+            if (item.type === 'custom-analyzer' && item.customSymbols) {
+                document.getElementById('custom-symbols').value = item.customSymbols;
+                switchTab('custom');
+                runCustomAnalyzer();
+            } else {
+                runScanner(item.type);
+            }
+        }
+        
+        function clearHistory() {
+            if (confirm('Clear all scan history?')) {
+                scanHistory = [];
+                localStorage.removeItem('scanHistory');
+                renderScanHistory();
+            }
+        }
+        
+        async function addToMonitor(symbol, type, direction, entryPrice, stopLoss, target) {
+            const quantity = prompt(`How many ${type === 'OPTION' ? 'contracts' : 'shares'} of ${symbol}?`, type === 'OPTION' ? '1' : '10');
+            if (!quantity || isNaN(quantity) || quantity <= 0) return;
+            
+            try {
+                const response = await fetch('/api/positions/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, type, direction, entry_price: entryPrice, quantity: parseInt(quantity), stop_loss: stopLoss, target })
+                });
+                const data = await response.json();
+                alert(data.success ? `✅ ${symbol} added to monitoring!` : `❌ Error: ${data.error}`);
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

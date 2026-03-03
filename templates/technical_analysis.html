@@ -1,0 +1,1744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Technical Analysis - Advanced Indicators</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='js/lightweight-charts.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/symbol-autocomplete.js') }}"></script>
+    <style>
+        .chart-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        
+        .chart-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .chart-type-btn {
+            padding: 8px 16px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        
+        .chart-type-btn:hover {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+        
+        .chart-type-btn.active {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+        
+        .indicator-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .indicator-checkbox input[type="checkbox"] {
+            cursor: pointer;
+        }
+        
+        .indicator-checkbox:has(input:checked) {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+        
+        #chart {
+            width: 100%;
+            height: 500px;
+            position: relative;
+        }
+        
+        #volume-chart {
+            width: 100%;
+            height: 150px;
+            position: relative;
+            margin-top: 10px;
+        }
+        
+        .indicator-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .indicator-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+        }
+        
+        .indicator-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+        
+        .indicator-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+        
+        .indicator-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .signal-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .signal-strong-buy {
+            background: #00c853;
+            color: white;
+        }
+        
+        .signal-buy {
+            background: #64dd17;
+            color: white;
+        }
+        
+        .signal-hold {
+            background: #ffd600;
+            color: #333;
+        }
+        
+        .signal-sell {
+            background: #ff6d00;
+            color: white;
+        }
+        
+        .signal-strong-sell {
+            background: #d50000;
+            color: white;
+        }
+        
+        .pattern-item {
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border-left: 3px solid var(--accent-blue);
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        
+        .pattern-bullish {
+            border-left-color: var(--accent-green);
+        }
+        
+        .pattern-bearish {
+            border-left-color: var(--accent-red);
+        }
+        
+        .analysis-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .analysis-controls input, .analysis-controls select {
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+        
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        
+        .metric-value {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .pivot-levels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .pivot-item {
+            text-align: center;
+            padding: 8px;
+            background: var(--bg-primary);
+            border-radius: 6px;
+        }
+        
+        .resistance { color: var(--accent-red); }
+        .support { color: var(--accent-green); }
+        .pivot { color: var(--accent-blue); font-weight: 700; }
+        
+        /* Chart Loading Indicator */
+        .chart-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            z-index: 1000;
+            background: rgba(26, 26, 26, 0.95);
+            padding: 30px 50px;
+            border-radius: 12px;
+            border: 2px solid var(--accent-blue);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(74, 158, 255, 0.2);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            color: var(--text-primary);
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .loading-timer {
+            color: var(--accent-blue);
+            font-size: 14px;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">📊 Technical Analysis</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/ai-trading">🤖 AI Trading</a></li>
+                        <li><a href="/">Dashboard</a></li>
+                        <li><a href="/scanners">Scanners</a></li>
+                        <li><a href="/options">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card mb-20">
+            <div class="card-header">
+                <h1 class="card-title">🎯 Advanced Technical Analysis</h1>
+                <p style="color: var(--text-secondary); margin-top: 8px; font-size: 14px;">
+                    TradingView-like indicators, patterns, and strategies
+                </p>
+            </div>
+            <div class="card-body">
+                <div class="analysis-controls">
+                    <input 
+                        type="text" 
+                        id="symbol-input" 
+                        placeholder="Enter symbol or name (e.g., AAPL, Microsoft)" 
+                        autocomplete="off"
+                        style="flex: 1; min-width: 200px; position: relative;"
+                    />
+                    <select id="timeframe-select">
+                        <option value="1d" selected>Daily</option>
+                        <option value="1h">1 Hour</option>
+                        <option value="15m">15 Minutes</option>
+                        <option value="5m">5 Minutes</option>
+                        <option value="1wk">Weekly</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="analyzeSymbol()">
+                        🔍 Analyze
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadPreset('AAPL')">AAPL</button>
+                    <button class="btn btn-secondary" onclick="loadPreset('SPY')">SPY</button>
+                    <button class="btn btn-secondary" onclick="loadPreset('NVDA')">NVDA</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Container -->
+        <div id="results-container" class="hidden">
+            <!-- Interactive Chart -->
+            <div class="card mb-20">
+                <div class="card-header">
+                    <h2 class="card-title">📈 Price Chart</h2>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <div class="chart-controls">
+                            <button class="chart-type-btn active" data-type="candlestick" onclick="changeChartType('candlestick')">
+                                🕯️ Candlestick
+                            </button>
+                            <button class="chart-type-btn" data-type="line" onclick="changeChartType('line')">
+                                📊 Line
+                            </button>
+                            <button class="chart-type-btn" data-type="area" onclick="changeChartType('area')">
+                                📉 Area
+                            </button>
+                            <button class="chart-type-btn" data-type="bar" onclick="changeChartType('bar')">
+                                📊 Bar
+                            </button>
+                            
+                            <div style="width: 1px; height: 30px; background: var(--border-color); margin: 0 5px;"></div>
+                            
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-sma20" onchange="toggleIndicator('sma20')">
+                                <span>SMA 20</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-sma50" onchange="toggleIndicator('sma50')">
+                                <span>SMA 50</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-ema9" onchange="toggleIndicator('ema9')">
+                                <span>EMA 9</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-ema21" onchange="toggleIndicator('ema21')">
+                                <span>EMA 21</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-bb" onchange="toggleIndicator('bb')">
+                                <span>Bollinger Bands</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-chandelier" onchange="toggleIndicator('chandelier')">
+                                <span>🔔 Chandelier Exit</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-supertrend" onchange="toggleIndicator('supertrend')">
+                                <span>📈 SuperTrend</span>
+                            </label>
+                            <label class="indicator-checkbox">
+                                <input type="checkbox" id="show-volume" checked onchange="toggleVolume()">
+                                <span>Volume</span>
+                            </label>
+                        </div>
+                        
+                        <!-- Loading indicator -->
+                        <div id="chart-loading" class="chart-loading" style="display: none;">
+                            <div class="loading-spinner"></div>
+                            <div class="loading-text">Loading chart data...</div>
+                            <div id="loading-timer" class="loading-timer">0s</div>
+                        </div>
+                        
+                        <div id="chart"></div>
+                        <div id="volume-chart"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Overall Signal -->
+            <div class="card mb-20">
+                <div class="card-header">
+                    <h2 class="card-title" id="result-symbol">AAPL</h2>
+                    <span id="result-price" class="card-badge">$0.00</span>
+                </div>
+                <div class="card-body">
+                    <div style="text-align: center; padding: 20px;">
+                        <div id="overall-signal" class="signal-badge signal-hold">ANALYZING...</div>
+                        <div id="signal-details" style="margin-top: 15px; color: var(--text-secondary); font-size: 13px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Indicators Grid -->
+            <div class="indicator-grid mb-20">
+                <!-- Moving Averages -->
+                <div class="indicator-card">
+                    <h3>📈 Moving Averages</h3>
+                    <div id="ma-content">
+                        <div class="metric-row">
+                            <span class="metric-label">SMA 20</span>
+                            <span class="metric-value" id="sma-20">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">SMA 50</span>
+                            <span class="metric-value" id="sma-50">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">SMA 200</span>
+                            <span class="metric-value" id="sma-200">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">EMA 9</span>
+                            <span class="metric-value" id="ema-9">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">EMA 21</span>
+                            <span class="metric-value" id="ema-21">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Momentum -->
+                <div class="indicator-card">
+                    <h3>⚡ Momentum</h3>
+                    <div id="momentum-content">
+                        <div class="metric-row">
+                            <span class="metric-label">RSI (14)</span>
+                            <span class="metric-value" id="rsi">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Stochastic %K</span>
+                            <span class="metric-value" id="stoch-k">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">CCI (20)</span>
+                            <span class="metric-value" id="cci">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Williams %R</span>
+                            <span class="metric-value" id="williams-r">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">MFI (14)</span>
+                            <span class="metric-value" id="mfi">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MACD -->
+                <div class="indicator-card">
+                    <h3>📊 MACD</h3>
+                    <div id="macd-content">
+                        <div class="metric-row">
+                            <span class="metric-label">MACD Line</span>
+                            <span class="metric-value" id="macd">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Signal Line</span>
+                            <span class="metric-value" id="macd-signal">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Histogram</span>
+                            <span class="metric-value" id="macd-histogram">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Volatility -->
+                <div class="indicator-card">
+                    <h3>💥 Volatility</h3>
+                    <div id="volatility-content">
+                        <div class="metric-row">
+                            <span class="metric-label">ATR (14)</span>
+                            <span class="metric-value" id="atr">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">BB Upper</span>
+                            <span class="metric-value" id="bb-upper">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">BB Middle</span>
+                            <span class="metric-value" id="bb-middle">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">BB Lower</span>
+                            <span class="metric-value" id="bb-lower">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">BB Width %</span>
+                            <span class="metric-value" id="bb-width">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chandelier Exit -->
+                <div class="indicator-card">
+                    <h3>🔔 Chandelier Exit</h3>
+                    <div id="chandelier-content">
+                        <div class="metric-row">
+                            <span class="metric-label">Long Stop (22,3)</span>
+                            <span class="metric-value" id="ce-long-stop" style="color: var(--accent-green);">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Short Stop (22,3)</span>
+                            <span class="metric-value" id="ce-short-stop" style="color: var(--accent-red);">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Highest High (22)</span>
+                            <span class="metric-value" id="ce-highest-high">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Lowest Low (22)</span>
+                            <span class="metric-value" id="ce-lowest-low">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">ATR (22)</span>
+                            <span class="metric-value" id="ce-atr">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Trend Signal</span>
+                            <span class="metric-value" id="ce-trend">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SuperTrend -->
+                <div class="indicator-card">
+                    <h3>📈 SuperTrend</h3>
+                    <div id="supertrend-content">
+                        <div class="metric-row">
+                            <span class="metric-label">SuperTrend (10,3)</span>
+                            <span class="metric-value" id="st-value">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">ATR (10)</span>
+                            <span class="metric-value" id="st-atr">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Trend Signal</span>
+                            <span class="metric-value" id="st-trend">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trend Strength -->
+                <div class="indicator-card">
+                    <h3>🎯 Trend Strength</h3>
+                    <div id="trend-content">
+                        <div class="metric-row">
+                            <span class="metric-label">ADX (14)</span>
+                            <span class="metric-value" id="adx">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">+DI</span>
+                            <span class="metric-value" id="plus-di">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">-DI</span>
+                            <span class="metric-value" id="minus-di">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Volume -->
+                <div class="indicator-card">
+                    <h3>📦 Volume Analysis</h3>
+                    <div id="volume-content">
+                        <div class="metric-row">
+                            <span class="metric-label">Current Volume</span>
+                            <span class="metric-value" id="volume-current">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">Avg Volume (20)</span>
+                            <span class="metric-value" id="volume-avg">-</span>
+                        </div>
+                        <div class="metric-row">
+                            <span class="metric-label">OBV</span>
+                            <span class="metric-value" id="obv">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pivot Points & Patterns -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                <!-- Pivot Points -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">🎯 Pivot Points</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="pivot-levels">
+                            <div class="pivot-item"><div class="resistance">R3</div><div id="r3" class="metric-value">-</div></div>
+                            <div class="pivot-item"><div class="resistance">R2</div><div id="r2" class="metric-value">-</div></div>
+                            <div class="pivot-item"><div class="resistance">R1</div><div id="r1" class="metric-value">-</div></div>
+                            <div class="pivot-item" style="grid-column: 1 / -1;"><div class="pivot">PIVOT</div><div id="pivot" class="metric-value">-</div></div>
+                            <div class="pivot-item"><div class="support">S1</div><div id="s1" class="metric-value">-</div></div>
+                            <div class="pivot-item"><div class="support">S2</div><div id="s2" class="metric-value">-</div></div>
+                            <div class="pivot-item"><div class="support">S3</div><div id="s3" class="metric-value">-</div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart Patterns -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">🔍 Detected Patterns</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="patterns-container">
+                            <p style="color: var(--text-secondary); text-align: center;">No patterns detected</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Chart variables
+        let chart = null;
+        let volumeChart = null;
+        let candlestickSeries = null;
+        let lineSeries = null;
+        let areaSeries = null;
+        let barSeries = null;
+        let volumeSeries = null;
+        let currentChartType = 'candlestick';
+        let activeIndicators = new Set();
+        let indicatorSeries = {};
+        let currentChartData = null; // Store current data for chart type switching
+        
+        // Initialize charts on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 DOM Content Loaded');
+            console.log('Chart container exists:', document.getElementById('chart') !== null);
+            console.log('Volume container exists:', document.getElementById('volume-chart') !== null);
+            console.log('LightweightCharts available:', typeof LightweightCharts !== 'undefined');
+            
+            // Don't initialize chart here - wait until results are shown
+            // Charts will be initialized when analyzeSymbol is called
+        });
+        
+        function initializeChart() {
+            console.log('📊 initializeChart() called');
+            const chartContainer = document.getElementById('chart');
+            const volumeContainer = document.getElementById('volume-chart');
+            
+            console.log('Chart container:', chartContainer);
+            console.log('Volume container:', volumeContainer);
+            
+            if (!chartContainer || !volumeContainer) {
+                console.error('❌ Chart containers not found!');
+                return;
+            }
+            
+            console.log('Chart div dimensions:', chartContainer.clientWidth, 'x', chartContainer.clientHeight);
+            
+            // Determine if intraday based on timeframe
+            const timeframe = document.getElementById('timeframe-select').value;
+            const isIntraday = ['1m', '5m', '15m', '30m', '1h', '4h'].includes(timeframe);
+            
+            // Main chart
+            chart = LightweightCharts.createChart(chartContainer, {
+                width: chartContainer.clientWidth,
+                height: 500,
+                layout: {
+                    backgroundColor: '#1a1a1a',
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#2B2B43' },
+                    horzLines: { color: '#2B2B43' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#485c7b',
+                },
+                timeScale: {
+                    borderColor: '#485c7b',
+                    timeVisible: isIntraday,
+                    secondsVisible: false,
+                    rightOffset: 12,
+                    barSpacing: 6,
+                    fixLeftEdge: false,
+                    lockVisibleTimeRangeOnResize: true,
+                    rightBarStaysOnScroll: true,
+                    visible: true,
+                },
+            });
+            
+            console.log('✅ Main chart created');
+            
+            // Volume chart
+            volumeChart = LightweightCharts.createChart(volumeContainer, {
+                width: volumeContainer.clientWidth,
+                height: 150,
+                layout: {
+                    backgroundColor: '#1a1a1a',
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#2B2B43' },
+                    horzLines: { color: '#2B2B43' },
+                },
+                rightPriceScale: {
+                    borderColor: '#485c7b',
+                },
+                timeScale: {
+                    borderColor: '#485c7b',
+                    visible: true,
+                    timeVisible: isIntraday,
+                    secondsVisible: false,
+                },
+            });
+            
+            // Synchronize time scales - bidirectional sync
+            let isSyncing = false;  // Prevent infinite sync loops
+            
+            chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+                if (isSyncing) return;
+                isSyncing = true;
+                try {
+                    const timeRange = chart.timeScale().getVisibleRange();
+                    if (timeRange && volumeChart) {
+                        volumeChart.timeScale().setVisibleRange(timeRange);
+                    }
+                } finally {
+                    setTimeout(() => { isSyncing = false; }, 10);
+                }
+            });
+            
+            volumeChart.timeScale().subscribeVisibleTimeRangeChange(() => {
+                if (isSyncing) return;
+                isSyncing = true;
+                try {
+                    const timeRange = volumeChart.timeScale().getVisibleRange();
+                    if (timeRange && chart) {
+                        chart.timeScale().setVisibleRange(timeRange);
+                    }
+                } finally {
+                    setTimeout(() => { isSyncing = false; }, 10);
+                }
+            });
+            
+            // Also sync scrollPosition for smooth panning
+            chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+                if (isSyncing) return;
+                isSyncing = true;
+                try {
+                    if (logicalRange && volumeChart) {
+                        volumeChart.timeScale().setVisibleLogicalRange(logicalRange);
+                    }
+                } finally {
+                    setTimeout(() => { isSyncing = false; }, 10);
+                }
+            });
+            
+            console.log('✅ Volume chart created with bidirectional sync');
+            // Create candlestick series by default
+            candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+                        console.log('✅ Candlestick series created');
+                        // Create volume series
+            volumeSeries = volumeChart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: {
+                    type: 'volume',
+                },
+                priceScaleId: '',
+            });
+            
+            // Handle window resize
+            window.addEventListener('resize', () => {
+                if (chart && chart.applyOptions) {
+                    chart.applyOptions({ width: chartContainer.clientWidth });
+                }
+                if (volumeChart && volumeChart.applyOptions) {
+                    volumeChart.applyOptions({ width: volumeContainer.clientWidth });
+                }
+            });
+            
+            console.log('✅ Chart initialization complete');
+            console.log('Chart object:', chart);
+            console.log('Volume chart object:', volumeChart);
+        }
+        
+        async function loadChartData(symbol, timeframe) {
+            if (!symbol) {
+                symbol = document.getElementById('symbol-input').value.trim().toUpperCase();
+            }
+            if (!symbol) {
+                hideChartLoading();
+                alert('Please enter a symbol');
+                return;
+            }
+            
+            if (!timeframe) {
+                timeframe = document.getElementById('timeframe-select').value;
+            }
+            
+            // Ensure chart is initialized
+            if (!chart || !volumeChart) {
+                console.log('⚠️  Chart not initialized, initializing now...');
+                initializeChart();
+            }
+            
+            try {
+                const response = await fetch('/api/technical/chart-data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, timeframe })
+                });
+                
+                const result = await response.json();
+                
+                console.log('📥 API Response:', result);
+                console.log('Success:', result.success);
+                console.log('Candles:', result.candles);
+                console.log('First candle from API:', result.candles?.[0]);
+                
+                if (result.success) {
+                    updateChart(result);
+                    hideChartLoading();
+                } else {
+                    hideChartLoading();
+                    alert('Error loading chart: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Chart data error:', error);
+                hideChartLoading();
+                alert('Failed to load chart: ' + error.message);
+            }
+        }
+        
+        function updateChart(data) {
+            console.log('📊 updateChart() called');
+            console.log('Candles count:', data.candles?.length);
+            
+            if (!data.candles || data.candles.length === 0) {
+                console.error('❌ No candles data available!');
+                alert('No chart data available for this symbol and timeframe');
+                return;
+            }
+            
+            // Critical: Ensure chart exists
+            if (!chart) {
+                console.error('❌ Chart object is null! Cannot update chart.');
+                alert('Chart not initialized. Please refresh the page.');
+                return;
+            }
+            
+            // Store data for chart type switching
+            currentChartData = data;
+            
+            console.log('First candle:', data.candles[0]);
+            console.log('Chart exists:', !!chart);
+            console.log('Current chart type:', currentChartType);
+            
+            try {
+                // Verify chart is initialized before updating
+                if (!chart) {
+                    console.warn('Chart not ready yet, retrying...');
+                    setTimeout(() => updateChart(data), 500);
+                    return;
+                }
+                
+                // Update candlestick series
+                if (currentChartType === 'candlestick') {
+                    if (!candlestickSeries) {
+                        console.log('Creating candlestick series...');
+                        candlestickSeries = chart.addCandlestickSeries({
+                            upColor: '#26a69a',
+                            downColor: '#ef5350',
+                            borderVisible: false,
+                            wickUpColor: '#26a69a',
+                            wickDownColor: '#ef5350',
+                        });
+                        console.log('Candlestick series created:', !!candlestickSeries);
+                    }
+                    
+                    if (candlestickSeries) {
+                        console.log('Setting data on candlestick series...');
+                        candlestickSeries.setData(data.candles);
+                        console.log('✅ Data set successfully');
+                    } else {
+                        console.error('❌ Failed to create candlestick series');
+                        throw new Error('Could not create candlestick series');
+                    }
+                } else if (currentChartType === 'line') {
+                    if (!lineSeries) {
+                        lineSeries = chart.addLineSeries({
+                            color: '#2962FF',
+                            lineWidth: 2,
+                        });
+                    }
+                    const lineData = data.candles.map(c => ({ time: c.time, value: c.close }));
+                    lineSeries.setData(lineData);
+                } else if (currentChartType === 'area') {
+                    if (!areaSeries) {
+                        areaSeries = chart.addAreaSeries({
+                            topColor: 'rgba(41, 98, 255, 0.4)',
+                            bottomColor: 'rgba(41, 98, 255, 0.0)',
+                            lineColor: '#2962FF',
+                            lineWidth: 2,
+                        });
+                    }
+                    const areaData = data.candles.map(c => ({ time: c.time, value: c.close }));
+                    areaSeries.setData(areaData);
+                } else if (currentChartType === 'bar') {
+                    if (!barSeries) {
+                        barSeries = chart.addBarSeries({
+                            upColor: '#26a69a',
+                            downColor: '#ef5350',
+                        });
+                    }
+                    barSeries.setData(data.candles);
+                }
+                
+                // Update volume
+                if (volumeSeries && data.volume && data.volume.length > 0) {
+                    volumeSeries.setData(data.volume);
+                }
+                
+                // Update active indicators
+                const indicatorMap = {
+                    'sma20': 'sma_20',
+                    'sma50': 'sma_50',
+                    'ema9': 'ema_9',
+                    'ema21': 'ema_21',
+                    'bb': 'bollinger_bands',
+                    'chandelier': 'chandelier_exit',
+                    'supertrend': 'supertrend'
+                };
+                
+                activeIndicators.forEach(indicator => {
+                    if (indicator === 'bb') {
+                        updateIndicator('bb_upper', data.indicators);
+                        updateIndicator('bb_middle', data.indicators);
+                        updateIndicator('bb_lower', data.indicators);
+                    } else if (indicator === 'chandelier') {
+                        updateIndicator('chandelier_long', data.indicators);
+                        updateIndicator('chandelier_short', data.indicators);
+                        // Add buy/sell markers for Chandelier Exit
+                        updateChandelierMarkers(data.indicators);
+                    } else if (indicator === 'supertrend') {
+                        updateSupertrendIndicator(data.indicators);
+                        // Add buy/sell markers for SuperTrend
+                        updateSupertrendMarkers(data.indicators);
+                    } else {
+                        const dataKey = indicatorMap[indicator] || indicator;
+                        updateIndicator(dataKey, data.indicators);
+                    }
+                });
+                
+                // Fit content
+                if (chart && typeof chart.timeScale === 'function') {
+                    const timeScaleApi = chart.timeScale();
+                    if (timeScaleApi) {
+                        timeScaleApi.fitContent();
+                    }
+                }
+                
+                if (volumeChart && typeof volumeChart.timeScale === 'function') {
+                    const volumeTimeScaleApi = volumeChart.timeScale();
+                    if (volumeTimeScaleApi) {
+                        volumeTimeScaleApi.fitContent();
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating chart:', error);
+                console.error('Error details:', error.message, error.stack);
+                
+                // Only show alert if this is a genuine error (not during initial load)
+                // Check if it's a null value error during initialization
+                if (error.message && !error.message.includes('null') && !error.message.includes('Cannot read')) {
+                    alert('Error displaying chart: ' + error.message + '. Check console for details.');
+                } else {
+                    console.log('Chart initialization error (will retry automatically)');
+                    // Retry after a short delay
+                    setTimeout(() => {
+                        if (currentChartData) {
+                            console.log('Retrying chart update...');
+                            updateChart(currentChartData);
+                        }
+                    }, 1000);
+                }
+            }
+        }
+        
+        function changeChartType(type) {
+            if (!currentChartData || !chart) {
+                console.log('No data loaded yet');
+                return;
+            }
+            
+            currentChartType = type;
+            console.log('Changing chart type to:', type);
+            
+            // Remove all series
+            if (candlestickSeries) {
+                chart.removeSeries(candlestickSeries);
+                candlestickSeries = null;
+            }
+            if (lineSeries) {
+                chart.removeSeries(lineSeries);
+                lineSeries = null;
+            }
+            if (areaSeries) {
+                chart.removeSeries(areaSeries);
+                areaSeries = null;
+            }
+            if (barSeries) {
+                chart.removeSeries(barSeries);
+                barSeries = null;
+            }
+            
+            // Create new series based on type and set data
+            if (type === 'candlestick') {
+                candlestickSeries = chart.addCandlestickSeries({
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                    borderVisible: false,
+                    wickUpColor: '#26a69a',
+                    wickDownColor: '#ef5350',
+                });
+                candlestickSeries.setData(currentChartData.candles);
+            } else if (type === 'line') {
+                lineSeries = chart.addLineSeries({
+                    color: '#2962FF',
+                    lineWidth: 2,
+                });
+                const lineData = currentChartData.candles.map(c => ({ time: c.time, value: c.close }));
+                lineSeries.setData(lineData);
+            } else if (type === 'area') {
+                areaSeries = chart.addAreaSeries({
+                    topColor: 'rgba(41, 98, 255, 0.4)',
+                    bottomColor: 'rgba(41, 98, 255, 0.0)',
+                    lineColor: '#2962FF',
+                    lineWidth: 2,
+                });
+                const areaData = currentChartData.candles.map(c => ({ time: c.time, value: c.close }));
+                areaSeries.setData(areaData);
+            } else if (type === 'bar') {
+                barSeries = chart.addBarSeries({
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                });
+                barSeries.setData(currentChartData.candles);
+            }
+            
+            // Update button states
+            document.querySelectorAll('.chart-type-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.getAttribute('data-type') === type) {
+                    btn.classList.add('active');
+                }
+            });
+            
+            // Re-add active indicators with proper name mapping
+            const indicatorMap = {
+                'sma20': 'sma_20',
+                'sma50': 'sma_50',
+                'ema9': 'ema_9',
+                'ema21': 'ema_21',
+                'bb': 'bollinger_bands',
+                'chandelier': 'chandelier_exit',
+                'supertrend': 'supertrend'
+            };
+            
+            activeIndicators.forEach(indicator => {
+                // For Bollinger Bands, add all 3 lines
+                if (indicator === 'bb') {
+                    updateIndicator('bb_upper', currentChartData.indicators);
+                    updateIndicator('bb_middle', currentChartData.indicators);
+                    updateIndicator('bb_lower', currentChartData.indicators);
+                } else if (indicator === 'chandelier') {
+                    // For Chandelier Exit, add both long and short lines
+                    updateIndicator('chandelier_long', currentChartData.indicators);
+                    updateIndicator('chandelier_short', currentChartData.indicators);
+                    // Add buy/sell markers
+                    updateChandelierMarkers(currentChartData.indicators);
+                } else if (indicator === 'supertrend') {
+                    // For SuperTrend
+                    updateSupertrendIndicator(currentChartData.indicators);
+                    updateSupertrendMarkers(currentChartData.indicators);
+                } else {
+                    const dataKey = indicatorMap[indicator] || indicator;
+                    updateIndicator(dataKey, currentChartData.indicators);
+                }
+            });
+            
+            // Fit content
+            if (chart && typeof chart.timeScale === 'function') {
+                try {
+                    const timeScaleApi = chart.timeScale();
+                    if (timeScaleApi && typeof timeScaleApi.fitContent === 'function') {
+                        timeScaleApi.fitContent();
+                    }
+                } catch (e) {
+                    console.error('Error fitting chart in changeChartType:', e);
+                }
+            }
+        }
+        
+        function toggleIndicator(indicator) {
+            if (!currentChartData) {
+                console.log('No data loaded yet');
+                return;
+            }
+            
+            const checkbox = document.getElementById(`show-${indicator}`);
+            
+            // Map checkbox indicator names to data keys
+            const indicatorMap = {
+                'sma20': 'sma_20',
+                'sma50': 'sma_50',
+                'ema9': 'ema_9',
+                'ema21': 'ema_21',
+                'bb': 'bollinger_bands',
+                'chandelier': 'chandelier_exit',
+                'supertrend': 'supertrend'
+            };
+            
+            const dataKey = indicatorMap[indicator] || indicator;
+            
+            if (checkbox && checkbox.checked) {
+                activeIndicators.add(indicator);
+                
+                // For Bollinger Bands, add all 3 lines
+                if (indicator === 'bb') {
+                    updateIndicator('bb_upper', currentChartData.indicators);
+                    updateIndicator('bb_middle', currentChartData.indicators);
+                    updateIndicator('bb_lower', currentChartData.indicators);
+                } else if (indicator === 'chandelier') {
+                    // For Chandelier Exit, add both long and short lines
+                    updateIndicator('chandelier_long', currentChartData.indicators);
+                    updateIndicator('chandelier_short', currentChartData.indicators);
+                    // Add buy/sell markers
+                    updateChandelierMarkers(currentChartData.indicators);
+                } else if (indicator === 'supertrend') {
+                    // For SuperTrend
+                    updateSupertrendIndicator(currentChartData.indicators);
+                    updateSupertrendMarkers(currentChartData.indicators);
+                } else {
+                    updateIndicator(dataKey, currentChartData.indicators);
+                }
+            } else {
+                activeIndicators.delete(indicator);
+                
+                // Remove indicator series
+                if (indicator === 'bb') {
+                    // Remove all 3 Bollinger Bands lines
+                    ['bb_upper', 'bb_middle', 'bb_lower'].forEach(key => {
+                        if (indicatorSeries[key]) {
+                            chart.removeSeries(indicatorSeries[key]);
+                            delete indicatorSeries[key];
+                        }
+                    });
+                } else if (indicator === 'chandelier') {
+                    // Remove both Chandelier Exit lines
+                    ['chandelier_long', 'chandelier_short'].forEach(key => {
+                        if (indicatorSeries[key]) {
+                            chart.removeSeries(indicatorSeries[key]);
+                            delete indicatorSeries[key];
+                        }
+                    });
+                    // Remove buy/sell markers
+                    removeChandelierMarkers();
+                } else if (indicator === 'supertrend') {
+                    // Remove SuperTrend line
+                    if (indicatorSeries['supertrend_line']) {
+                        chart.removeSeries(indicatorSeries['supertrend_line']);
+                        delete indicatorSeries['supertrend_line'];
+                    }
+                    // Remove buy/sell markers
+                    removeSupertrendMarkers();
+                } else {
+                    if (indicatorSeries[dataKey]) {
+                        chart.removeSeries(indicatorSeries[dataKey]);
+                        delete indicatorSeries[dataKey];
+                    }
+                }
+            }
+        }
+        
+        function updateIndicator(indicator, data) {
+            if (!data || !data[indicator]) {
+                console.log(`No data for indicator: ${indicator}`);
+                return;
+            }
+            
+            // Validate indicator data is array and has elements
+            if (!Array.isArray(data[indicator]) || data[indicator].length === 0) {
+                console.log(`Invalid or empty data array for indicator: ${indicator}`);
+                return;
+            }
+            
+            // Check for null values in indicator data
+            const hasNullValues = data[indicator].some(point => 
+                point.time === null || point.value === null || 
+                point.time === undefined || point.value === undefined ||
+                isNaN(point.value)
+            );
+            
+            if (hasNullValues) {
+                console.warn(`Indicator ${indicator} contains null/NaN values, skipping`);
+                return;
+            }
+            
+            const colors = {
+                'sma_20': '#FF6D00',
+                'sma_50': '#2962FF',
+                'ema_9': '#E040FB',
+                'ema_21': '#00E676',
+                'bb_upper': '#9C27B0',
+                'bb_middle': '#BA68C8',
+                'bb_lower': '#9C27B0',
+                'chandelier_long': '#26a69a',   // Green for long stop (bullish)
+                'chandelier_short': '#ef5350'   // Red for short stop (bearish)
+            };
+            
+            // Create series if doesn't exist
+            if (!indicatorSeries[indicator]) {
+                indicatorSeries[indicator] = chart.addLineSeries({
+                    color: colors[indicator] || '#FFA726',
+                    lineWidth: indicator.startsWith('bb_') ? 1 : (indicator.startsWith('chandelier_') ? 2 : 2),
+                    lineStyle: 0, // Solid line for all indicators
+                    priceLineVisible: false,
+                    title: indicator.toUpperCase().replace('_', ' ')
+                });
+            }
+            
+            // Set data
+            try {
+                indicatorSeries[indicator].setData(data[indicator]);
+                console.log(`Updated indicator ${indicator} with ${data[indicator].length} data points`);
+            } catch (error) {
+                console.error(`Error setting data for indicator ${indicator}:`, error);
+            }
+        }
+        
+        // Chandelier Exit Buy/Sell Markers
+        let chandelierMarkersSeries = null;
+        
+        function updateChandelierMarkers(data) {
+            if (!chart || !candlestickSeries) {
+                console.log('Chart or candlestick series not ready for markers');
+                return;
+            }
+            
+            // Combine buy and sell signals into a single markers array
+            const markers = [];
+            
+            // Add buy signals
+            if (data.chandelier_buy_signals && Array.isArray(data.chandelier_buy_signals)) {
+                data.chandelier_buy_signals.forEach(signal => {
+                    markers.push({
+                        time: signal.time,
+                        position: 'belowBar',
+                        color: '#26a69a',
+                        shape: 'arrowUp',
+                        text: 'BUY'
+                    });
+                });
+            }
+            
+            // Add sell signals
+            if (data.chandelier_sell_signals && Array.isArray(data.chandelier_sell_signals)) {
+                data.chandelier_sell_signals.forEach(signal => {
+                    markers.push({
+                        time: signal.time,
+                        position: 'aboveBar',
+                        color: '#ef5350',
+                        shape: 'arrowDown',
+                        text: 'SELL'
+                    });
+                });
+            }
+            
+            // Sort markers by time
+            markers.sort((a, b) => a.time - b.time);
+            
+            if (markers.length > 0) {
+                try {
+                    // Set markers on the active series (candlestick, line, area, or bar)
+                    const activeSeries = candlestickSeries || lineSeries || areaSeries || barSeries;
+                    if (activeSeries) {
+                        activeSeries.setMarkers(markers);
+                        console.log(`Added ${markers.length} Chandelier Exit markers (BUY/SELL signals)`);
+                    }
+                } catch (error) {
+                    console.error('Error setting Chandelier markers:', error);
+                }
+            }
+        }
+        
+        function removeChandelierMarkers() {
+            try {
+                // Remove markers from the active series
+                const activeSeries = candlestickSeries || lineSeries || areaSeries || barSeries;
+                if (activeSeries) {
+                    activeSeries.setMarkers([]);
+                    console.log('Removed Chandelier Exit markers');
+                }
+            } catch (error) {
+                console.error('Error removing Chandelier markers:', error);
+            }
+        }
+        
+        // SuperTrend Indicator Functions
+        function updateSupertrendIndicator(data) {
+            if (!chart || !data.supertrend_line) {
+                console.log('No SuperTrend data available');
+                return;
+            }
+            
+            // Remove existing SuperTrend series if any
+            if (indicatorSeries['supertrend_line']) {
+                chart.removeSeries(indicatorSeries['supertrend_line']);
+                delete indicatorSeries['supertrend_line'];
+            }
+            
+            // SuperTrend uses color per data point, so we need to create line segments
+            // For simplicity, we'll create a single line with the base color and rely on the data colors
+            const supertrendData = data.supertrend_line;
+            
+            if (!Array.isArray(supertrendData) || supertrendData.length === 0) {
+                console.log('SuperTrend data is empty or invalid');
+                return;
+            }
+            
+            // Create the SuperTrend line series
+            indicatorSeries['supertrend_line'] = chart.addLineSeries({
+                color: '#2962FF',  // Default color, will be overridden by data
+                lineWidth: 2,
+                priceLineVisible: false,
+                title: 'SuperTrend',
+                lastValueVisible: true,
+            });
+            
+            // Format data for the line series
+            const formattedData = supertrendData.map(point => ({
+                time: point.time,
+                value: point.value,
+                color: point.color || '#2962FF'
+            }));
+            
+            try {
+                indicatorSeries['supertrend_line'].setData(formattedData);
+                console.log(`Updated SuperTrend indicator with ${formattedData.length} data points`);
+            } catch (error) {
+                console.error('Error setting SuperTrend data:', error);
+            }
+        }
+        
+        function updateSupertrendMarkers(data) {
+            if (!chart) {
+                console.log('Chart not ready for SuperTrend markers');
+                return;
+            }
+            
+            // Get existing markers (from Chandelier Exit if active)
+            let existingMarkers = [];
+            const activeSeries = candlestickSeries || lineSeries || areaSeries || barSeries;
+            
+            // Check if Chandelier is active and has markers
+            if (activeIndicators.has('chandelier') && data.chandelier_buy_signals) {
+                data.chandelier_buy_signals.forEach(signal => {
+                    existingMarkers.push({
+                        time: signal.time,
+                        position: 'belowBar',
+                        color: '#26a69a',
+                        shape: 'arrowUp',
+                        text: 'CE BUY'
+                    });
+                });
+            }
+            if (activeIndicators.has('chandelier') && data.chandelier_sell_signals) {
+                data.chandelier_sell_signals.forEach(signal => {
+                    existingMarkers.push({
+                        time: signal.time,
+                        position: 'aboveBar',
+                        color: '#ef5350',
+                        shape: 'arrowDown',
+                        text: 'CE SELL'
+                    });
+                });
+            }
+            
+            // Add SuperTrend markers
+            if (data.supertrend_buy_signals && Array.isArray(data.supertrend_buy_signals)) {
+                data.supertrend_buy_signals.forEach(signal => {
+                    existingMarkers.push({
+                        time: signal.time,
+                        position: 'belowBar',
+                        color: '#00E676',  // Bright green for SuperTrend
+                        shape: 'arrowUp',
+                        text: 'ST BUY'
+                    });
+                });
+            }
+            
+            if (data.supertrend_sell_signals && Array.isArray(data.supertrend_sell_signals)) {
+                data.supertrend_sell_signals.forEach(signal => {
+                    existingMarkers.push({
+                        time: signal.time,
+                        position: 'aboveBar',
+                        color: '#FF5252',  // Bright red for SuperTrend
+                        shape: 'arrowDown',
+                        text: 'ST SELL'
+                    });
+                });
+            }
+            
+            // Sort and set markers
+            existingMarkers.sort((a, b) => a.time - b.time);
+            
+            if (existingMarkers.length > 0 && activeSeries) {
+                try {
+                    activeSeries.setMarkers(existingMarkers);
+                    console.log(`Added ${existingMarkers.length} markers (including SuperTrend BUY/SELL signals)`);
+                } catch (error) {
+                    console.error('Error setting SuperTrend markers:', error);
+                }
+            }
+        }
+        
+        function removeSupertrendMarkers() {
+            // If Chandelier is still active, restore only Chandelier markers
+            if (activeIndicators.has('chandelier') && currentChartData) {
+                updateChandelierMarkers(currentChartData.indicators);
+            } else {
+                // Remove all markers
+                try {
+                    const activeSeries = candlestickSeries || lineSeries || areaSeries || barSeries;
+                    if (activeSeries) {
+                        activeSeries.setMarkers([]);
+                        console.log('Removed SuperTrend markers');
+                    }
+                } catch (error) {
+                    console.error('Error removing SuperTrend markers:', error);
+                }
+            }
+        }
+        
+        function toggleVolume() {
+            const checkbox = document.getElementById('show-volume');
+            const volumeContainer = document.getElementById('volume-chart');
+            
+            if (volumeContainer) {
+                if (checkbox && checkbox.checked) {
+                    volumeContainer.style.display = 'block';
+                } else {
+                    volumeContainer.style.display = 'none';
+                }
+            }
+        }
+        
+        let loadingStartTime = null;
+        let loadingTimerInterval = null;
+        
+        async function analyzeSymbol() {
+            const symbol = document.getElementById('symbol-input').value.trim().toUpperCase();
+            const timeframe = document.getElementById('timeframe-select').value;
+            
+            if (!symbol) {
+                alert('Please enter a symbol');
+                return;
+            }
+            
+            const resultsContainer = document.getElementById('results-container');
+            resultsContainer.classList.remove('hidden');
+            
+            // Show loading state
+            showChartLoading();
+            
+            // Initialize charts now that container is visible
+            if (!chart || !volumeChart) {
+                console.log('Initializing charts now that container is visible...');
+                // Small delay to ensure container has dimensions
+                await new Promise(resolve => setTimeout(resolve, 100));
+                initializeChart();
+            }
+            
+            document.getElementById('result-symbol').textContent = `${symbol} - ${timeframe}`;
+            document.getElementById('overall-signal').textContent = 'ANALYZING...';
+            document.getElementById('overall-signal').className = 'signal-badge signal-hold';
+            
+            // Load chart data first
+            await loadChartData(symbol, timeframe);
+            
+            // Then load technical analysis
+            try {
+                const response = await fetch('/api/technical/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, timeframe })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayResults(result.data);
+                } else {
+                    hideChartLoading();
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Analysis error:', error);
+                hideChartLoading();
+                alert('Failed to analyze: ' + error.message);
+            }
+        }
+        
+        function showChartLoading() {
+            const loadingEl = document.getElementById('chart-loading');
+            const chartEl = document.getElementById('chart');
+            const volumeEl = document.getElementById('volume-chart');
+            
+            if (loadingEl) {
+                loadingEl.style.display = 'flex';
+                chartEl.style.opacity = '0.3';
+                volumeEl.style.opacity = '0.3';
+                
+                // Start timer
+                loadingStartTime = Date.now();
+                if (loadingTimerInterval) {
+                    clearInterval(loadingTimerInterval);
+                }
+                loadingTimerInterval = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - loadingStartTime) / 1000);
+                    const timerEl = document.getElementById('loading-timer');
+                    if (timerEl) {
+                        timerEl.textContent = `${elapsed}s`;
+                    }
+                }, 100);
+            }
+        }
+        
+        function hideChartLoading() {
+            const loadingEl = document.getElementById('chart-loading');
+            const chartEl = document.getElementById('chart');
+            const volumeEl = document.getElementById('volume-chart');
+            
+            if (loadingEl) {
+                loadingEl.style.display = 'none';
+                chartEl.style.opacity = '1';
+                volumeEl.style.opacity = '1';
+                
+                // Clear timer
+                if (loadingTimerInterval) {
+                    clearInterval(loadingTimerInterval);
+                    loadingTimerInterval = null;
+                }
+            }
+        }
+        
+        function displayResults(data) {
+            // Price
+            document.getElementById('result-price').textContent = `$${data.current_price}`;
+            
+            // Overall Signal
+            const signal = data.signals.overall;
+            const signalEl = document.getElementById('overall-signal');
+            signalEl.textContent = signal;
+            signalEl.className = 'signal-badge signal-' + signal.toLowerCase().replace(' ', '-');
+            
+            // Signal Details
+            const details = data.signals.details.slice(0, 5).join(' • ');
+            document.getElementById('signal-details').innerHTML = `
+                <strong>Bullish: ${data.signals.bullish}</strong> | 
+                <strong>Bearish: ${data.signals.bearish}</strong><br>
+                ${details}
+            `;
+            
+            // Moving Averages
+            setMetric('sma-20', data.moving_averages.sma_20);
+            setMetric('sma-50', data.moving_averages.sma_50);
+            setMetric('sma-200', data.moving_averages.sma_200);
+            setMetric('ema-9', data.moving_averages.ema_9);
+            setMetric('ema-21', data.moving_averages.ema_21);
+            
+            // Momentum
+            setMetric('rsi', data.momentum.rsi);
+            setMetric('stoch-k', data.momentum.stoch_k);
+            setMetric('cci', data.momentum.cci);
+            setMetric('williams-r', data.momentum.williams_r);
+            setMetric('mfi', data.momentum.mfi);
+            
+            // MACD
+            setMetric('macd', data.momentum.macd, 4);
+            setMetric('macd-signal', data.momentum.macd_signal, 4);
+            setMetric('macd-histogram', data.momentum.macd_histogram, 4);
+            
+            // Volatility
+            setMetric('atr', data.volatility.atr);
+            setMetric('bb-upper', data.volatility.bb_upper);
+            setMetric('bb-middle', data.volatility.bb_middle);
+            setMetric('bb-lower', data.volatility.bb_lower);
+            setMetric('bb-width', data.volatility.bb_width);
+            
+            // Chandelier Exit
+            if (data.chandelier_exit) {
+                setMetric('ce-long-stop', data.chandelier_exit.long_stop);
+                setMetric('ce-short-stop', data.chandelier_exit.short_stop);
+                setMetric('ce-highest-high', data.chandelier_exit.highest_high);
+                setMetric('ce-lowest-low', data.chandelier_exit.lowest_low);
+                setMetric('ce-atr', data.chandelier_exit.atr_22);
+                
+                // Display trend with color coding
+                const trendEl = document.getElementById('ce-trend');
+                if (trendEl && data.chandelier_exit.trend) {
+                    const trend = data.chandelier_exit.trend;
+                    if (trend === 'bullish') {
+                        trendEl.innerHTML = '🟢 BULLISH';
+                        trendEl.style.color = 'var(--accent-green)';
+                    } else if (trend === 'bearish') {
+                        trendEl.innerHTML = '🔴 BEARISH';
+                        trendEl.style.color = 'var(--accent-red)';
+                    } else {
+                        trendEl.innerHTML = '⚪ NEUTRAL';
+                        trendEl.style.color = 'var(--text-secondary)';
+                    }
+                }
+            }
+            
+            // SuperTrend
+            if (data.supertrend) {
+                setMetric('st-value', data.supertrend.value);
+                setMetric('st-atr', data.supertrend.atr_10);
+                
+                // Display trend with color coding
+                const stTrendEl = document.getElementById('st-trend');
+                if (stTrendEl && data.supertrend.trend) {
+                    const trend = data.supertrend.trend;
+                    if (trend === 'bullish') {
+                        stTrendEl.innerHTML = '🟢 BULLISH';
+                        stTrendEl.style.color = 'var(--accent-green)';
+                    } else if (trend === 'bearish') {
+                        stTrendEl.innerHTML = '🔴 BEARISH';
+                        stTrendEl.style.color = 'var(--accent-red)';
+                    } else {
+                        stTrendEl.innerHTML = '⚪ NEUTRAL';
+                        stTrendEl.style.color = 'var(--text-secondary)';
+                    }
+                }
+            }
+            
+            // Trend
+            setMetric('adx', data.trend.adx);
+            setMetric('plus-di', data.trend.plus_di);
+            setMetric('minus-di', data.trend.minus_di);
+            
+            // Volume
+            document.getElementById('volume-current').textContent = formatNumber(data.volume_data.current);
+            document.getElementById('volume-avg').textContent = formatNumber(data.volume_data.avg_20);
+            document.getElementById('obv').textContent = formatNumber(data.volume_data.obv);
+            
+            // Pivots
+            setMetric('pivot', data.pivots.pivot);
+            setMetric('r1', data.pivots.r1);
+            setMetric('r2', data.pivots.r2);
+            setMetric('r3', data.pivots.r3);
+            setMetric('s1', data.pivots.s1);
+            setMetric('s2', data.pivots.s2);
+            setMetric('s3', data.pivots.s3);
+            
+            // Patterns
+            displayPatterns(data.patterns);
+        }
+        
+        function setMetric(id, value, decimals = 2) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = value !== null && value !== undefined ? 
+                    (typeof value === 'number' ? value.toFixed(decimals) : value) : '-';
+            }
+        }
+        
+        function formatNumber(num) {
+            if (!num) return '-';
+            return new Intl.NumberFormat().format(num);
+        }
+        
+        function displayPatterns(patterns) {
+            const container = document.getElementById('patterns-container');
+            
+            if (!patterns || patterns.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary); text-align: center;">No patterns detected</p>';
+                return;
+            }
+            
+            container.innerHTML = patterns.map(p => `
+                <div class="pattern-item pattern-${p.type}">
+                    <strong>${p.name}</strong>
+                    <span style="float: right; font-size: 11px; text-transform: uppercase;">${p.strength}</span>
+                </div>
+            `).join('');
+        }
+        
+        function loadPreset(symbol) {
+            document.getElementById('symbol-input').value = symbol;
+            analyzeSymbol();
+        }
+        
+        // Enter key support
+        document.getElementById('symbol-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                analyzeSymbol();
+            }
+        });
+    </script>
+</body>
+</html>

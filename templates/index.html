@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>US Market Pulse - Real-Time Trading Dashboard</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <style>
+        /* Tab Navigation */
+        .tab-container {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            background: linear-gradient(145deg, #1a1f3a 0%, #1d2240 100%);
+            padding: 14px;
+            border-radius: 14px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .tab-btn {
+            padding: 12px 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            background: rgba(255,255,255,0.03);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.25s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tab-btn:hover {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .tab-btn.active {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, #2563eb 100%);
+            border-color: var(--accent-blue);
+            color: white;
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.35);
+        }
+        
+        .tab-btn .tab-icon { font-size: 18px; }
+        .tab-btn .tab-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+        
+        .tab-content { animation: fadeIn 0.3s ease; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Nav Active State */
+        .nav-links a.active {
+            color: var(--accent-blue);
+            border-bottom: 2px solid var(--accent-blue);
+            padding-bottom: 4px;
+        }
+        
+        /* Market Status Bar */
+        .market-status-enhanced {
+            background: linear-gradient(135deg, #1a1f3a 0%, #232947 100%);
+            border-radius: 14px;
+            padding: 18px 24px;
+            margin-bottom: 22px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border-color);
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 24px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .status-badge.open { background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.25); }
+        .status-badge.closed { background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.25); }
+        .status-badge.pre-market, .status-badge.after-hours { background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25); }
+        
+        .status-dot-animated {
+            width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+            animation: pulse-glow 2s infinite;
+        }
+        
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+            50% { opacity: 0.5; box-shadow: 0 0 0 6px transparent; }
+        }
+        
+        /* Index Cards */
+        .indices-enhanced { display: flex; gap: 16px; flex-wrap: wrap; }
+        
+        .index-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 10px 16px;
+            min-width: 130px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.25s ease;
+        }
+        
+        .index-card:hover { background: rgba(255, 255, 255, 0.06); transform: translateY(-2px); }
+        .index-card .index-name { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .index-card .index-value { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+        .index-card .index-change { font-size: 12px; font-weight: 600; }
+        
+        /* Quick Stats */
+        .quick-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 20px; }
+        
+        .quick-stat {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 12px;
+            padding: 14px 18px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            transition: all 0.3s ease;
+        }
+        
+        .quick-stat:hover { background: rgba(255, 255, 255, 0.07); transform: translateY(-2px); }
+        .quick-stat-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+        .quick-stat-value { font-size: 22px; font-weight: 700; }
+        .quick-stat-change { font-size: 12px; font-weight: 600; margin-top: 3px; color: var(--text-secondary); }
+        
+        /* Enhanced Cards */
+        .card-enhanced {
+            background: linear-gradient(145deg, #1a1f3a 0%, #1d2240 100%);
+            border-radius: 16px;
+            padding: 22px;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .card-enhanced:hover { box-shadow: 0 10px 32px rgba(0, 0, 0, 0.3); }
+        
+        .card-enhanced .card-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        
+        .card-enhanced .card-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .section-title-icon { font-size: 22px; }
+        
+        /* Refresh Button */
+        .btn-refresh {
+            background: rgba(74, 158, 255, 0.08);
+            color: var(--accent-blue);
+            border: 1px solid rgba(74, 158, 255, 0.25);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .btn-refresh:hover { background: rgba(74, 158, 255, 0.15); transform: translateY(-1px); }
+        .btn-refresh.loading .refresh-icon { animation: spin 1s linear infinite; }
+        
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        
+        /* Sector Grid */
+        .sector-grid-enhanced { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+        
+        .sector-tile {
+            padding: 16px 14px; border-radius: 12px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; position: relative; overflow: hidden;
+        }
+        
+        .sector-tile:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 10px 20px rgba(0, 0, 0, 0.35); }
+        .sector-tile.positive { background: linear-gradient(145deg, #10b981 0%, #059669 100%); }
+        .sector-tile.negative { background: linear-gradient(145deg, #ef4444 0%, #dc2626 100%); }
+        .sector-tile.neutral { background: linear-gradient(145deg, #6b7280 0%, #4b5563 100%); }
+        .sector-tile .sector-name { font-size: 12px; font-weight: 700; margin-bottom: 5px; }
+        .sector-tile .sector-change { font-size: 24px; font-weight: 800; }
+        .sector-tile .sector-symbol { font-size: 10px; opacity: 0.85; margin-top: 5px; }
+        
+        /* 52-Week Tables */
+        .week52-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        
+        .week52-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        
+        .week52-table thead {
+            background: var(--bg-dark);
+        }
+        
+        .week52-table th {
+            padding: 10px 12px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .week52-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .week52-table tbody tr {
+            transition: background 0.2s;
+        }
+        
+        .week52-table tbody tr:hover {
+            background: var(--bg-card-hover);
+        }
+        
+        .week52-symbol { font-weight: 700; font-size: 14px; color: var(--accent-blue); }
+        .week52-name { font-size: 11px; color: var(--text-secondary); }
+        .week52-badge { padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; display: inline-block; }
+        .badge-high { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
+        .badge-low { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+        
+        /* Loading State */
+        .loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 35px; color: var(--text-secondary); }
+        
+        .loading-spinner {
+            width: 36px; height: 36px;
+            border: 3px solid rgba(74, 158, 255, 0.2);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 14px;
+        }
+        
+        /* Info Banner */
+        .info-banner {
+            background: rgba(74, 158, 255, 0.08);
+            border: 1px solid rgba(74, 158, 255, 0.18);
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .info-banner-icon { font-size: 18px; }
+        .info-banner-text { font-size: 12px; color: var(--text-secondary); }
+        .info-banner-text strong { color: var(--accent-blue); }
+        
+        /* Footer */
+        .footer-enhanced { margin-top: 45px; padding: 25px 0; border-top: 1px solid var(--border-color); text-align: center; }
+        .footer-enhanced p { color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+        .footer-enhanced .disclaimer {
+            background: rgba(239, 68, 68, 0.08);
+            border: 1px solid rgba(239, 68, 68, 0.18);
+            border-radius: 8px;
+            padding: 10px 18px;
+            display: inline-block;
+            margin-bottom: 14px;
+            font-size: 12px;
+        }
+        .footer-enhanced .disclaimer strong { color: #ef4444; }
+        .footer-enhanced .copyright { font-size: 11px; opacity: 0.6; }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .tab-container { flex-direction: column; }
+            .tab-btn { width: 100%; justify-content: center; }
+            .market-status-enhanced { flex-direction: column; text-align: center; }
+            .indices-enhanced { justify-content: center; }
+            .sector-grid-enhanced { grid-template-columns: repeat(2, 1fr); }
+            .week52-grid { grid-template-columns: 1fr; }
+            .quick-stats { grid-template-columns: repeat(2, 1fr); }
+            .week52-table { font-size: 11px; }
+            .week52-table th, .week52-table td { padding: 8px 6px; }
+        }
+        
+        /* Market Closed Scrolling Banner */
+        .market-closed-banner {
+            display: none;
+            background: linear-gradient(90deg, #dc2626 0%, #b91c1c 50%, #dc2626 100%);
+            color: white;
+            padding: 10px 0;
+            overflow: hidden;
+            position: relative;
+            z-index: 1000;
+        }
+        
+        .market-closed-banner.active {
+            display: block;
+        }
+        
+        .market-closed-banner.holiday {
+            background: linear-gradient(90deg, #7c3aed 0%, #6d28d9 50%, #7c3aed 100%);
+        }
+        
+        .market-closed-banner.weekend {
+            background: linear-gradient(90deg, #f59e0b 0%, #d97706 50%, #f59e0b 100%);
+        }
+        
+        .banner-scroll-container {
+            display: flex;
+            animation: scroll-left 20s linear infinite;
+        }
+        
+        .banner-text {
+            white-space: nowrap;
+            padding: 0 50px;
+            font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .banner-text .icon {
+            font-size: 18px;
+        }
+        
+        @keyframes scroll-left {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+        
+        .banner-close-btn {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: background 0.2s;
+            z-index: 10;
+        }
+        
+        .banner-close-btn:hover {
+            background: rgba(255, 255, 255, 0.35);
+        }
+    </style>
+</head>
+<body>
+    <!-- Market Closed Scrolling Banner -->
+    <div id="market-closed-banner" class="market-closed-banner">
+        <div class="banner-scroll-container">
+            <span class="banner-text">
+                <span class="icon">🔔</span>
+                <span id="banner-message">Market is currently closed</span>
+                <span class="icon">📊</span>
+                <span>Data shown is from the last trading session</span>
+                <span class="icon">⏰</span>
+                <span>Market opens at 9:30 AM ET on the next trading day</span>
+            </span>
+            <!-- Duplicate for seamless scrolling -->
+            <span class="banner-text">
+                <span class="icon">🔔</span>
+                <span id="banner-message-dup">Market is currently closed</span>
+                <span class="icon">📊</span>
+                <span>Data shown is from the last trading session</span>
+                <span class="icon">⏰</span>
+                <span>Market opens at 9:30 AM ET on the next trading day</span>
+            </span>
+        </div>
+        <button class="banner-close-btn" onclick="closeBanner()" title="Dismiss">✕</button>
+    </div>
+    
+    <!-- HEADER -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🇺🇸 US Market Pulse</div>
+                <nav>
+                    <ul class="nav-links">
+                        <li><a href="/ai-trading">🤖 AI Trading</a></li>
+                        <li><a href="/" class="active">Dashboard</a></li>
+                        <li><a href="/scanners">Scanners</a></li>
+                        <li><a href="/options">Options</a></li>
+                        <li><a href="/technical-analysis">Technical</a></li>
+                        <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
+                        <li><a href="/crypto">🪙 Crypto</a></li>
+                        <li><a href="/monitoring">Positions</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- MARKET STATUS BAR -->
+        <div class="market-status-enhanced">
+            <div id="market-status">
+                <div class="status-badge" id="status-badge">
+                    <span class="status-dot-animated" id="connection-status"></span>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+            <div class="indices-enhanced" id="indices-strip">
+                <!-- Populated by JavaScript -->
+            </div>
+        </div>
+
+        <!-- TAB NAVIGATION -->
+        <div class="tab-container">
+            <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">
+                <span class="tab-icon">📊</span> Market Overview
+            </button>
+            <button class="tab-btn" data-tab="movers" onclick="switchTab('movers')">
+                <span class="tab-icon">🚀</span> Top Movers
+            </button>
+            <button class="tab-btn" data-tab="week52" onclick="switchTab('week52')">
+                <span class="tab-icon">📈</span> 52-Week High/Low
+            </button>
+            <button class="tab-btn" data-tab="extended" onclick="switchTab('extended')">
+                <span class="tab-icon">🌅</span> Extended Hours
+            </button>
+            <button class="tab-btn" data-tab="volume" onclick="switchTab('volume')">
+                <span class="tab-icon">📊</span> Volume Spikes
+            </button>
+            <button class="tab-btn" data-tab="crashed" onclick="switchTab('crashed')">
+                <span class="tab-icon">💥</span> Crashed Stocks
+            </button>
+        </div>
+
+        <!-- TAB: OVERVIEW -->
+        <div id="tab-overview" class="tab-content">
+            <!-- Quick Stats -->
+            <div class="card-enhanced mb-20">
+                <div class="card-header">
+                    <h2 class="card-title"><span class="section-title-icon">📈</span> Market Pulse</h2>
+                    <span id="pulse-source" style="font-size: 11px; color: #888; margin-left: 8px;">Loading...</span>
+                </div>
+                <div class="quick-stats" id="quick-stats">
+                    <div class="quick-stat">
+                        <div class="quick-stat-label">Market Sentiment</div>
+                        <div class="quick-stat-value" id="market-sentiment">--</div>
+                        <div class="quick-stat-change" id="sentiment-detail">Loading...</div>
+                    </div>
+                    <div class="quick-stat">
+                        <div class="quick-stat-label">Advancing</div>
+                        <div class="quick-stat-value positive" id="advancing-count">--</div>
+                        <div class="quick-stat-change" id="advancing-pct">Stocks up</div>
+                    </div>
+                    <div class="quick-stat">
+                        <div class="quick-stat-label">Declining</div>
+                        <div class="quick-stat-value negative" id="declining-count">--</div>
+                        <div class="quick-stat-change" id="declining-pct">Stocks down</div>
+                    </div>
+                    <div class="quick-stat">
+                        <div class="quick-stat-label">A/D Ratio</div>
+                        <div class="quick-stat-value" id="ad-ratio" style="font-size: 18px;">--</div>
+                        <div class="quick-stat-change" id="ad-ratio-label">Advance/Decline</div>
+                    </div>
+                    <div class="quick-stat">
+                        <div class="quick-stat-label">Last Update</div>
+                        <div class="quick-stat-value" id="last-update" style="font-size: 15px;">--</div>
+                        <div class="quick-stat-change" id="update-status">Waiting...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTOR HEATMAP -->
+            <div class="card-enhanced mb-20">
+                <div class="card-header">
+                    <h2 class="card-title"><span class="section-title-icon">🔥</span> Sector Performance Heatmap</h2>
+                    <button class="btn-refresh" data-refresh="sectors" onclick="refreshSectors()">
+                        <span class="refresh-icon">🔄</span> Refresh
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="sector-grid-enhanced" id="sector-heatmap">
+                        <div class="loading-state"><div class="loading-spinner"></div><div>Loading sectors...</div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTOR STOCKS PANEL -->
+            <div class="card-enhanced mb-20" id="sector-stocks-panel" style="display: none;">
+                <div class="card-header">
+                    <h2 class="card-title" id="sector-stocks-title"><span class="section-title-icon">📋</span> Sector Stocks</h2>
+                    <button class="btn-refresh" onclick="window.dashboard.closeSectorStocks()">✕ Close</button>
+                </div>
+                <div class="card-body">
+                    <div id="sector-stocks-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: TOP MOVERS -->
+        <div id="tab-movers" class="tab-content" style="display: none;">
+            <div class="grid-2">
+                <div class="card-enhanced">
+                    <div class="card-header">
+                        <h2 class="card-title"><span class="section-title-icon">🚀</span> Top Gainers</h2>
+                        <button class="btn-refresh" data-refresh="gainers"><span class="refresh-icon">🔄</span></button>
+                    </div>
+                    <div class="card-body" id="gainers-table">
+                        <div class="loading-state"><div class="loading-spinner"></div><div>Loading gainers...</div></div>
+                    </div>
+                </div>
+
+                <div class="card-enhanced">
+                    <div class="card-header">
+                        <h2 class="card-title"><span class="section-title-icon">📉</span> Top Losers</h2>
+                        <button class="btn-refresh" data-refresh="losers"><span class="refresh-icon">🔄</span></button>
+                    </div>
+                    <div class="card-body" id="losers-table">
+                        <div class="loading-state"><div class="loading-spinner"></div><div>Loading losers...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: 52-WEEK HIGH/LOW -->
+        <div id="tab-week52" class="tab-content" style="display: none;">
+            <div class="card-enhanced mb-20">
+                <div class="card-header">
+                    <h2 class="card-title"><span class="section-title-icon">📈</span> 52-Week Extremes</h2>
+                    <button class="btn-refresh" onclick="load52WeekData()"><span class="refresh-icon">🔄</span> Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="info-banner">
+                        <span class="info-banner-icon">🎯</span>
+                        <span class="info-banner-text">
+                            <strong>Detection:</strong> Stocks within 3% of their 52-week high or low
+                        </span>
+                    </div>
+                    <div class="week52-grid">
+                        <div>
+                            <h3 style="margin-bottom: 14px; color: var(--accent-green); font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                                🏆 Near 52-Week Highs
+                            </h3>
+                            <div id="week52-highs">
+                                <div class="loading-state"><div class="loading-spinner"></div><div>Loading...</div></div>
+                            </div>
+                        </div>
+                        <div>
+                            <h3 style="margin-bottom: 14px; color: var(--accent-red); font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                                📉 Near 52-Week Lows
+                            </h3>
+                            <div id="week52-lows">
+                                <div class="loading-state"><div class="loading-spinner"></div><div>Loading...</div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: EXTENDED HOURS -->
+        <div id="tab-extended" class="tab-content" style="display: none;">
+            <div class="card-enhanced mb-20">
+                <div class="card-header">
+                    <h2 class="card-title"><span class="section-title-icon">🌅</span> Pre-Market & After-Hours</h2>
+                    <button class="btn-refresh" data-refresh="extended"><span class="refresh-icon">🔄</span> Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div id="extended-hours-status" style="margin-bottom: 18px;">
+                        <div class="loading-state"><div class="loading-spinner"></div><div>Loading extended hours data...</div></div>
+                    </div>
+                    <div class="grid-2" id="extended-hours-movers" style="display: none;">
+                        <div>
+                            <h3 style="margin-bottom: 14px; color: var(--text-primary); font-size: 15px; display: flex; align-items: center; gap: 6px;">🚀 Top Gainers</h3>
+                            <div id="extended-gainers-table"></div>
+                        </div>
+                        <div>
+                            <h3 style="margin-bottom: 14px; color: var(--text-primary); font-size: 15px; display: flex; align-items: center; gap: 6px;">📉 Top Losers</h3>
+                            <div id="extended-losers-table"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: VOLUME SPIKES -->
+        <div id="tab-volume" class="tab-content" style="display: none;">
+            <div class="card-enhanced mb-20">
+                <div class="card-header">
+                    <h2 class="card-title"><span class="section-title-icon">📊</span> Volume Spike & Price Action</h2>
+                    <button class="btn-refresh" data-refresh="volume-spike"><span class="refresh-icon">🔄</span> Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="info-banner">
+                        <span class="info-banner-icon">🎯</span>
+                        <span class="info-banner-text"><strong>Detection Criteria:</strong> Volume ≥1.5x average AND Price change ≥3%</span>
+                    </div>
+                    <div id="volume-spike-container">
+                        <div class="loading-state"><div class="loading-spinner"></div><div>Loading volume spike data...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: CRASHED STOCKS -->
+        <div id="tab-crashed" class="tab-content" style="display: none;">
+            <div class="card-enhanced mb-20">
+                <div class="card-header">
+                    <h2 class="card-title"><span class="section-title-icon">💥</span> Crashed Stocks (30%+ from 52W High)</h2>
+                    <button class="btn-refresh" onclick="loadCrashedStocks()"><span class="refresh-icon">🔄</span> Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="info-banner" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);">
+                        <span class="info-banner-icon">⚠️</span>
+                        <span class="info-banner-text">
+                            <strong>Caution:</strong> These stocks have dropped 30%+ from their 52-week high. 
+                            Could be value opportunities OR falling knives. Always do your due diligence!
+                        </span>
+                    </div>
+                    <div id="crashed-stocks-container" style="margin-top: 16px;">
+                        <div class="loading-state"><div class="loading-spinner"></div><div>Scanning for crashed stocks...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="footer-enhanced">
+            <div class="disclaimer"><strong>⚠️ Disclaimer:</strong> Market data from Yahoo Finance. For educational purposes only.</div>
+            <p>Not investment advice. Trading involves risk. Past performance ≠ future results.</p>
+            <p class="copyright">© 2026 US Market Pulse • Built for USA Market Trading</p>
+        </div>
+    </div>
+
+    <!-- SCRIPTS -->
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=4.8"></script>
+    <script>
+        console.log('✅ Enhanced Dashboard with Tabs loaded');
+        
+        let currentTab = 'overview';
+        let week52Loaded = false;
+        let crashedLoaded = false;
+        
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+            document.querySelectorAll('.tab-content').forEach(content => content.style.display = 'none');
+            document.getElementById(`tab-${tab}`).style.display = 'block';
+            
+            // Load 52-week data when tab is first opened
+            if (tab === 'week52' && !week52Loaded) {
+                load52WeekData();
+                week52Loaded = true;
+            }
+            // Load crashed stocks when tab is first opened
+            if (tab === 'crashed' && !crashedLoaded) {
+                loadCrashedStocks();
+                crashedLoaded = true;
+            }
+        }
+        
+        async function load52WeekData() {
+            const highsContainer = document.getElementById('week52-highs');
+            const lowsContainer = document.getElementById('week52-lows');
+            
+            highsContainer.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><div>Scanning stocks...</div></div>';
+            lowsContainer.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><div>Scanning stocks...</div></div>';
+            
+            try {
+                const response = await fetch('/api/market/52week');
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Render highs table
+                    if (data.highs && data.highs.length > 0) {
+                        highsContainer.innerHTML = `
+                            <table class="week52-table">
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Name</th>
+                                        <th>CMP</th>
+                                        <th>% Change</th>
+                                        <th>52W High</th>
+                                        <th>Distance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.highs.map(stock => `
+                                        <tr>
+                                            <td><span class="week52-symbol">${stock.symbol}</span></td>
+                                            <td><span class="week52-name">${stock.name}</span></td>
+                                            <td style="font-weight: 600;">$${stock.price.toFixed(2)}</td>
+                                            <td style="color: ${stock.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight: 600;">${stock.change_pct >= 0 ? '+' : ''}${stock.change_pct.toFixed(2)}%</td>
+                                            <td>$${stock.high_52w.toFixed(2)}</td>
+                                            <td><span class="week52-badge badge-high">${stock.pct_from_high.toFixed(1)}% from high</span></td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>`;
+                    } else {
+                        highsContainer.innerHTML = '<div class="empty-state">No stocks near 52-week highs</div>';
+                    }
+                    
+                    // Render lows table
+                    if (data.lows && data.lows.length > 0) {
+                        lowsContainer.innerHTML = `
+                            <table class="week52-table">
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Name</th>
+                                        <th>CMP</th>
+                                        <th>% Change</th>
+                                        <th>52W Low</th>
+                                        <th>Distance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.lows.map(stock => `
+                                        <tr>
+                                            <td><span class="week52-symbol">${stock.symbol}</span></td>
+                                            <td><span class="week52-name">${stock.name}</span></td>
+                                            <td style="font-weight: 600;">$${stock.price.toFixed(2)}</td>
+                                            <td style="color: ${stock.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight: 600;">${stock.change_pct >= 0 ? '+' : ''}${stock.change_pct.toFixed(2)}%</td>
+                                            <td>$${stock.low_52w.toFixed(2)}</td>
+                                            <td><span class="week52-badge badge-low">+${stock.pct_from_low.toFixed(1)}% from low</span></td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>`;
+                    } else {
+                        lowsContainer.innerHTML = '<div class="empty-state">No stocks near 52-week lows</div>';
+                    }
+                } else {
+                    throw new Error(data.error || 'Failed to load data');
+                }
+            } catch (error) {
+                console.error('Error loading 52-week data:', error);
+                highsContainer.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
+                lowsContainer.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
+            }
+        }
+        
+        async function loadCrashedStocks() {
+            const container = document.getElementById('crashed-stocks-container');
+            container.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><div>Scanning for crashed stocks... This may take a moment.</div></div>';
+            
+            try {
+                const response = await fetch('/api/market/crashed');
+                const data = await response.json();
+                
+                if (data.success && data.stocks && data.stocks.length > 0) {
+                    container.innerHTML = `
+                        <div style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">
+                            Found <strong style="color: var(--accent-red);">${data.total_crashed}</strong> stocks crashed 30%+ from 52W high 
+                            (scanned ${data.total_scanned} stocks)
+                        </div>
+                        <div style="overflow-x: auto;">
+                            <table class="week52-table" style="width: 100%;">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align: left;">Symbol</th>
+                                        <th style="text-align: left;">Name</th>
+                                        <th style="text-align: right;">Price</th>
+                                        <th style="text-align: right;">Today</th>
+                                        <th style="text-align: right;">52W High</th>
+                                        <th style="text-align: right;">Drop %</th>
+                                        <th style="text-align: right;">From Low</th>
+                                        <th style="text-align: right;">Mkt Cap</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.stocks.map(stock => {
+                                        const dropSeverity = stock.pct_from_high <= -60 ? 'extreme' : 
+                                                           stock.pct_from_high <= -45 ? 'severe' : 'moderate';
+                                        const severityColor = dropSeverity === 'extreme' ? '#dc2626' : 
+                                                            dropSeverity === 'severe' ? '#ef4444' : '#f97316';
+                                        return `
+                                            <tr style="border-bottom: 1px solid var(--border-color);">
+                                                <td style="padding: 12px 8px;">
+                                                    <span style="font-weight: 700; color: var(--text-primary); font-size: 14px;">${stock.symbol}</span>
+                                                </td>
+                                                <td style="padding: 12px 8px;">
+                                                    <span style="color: var(--text-secondary); font-size: 12px;">${stock.name}</span>
+                                                </td>
+                                                <td style="padding: 12px 8px; text-align: right; font-weight: 600;">$${stock.price.toFixed(2)}</td>
+                                                <td style="padding: 12px 8px; text-align: right; color: ${stock.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight: 600;">
+                                                    ${stock.change_pct >= 0 ? '+' : ''}${stock.change_pct.toFixed(2)}%
+                                                </td>
+                                                <td style="padding: 12px 8px; text-align: right; color: var(--text-secondary);">$${stock.high_52w.toFixed(2)}</td>
+                                                <td style="padding: 12px 8px; text-align: right;">
+                                                    <span style="background: ${severityColor}20; color: ${severityColor}; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">
+                                                        ${stock.pct_from_high.toFixed(1)}%
+                                                    </span>
+                                                </td>
+                                                <td style="padding: 12px 8px; text-align: right; color: var(--accent-green); font-size: 12px;">
+                                                    +${stock.pct_from_low.toFixed(1)}%
+                                                </td>
+                                                <td style="padding: 12px 8px; text-align: right; color: var(--text-secondary); font-size: 12px;">${stock.market_cap_str}</td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="margin-top: 16px; padding: 12px; background: rgba(59, 130, 246, 0.1); border-radius: 8px; font-size: 12px; color: var(--text-secondary);">
+                            💡 <strong>Tip:</strong> Look for stocks with strong fundamentals that may be oversold. 
+                            Check "From Low" column - stocks bouncing off lows might indicate support levels.
+                        </div>
+                    `;
+                } else {
+                    container.innerHTML = '<div class="empty-state">No stocks found with 30%+ crash from 52-week high</div>';
+                }
+            } catch (error) {
+                console.error('Error loading crashed stocks:', error);
+                container.innerHTML = `<div class="empty-state" style="color: var(--accent-red);">Error loading data: ${error.message}</div>`;
+            }
+        }
+        
+        function updateQuickStats(data) {
+            const advEl = document.getElementById('advancing-count');
+            const decEl = document.getElementById('declining-count');
+            const sentEl = document.getElementById('market-sentiment');
+            const sentDetail = document.getElementById('sentiment-detail');
+            
+            if (data && data.advancing !== undefined) {
+                advEl.textContent = data.advancing;
+                decEl.textContent = data.declining;
+                
+                const ratio = data.advancing / (data.advancing + data.declining);
+                if (ratio > 0.6) {
+                    sentEl.textContent = '🟢 Bullish';
+                    sentEl.style.color = '#10b981';
+                    sentDetail.textContent = 'Market strength';
+                } else if (ratio < 0.4) {
+                    sentEl.textContent = '🔴 Bearish';
+                    sentEl.style.color = '#ef4444';
+                    sentDetail.textContent = 'Under pressure';
+                } else {
+                    sentEl.textContent = '🟡 Neutral';
+                    sentEl.style.color = '#f59e0b';
+                    sentDetail.textContent = 'Mixed signals';
+                }
+            }
+        }
+        
+        function updateTimestamp() {
+            const now = new Date();
+            document.getElementById('last-update').textContent = now.toLocaleTimeString();
+            document.getElementById('update-status').textContent = 'Live';
+            document.getElementById('update-status').style.color = '#10b981';
+        }
+        
+        function refreshSectors() {
+            const btn = document.querySelector('[data-refresh="sectors"]');
+            btn.classList.add('loading');
+            if (window.dashboard) {
+                window.dashboard.loadSectors().finally(() => btn.classList.remove('loading'));
+            } else {
+                setTimeout(() => btn.classList.remove('loading'), 1000);
+            }
+        }
+        
+        function closeBanner() {
+            const banner = document.getElementById('market-closed-banner');
+            if (banner) {
+                banner.classList.remove('active');
+                // Store dismissal in session storage so it doesn't reappear on refresh
+                sessionStorage.setItem('bannerDismissed', 'true');
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('✅ DOMContentLoaded fired');
+            window.dashboard = new TradingDashboard(true);
+            updateTimestamp();
+            // Market Pulse is now updated from live API data via loadDashboardBatch()
+        });
+        
+        window.addEventListener('beforeunload', () => {
+            if (window.dashboard) {
+                window.dashboard.stopAutoRefresh();
+                if (window.dashboard.socket) window.dashboard.socket.disconnect();
+            }
+        });
+    </script>
+</body>
+</html>
