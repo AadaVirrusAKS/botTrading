@@ -2007,8 +2007,19 @@
                                 const updateTime = new Date(signal.live_price_update);
                                 if (!isNaN(updateTime.getTime())) {
                                     const ageSec = Math.floor((Date.now() - updateTime.getTime()) / 1000);
-                                    const stale = ageSec > 60;
-                                    signalUpdateDisplay = `${updateTime.toLocaleTimeString()}${stale ? ' ⚠️' : ''}`;
+                                    const stale = ageSec > 120;
+                                    let ageStr;
+                                    if (ageSec < 0 || ageSec > 86400) {
+                                        ageStr = updateTime.toLocaleTimeString();
+                                    } else if (ageSec < 60) {
+                                        ageStr = `${ageSec}s ago`;
+                                    } else if (ageSec < 3600) {
+                                        ageStr = `${Math.floor(ageSec / 60)}m ago`;
+                                    } else {
+                                        ageStr = `${Math.floor(ageSec / 3600)}h ago`;
+                                    }
+                                    const color = stale ? '#ef4444' : '#10b981';
+                                    signalUpdateDisplay = `<span style="color:${color};">●</span> ${ageStr}`;
                                 }
                             }
                             
@@ -2159,13 +2170,29 @@
                     : '<span class="bot-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8;">MANUAL</span>';
 
                 // Price update timestamp + freshness marker
+                // Use last_checked (always set on every poll) to show system is alive
+                // Color-code based on price_update_status (updated=green, skipped/error=orange/red)
                 let updateDisplay = '--';
-                if (pos.last_price_update) {
-                    const updateTime = new Date(pos.last_price_update);
-                    if (!isNaN(updateTime.getTime())) {
-                        const ageSec = Math.floor((Date.now() - updateTime.getTime()) / 1000);
-                        const stale = ageSec > 60;
-                        updateDisplay = `${updateTime.toLocaleTimeString()}${stale ? ' ⚠️' : ''}`;
+                const checkedTs = pos.last_checked || pos.last_price_update;
+                if (checkedTs) {
+                    const checkTime = new Date(checkedTs);
+                    if (!isNaN(checkTime.getTime())) {
+                        const ageSec = Math.floor((Date.now() - checkTime.getTime()) / 1000);
+                        let ageStr;
+                        if (ageSec < 0 || ageSec > 86400) {
+                            ageStr = checkTime.toLocaleTimeString();
+                        } else if (ageSec < 60) {
+                            ageStr = `${ageSec}s ago`;
+                        } else if (ageSec < 3600) {
+                            ageStr = `${Math.floor(ageSec / 60)}m ago`;
+                        } else {
+                            ageStr = `${Math.floor(ageSec / 3600)}h ago`;
+                        }
+                        // Green=live price confirmed, Orange=using cached/stale price, Red=no price source
+                        const pStatus = pos.price_update_status || '';
+                        const color = pStatus === 'updated' ? '#10b981' : pStatus === 'skipped' ? '#f59e0b' : pStatus === 'error' ? '#ef4444' : '#6b7280';
+                        const dot = pStatus === 'updated' ? '●' : pStatus === 'skipped' ? '○' : '✕';
+                        updateDisplay = `<span style="color:${color};" title="${pos.price_update_reason || ''}">${dot}</span> ${ageStr}`;
                     }
                 }
                 

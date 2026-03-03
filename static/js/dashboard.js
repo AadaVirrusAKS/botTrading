@@ -1621,6 +1621,7 @@ class TradingDashboard {
                             <th style="padding: 12px 8px; text-align: right; color: var(--text-secondary); font-weight: 600;">%</th>
                             <th style="padding: 12px 8px; text-align: right; color: var(--text-secondary); font-weight: 600;">Stop Loss</th>
                             <th style="padding: 12px 8px; text-align: right; color: var(--text-secondary); font-weight: 600;">Target</th>
+                            <th style="padding: 12px 8px; text-align: left; color: var(--text-secondary); font-weight: 600;">Updated</th>
                             <th style="padding: 12px 8px; text-align: left; color: var(--text-secondary); font-weight: 600;">Opened</th>
                             <th style="padding: 12px 8px; text-align: left; color: var(--text-secondary); font-weight: 600;">Status</th>
                             <th style="padding: 12px 8px; text-align: center; color: var(--text-secondary); font-weight: 600;">Actions</th>
@@ -1727,6 +1728,24 @@ class TradingDashboard {
                                                 ${targetHit ? ' 🎯' : ''}
                                             </div>
                                         `}
+                                    </td>
+                                    <td style="padding: 10px 8px; font-size: 11px; color: var(--text-secondary); white-space: nowrap;">
+                                        ${(() => {
+                                            const ts = pos.last_checked || pos.last_price_update;
+                                            if (!ts) return '--';
+                                            const t = new Date(ts);
+                                            if (isNaN(t.getTime())) return '--';
+                                            const ageSec = Math.floor((Date.now() - t.getTime()) / 1000);
+                                            let ageStr;
+                                            if (ageSec < 0 || ageSec > 86400) { ageStr = t.toLocaleTimeString(); }
+                                            else if (ageSec < 60) { ageStr = ageSec + 's ago'; }
+                                            else if (ageSec < 3600) { ageStr = Math.floor(ageSec / 60) + 'm ago'; }
+                                            else { ageStr = Math.floor(ageSec / 3600) + 'h ago'; }
+                                            const pStatus = pos.price_update_status || '';
+                                            const color = pStatus === 'updated' ? '#10b981' : pStatus === 'stale' ? '#f59e0b' : '#6b7280';
+                                            const dot = pStatus === 'updated' ? '●' : '○';
+                                            return '<span style="color:' + color + ';">' + dot + '</span> ' + ageStr;
+                                        })()}
                                     </td>
                                     <td style="padding: 10px 8px; font-size: 11px; color: var(--text-secondary);">
                                         ${pos.date_added ? new Date(pos.date_added).toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + '<br>' + new Date(pos.date_added).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'N/A'}

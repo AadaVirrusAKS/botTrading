@@ -821,6 +821,41 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
     return prices
 
 
+def fetch_quote_api_batch(symbols, timeout=6):
+    """Fetch best-effort live prices from Yahoo quote API (non-yfinance fallback)."""
+    unique_symbols = sorted(set((s or '').strip().upper() for s in symbols if s))
+    if not unique_symbols:
+        return {}
+
+    try:
+        import requests
+        url = "https://query1.finance.yahoo.com/v7/finance/quote"
+        resp = requests.get(url, params={'symbols': ','.join(unique_symbols)}, timeout=timeout)
+        if resp.status_code != 200:
+            return {}
+        payload = resp.json() or {}
+        rows = (payload.get('quoteResponse') or {}).get('result') or []
+        out = {}
+        for item in rows:
+            symbol = (item.get('symbol') or '').upper()
+            if not symbol:
+                continue
+            price = (
+                item.get('regularMarketPrice')
+                or item.get('postMarketPrice')
+                or item.get('preMarketPrice')
+                or item.get('currentPrice')
+            )
+            if price is not None:
+                try:
+                    out[symbol] = float(price)
+                except Exception:
+                    pass
+        return out
+    except Exception:
+        return {}
+
+
 def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
     """Get historical data with caching. Returns DataFrame or None."""
     cache_key = (symbol, period, interval)
@@ -981,6 +1016,15 @@ def clear_all_caches():
     with _global_rate_limit_lock:
         _global_rate_limit_until = 0.0
     print("[Cache] All caches and rate-limit blocks cleared")
+
+
+def clear_rate_limit_blocks():
+    """Clear only rate-limit guards without dropping data caches."""
+    global _global_rate_limit_until
+    with _history_rate_limit_lock:
+        _history_rate_limit_block.clear()
+    with _global_rate_limit_lock:
+        _global_rate_limit_until = 0.0
 
 # Scanner results cache (long-lived)
 scanner_cache = {
@@ -4642,8 +4686,8 @@ def active_positions():
                     active_stock_symbols.append(ticker)
         stock_live_prices = cached_batch_prices(
             list(set(active_stock_symbols)),
-            period='5d',
-            interval='1d',
+            period='1d',
+            interval='1m',
             prepost=True,
             use_cache=not force_live
         ) if active_stock_symbols else {}
@@ -4725,6 +4769,12 @@ def active_positions():
                         else:
                             stock_direction = 'LONG'
                 
+                # Determine if we got a LIVE or CACHED price (vs entry fallback)
+                _got_live_price = (
+                    (not is_option and pos.get('ticker') in stock_live_prices) or
+                    (is_option and premium_source in ('LIVE', 'LAST'))
+                )
+                
                 # Build position object with consistent field names
                 position = {
                     'position_key': key,
@@ -4737,7 +4787,9 @@ def active_positions():
                     'stop_loss': float(stop_loss),
                     'target': float(target),
                     'status': pos.get('status', 'active'),
-                    'last_price_update': datetime.now().isoformat() if (not is_option and pos.get('ticker') in stock_live_prices) else pos.get('last_price_update'),
+                    'last_price_update': datetime.now().isoformat() if _got_live_price else pos.get('last_price_update'),
+                    'last_checked': datetime.now().isoformat(),
+                    'price_update_status': 'updated' if _got_live_price else 'stale',
                     'date_added': pos.get('date_added', ''),
                     'date_closed': pos.get('date_closed', ''),
                     'source': pos.get('source', None),
@@ -7710,6 +7762,8 @@ def update_positions_with_live_prices(positions, force_live=False):
         pos['price_update_source'] = update_source
         pos['price_update_status'] = status
         pos['price_update_reason'] = reason
+        # Always record when the system last attempted to refresh this position
+        pos['last_checked'] = now_iso
 
     for pos in stock_positions:
         _mark_price_update(pos, 'pending', 'awaiting_batch_quote')
@@ -7719,14 +7773,34 @@ def update_positions_with_live_prices(positions, force_live=False):
     # --- Update stock positions (BATCHED — single API call for all symbols) ---
     stock_symbols = list(set(p['symbol'] for p in stock_positions))
     if stock_symbols:
-        stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='1d', prepost=True, use_cache=use_cache)
+        stock_prices = cached_batch_prices(stock_symbols, period='1d', interval='1m', prepost=True, use_cache=use_cache)
+        quote_api_prices = fetch_quote_api_batch(stock_symbols) if force_live else {}
         for pos in stock_positions:
             if pos['symbol'] in stock_prices:
                 pos['current_price'] = stock_prices[pos['symbol']]
                 pos['last_price_update'] = now_iso
                 _mark_price_update(pos, 'updated', 'stock_quote_refreshed')
+            elif pos['symbol'] in quote_api_prices:
+                pos['current_price'] = float(quote_api_prices[pos['symbol']])
+                pos['last_price_update'] = now_iso
+                _mark_price_update(pos, 'updated', 'stock_quote_api_refreshed')
             else:
-                _mark_price_update(pos, 'skipped', 'stock_quote_unavailable')
+                fallback_price, _ = cached_get_price(pos['symbol'], period='1d', interval='1m', prepost=True, use_cache=use_cache)
+                if fallback_price is not None:
+                    pos['current_price'] = float(fallback_price)
+                    pos['last_price_update'] = now_iso
+                    _mark_price_update(pos, 'updated', 'stock_quote_fallback_refreshed')
+                else:
+                    info = cached_get_ticker_info(pos['symbol'])
+                    info_price = None
+                    if info:
+                        info_price = info.get('regularMarketPrice') or info.get('currentPrice')
+                    if info_price is not None:
+                        pos['current_price'] = float(info_price)
+                        pos['last_price_update'] = now_iso
+                        _mark_price_update(pos, 'updated', 'stock_info_refreshed')
+                    else:
+                        _mark_price_update(pos, 'skipped', 'stock_quote_unavailable')
     else:
         for pos in stock_positions:
             _mark_price_update(pos, 'skipped', 'no_stock_symbols')
@@ -7742,7 +7816,7 @@ def update_positions_with_live_prices(positions, force_live=False):
     # Batch fetch underlying prices for all option symbols too
     option_symbols = list(option_by_symbol.keys())
     if option_symbols:
-        underlying_prices = cached_batch_prices(option_symbols, period='5d', interval='1d', prepost=True, use_cache=use_cache)
+        underlying_prices = cached_batch_prices(option_symbols, period='1d', interval='1m', prepost=True, use_cache=use_cache)
     else:
         underlying_prices = {}
     
@@ -8052,6 +8126,8 @@ def bot_status():
     
     # Update positions with live prices OUTSIDE the lock (force_live bypasses cache)
     force_live = request.args.get('force_live', '0').lower() in ('1', 'true', 'yes')
+    if force_live:
+        clear_rate_limit_blocks()
     positions = update_positions_with_live_prices(positions, force_live=force_live)
     signals = refresh_signal_entries_with_live_prices(state_copy.get('signals', []), force_refresh=force_live)
 
@@ -8082,7 +8158,7 @@ def bot_status():
             ):
                 continue
 
-            for field in ('current_price', 'current_bid', 'current_ask', 'underlying_price', 'last_price_update'):
+            for field in ('current_price', 'current_bid', 'current_ask', 'underlying_price', 'last_price_update', 'last_checked'):
                 if field in updated_pos and stored_pos.get(field) != updated_pos.get(field):
                     stored_pos[field] = updated_pos.get(field)
                     changed = True
@@ -8846,6 +8922,20 @@ def bot_auto_cycle():
         
         # Batch fetch live stock prices (single API call via cache)
         live_stock_prices = cached_batch_prices(position_symbols, period='1d', interval='1m', prepost=True)
+        missing_symbols = [s for s in position_symbols if s not in live_stock_prices]
+        if missing_symbols:
+            quote_api_prices = fetch_quote_api_batch(missing_symbols)
+            for sym, price in quote_api_prices.items():
+                if sym not in live_stock_prices:
+                    live_stock_prices[sym] = price
+        still_missing = [s for s in position_symbols if s not in live_stock_prices]
+        for sym in still_missing:
+            info = cached_get_ticker_info(sym)
+            info_price = None
+            if info:
+                info_price = info.get('regularMarketPrice') or info.get('currentPrice')
+            if info_price is not None:
+                live_stock_prices[sym] = float(info_price)
         
         # Fetch live option premiums for option positions (cached chains)
         option_premiums = {}  # keyed by (symbol, expiry, strike, opt_type)
@@ -8954,6 +9044,7 @@ def bot_auto_cycle():
                                 swing_low_watermarks[sym] = float(df_hist['Low'].min())
         
         
+        _cycle_now_iso = datetime.now().isoformat()
         for pos in positions:
             symbol = pos['symbol']
             is_option = pos.get('instrument_type') == 'option'
@@ -8964,10 +9055,13 @@ def bot_auto_cycle():
                     continue
                 current_price = option_premiums[key]
                 pos['current_price'] = current_price  # Update for display
+                pos['last_price_update'] = _cycle_now_iso
             else:
                 if symbol not in live_stock_prices:
                     continue
                 current_price = live_stock_prices[symbol]
+                pos['current_price'] = current_price
+                pos['last_price_update'] = _cycle_now_iso
                 
             entry_price = pos.get('entry_price', 0)
             stop_loss = pos.get('stop_loss', 0)
@@ -9299,8 +9393,9 @@ def bot_auto_cycle():
                 emoji = emoji_map.get(exit_reason, '🛑')
                 print(f"{emoji} AUTO-EXIT: {display_name} - {exit_reason} | Entry: ${entry_price:.2f} → Exit: ${exit_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:.1f}%)")
         
-        # Save state if any dynamic SL/target updates were made
-        if dynamic_any_updated and not positions_to_remove:
+        # Save state if any price/SL/target updates were made
+        # Always persist current_price + last_price_update so the UI stays fresh
+        if (dynamic_any_updated or _cycle_now_iso) and not positions_to_remove:
             with BOT_STATE_LOCK:
                 save_bot_state()
         
@@ -9611,6 +9706,21 @@ def bot_auto_cycle():
                 load_bot_state()
                 acct_live = bot_state['demo_account'] if account_mode == 'demo' else bot_state['real_account']
                 return float(recalculate_balance(acct_live))
+
+        def _reserve_execution_slot(exec_key):
+            now_ts = time.time()
+            with AUTO_TRADE_DEDUP_LOCK:
+                stale_keys = [k for k, ts in AUTO_TRADE_EXECUTION_GUARD.items() if now_ts - ts > AUTO_TRADE_DEDUP_SECONDS * 3]
+                for k in stale_keys:
+                    AUTO_TRADE_EXECUTION_GUARD.pop(k, None)
+
+                last_exec = AUTO_TRADE_EXECUTION_GUARD.get(exec_key, 0)
+                remaining = int(AUTO_TRADE_DEDUP_SECONDS - (now_ts - last_exec))
+                if now_ts - last_exec < AUTO_TRADE_DEDUP_SECONDS:
+                    return False, max(1, remaining)
+
+                AUTO_TRADE_EXECUTION_GUARD[exec_key] = now_ts
+                return True, 0
         
         # Determine what the current settings expect
         current_watchlist = bot_state['settings'].get('watchlist', 'top_50')
@@ -9626,6 +9736,11 @@ def bot_auto_cycle():
         
         current_positions = len(account.get('positions', []))
         current_symbols = [p['symbol'] for p in account.get('positions', [])]
+        current_stock_sides = {
+            p.get('symbol'): p.get('side', 'LONG')
+            for p in account.get('positions', [])
+            if p.get('instrument_type', 'stock') != 'option'
+        }
         # For options, also track contracts to avoid duplicates
         current_contracts = [p.get('contract', '') for p in account.get('positions', []) if p.get('instrument_type') == 'option']
         
@@ -9708,8 +9823,10 @@ def bot_auto_cycle():
                     skipped_reasons.append(f"{signal.get('contract')}: Already have this option position")
                     continue
             else:
-                if signal['symbol'] in current_symbols:
-                    skipped_reasons.append(f"{signal['symbol']}: Already have position")
+                intended_side = 'LONG' if signal.get('action') == 'BUY' else 'SHORT'
+                existing_side = current_stock_sides.get(signal['symbol'])
+                if existing_side and existing_side != intended_side:
+                    skipped_reasons.append(f"{signal['symbol']}: Opposite-side position already open ({existing_side})")
                     continue
             
             # --- PER-SYMBOL OVERTRADING GUARDS ---
@@ -9781,21 +9898,6 @@ def bot_auto_cycle():
                 signal.get('contract', ''),
                 signal.get('action', 'BUY')
             )
-            now_ts = time.time()
-            with AUTO_TRADE_DEDUP_LOCK:
-                # cleanup stale keys
-                stale_keys = [k for k, ts in AUTO_TRADE_EXECUTION_GUARD.items() if now_ts - ts > AUTO_TRADE_DEDUP_SECONDS * 3]
-                for k in stale_keys:
-                    AUTO_TRADE_EXECUTION_GUARD.pop(k, None)
-
-                last_exec = AUTO_TRADE_EXECUTION_GUARD.get(exec_key, 0)
-                if now_ts - last_exec < AUTO_TRADE_DEDUP_SECONDS:
-                    skipped_reasons.append(f"{signal['symbol']}: Duplicate auto-trade blocked ({int(AUTO_TRADE_DEDUP_SECONDS - (now_ts - last_exec))}s cooldown)")
-                    continue
-
-                # reserve execution slot immediately to block concurrent duplicate requests
-                AUTO_TRADE_EXECUTION_GUARD[exec_key] = now_ts
-            
             if is_option_signal:
                 # === Option auto-trade ===
                 expiry = signal.get('expiry', '')
@@ -9830,6 +9932,11 @@ def bot_auto_cycle():
                 
                 # Options are always day trades (especially 0-2 DTE)
                 option_trade_type = 'day' if signal.get('dte', 0) <= 2 else 'swing'
+
+                reserved, remaining = _reserve_execution_slot(exec_key)
+                if not reserved:
+                    skipped_reasons.append(f"{signal['symbol']}: Duplicate auto-trade blocked ({remaining}s cooldown)")
+                    continue
                 
                 with BOT_STATE_LOCK:
                     load_bot_state()
@@ -9944,6 +10051,11 @@ def bot_auto_cycle():
                 
                 # Estimate ATR from signal's own atr field (no extra API call)
                 _cached_atr_stock = signal.get('atr', price * 0.015)
+
+                reserved, remaining = _reserve_execution_slot(exec_key)
+                if not reserved:
+                    skipped_reasons.append(f"{signal['symbol']}: Duplicate auto-trade blocked ({remaining}s cooldown)")
+                    continue
                 
                 with BOT_STATE_LOCK:
                     load_bot_state()
@@ -9990,6 +10102,7 @@ def bot_auto_cycle():
                 
                 current_positions += 1
                 current_symbols.append(signal['symbol'])
+                current_stock_sides[signal['symbol']] = side
                 
                 action_emoji = '\U0001f7e2' if signal['action'] == 'BUY' else '\U0001f534'
                 print(f"\U0001f916 AUTO-TRADE: {action_emoji} {signal['action']} {quantity} shares of {signal['symbol']} at ${price:.2f} ({side})")
