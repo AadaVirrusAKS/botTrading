@@ -1928,6 +1928,10 @@
         
         // Manual scan
         async function runManualScan() {
+            if (!botRunning) {
+                showNotification('⚠️ Bot is not running. Click "Start Trading Bot" first.', 'error');
+                return;
+            }
             showNotification('🔍 Running manual scan...', 'info');
             
             try {
@@ -2551,6 +2555,10 @@
         
         // Execute stock trade
         async function executeTrade(symbol, action, price) {
+            if (!botRunning) {
+                showNotification('⚠️ Bot is not running. Click "Start Trading Bot" first.', 'error');
+                return;
+            }
             const quantity = Math.floor(parseFloat(document.getElementById('position-size').value) / price);
             
             if (!confirm(`${action} ${quantity} shares of ${symbol} at $${price.toFixed(2)}?`)) return;
@@ -2585,6 +2593,10 @@
 
         // Execute option trade from intraday options scanner
         async function executeOptionTrade(optionData) {
+            if (!botRunning) {
+                showNotification('⚠️ Bot is not running. Click "Start Trading Bot" first.', 'error');
+                return;
+            }
             const posSize = parseFloat(document.getElementById('position-size').value);
             const contracts = Math.max(1, Math.floor(posSize / (optionData.premium * 100)));
             const cost = contracts * optionData.premium * 100;
@@ -2646,8 +2658,10 @@
             // Save settings to server for persistence
             saveSettingsToServer();
 
-            // Fetch fresh signals for selected instrument type
-            runManualScan();
+            // Fetch fresh signals for selected instrument type (only if bot is running)
+            if (botRunning) {
+                runManualScan();
+            }
         }
         
         // Save current settings to server (for persistence across page navigation)

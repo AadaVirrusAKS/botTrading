@@ -10,6 +10,7 @@ import yfinance as yf
 import numpy as np
 
 from services.utils import MAJOR_INDICES, SECTOR_ETFS, SECTOR_STOCKS, US_MARKET_HOLIDAYS
+from services.symbols import KNOWN_DELISTED
 from services.market_data import (
     cached_get_price, cached_batch_prices, cached_get_history,
     cached_get_ticker_info, _is_rate_limited, _log_fetch_event,

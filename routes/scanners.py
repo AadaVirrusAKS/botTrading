@@ -20,7 +20,7 @@ from services.market_data import (
     _is_rate_limit_error, _mark_rate_limited, _mark_global_rate_limit,
     _is_expected_no_data_error, fetch_quote_api_batch
 )
-from services.symbols import is_valid_symbol_cached, filter_valid_symbols
+from services.symbols import is_valid_symbol_cached, filter_valid_symbols, KNOWN_DELISTED
 
 # Import scanner modules
 from unified_trading_system import UnifiedTradingSystem

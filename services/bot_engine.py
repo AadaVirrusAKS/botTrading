@@ -19,7 +19,8 @@ from services.market_data import (
     cached_get_option_dates, cached_get_option_chain, cached_get_ticker_info,
     fetch_quote_api_batch, _is_rate_limited, _log_fetch_event,
     _is_rate_limit_error, _is_expected_no_data_error, _mark_rate_limited,
-    _mark_global_rate_limit
+    _mark_global_rate_limit,
+    _price_cache, _price_cache_lock
 )
 from services.symbols import resolve_symbol_or_name, is_valid_symbol_cached
 

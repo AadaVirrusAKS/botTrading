@@ -188,7 +188,7 @@ if __name__ == '__main__':
     print("="*100 + "\n")
 
     # Start background position monitor
-    start_background_monitor()
+    start_background_monitor(app)
     atexit.register(stop_background_monitor)
 
     socketio.run(app, host='0.0.0.0', port=PORT, debug=False, allow_unsafe_werkzeug=True)

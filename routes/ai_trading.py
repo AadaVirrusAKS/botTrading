@@ -35,7 +35,7 @@ from services.bot_engine import (
     get_min_option_dte_days, get_option_dte, is_option_expiry_blocked,
     refresh_signal_entries_with_live_prices, WATCHLISTS
 )
-from services.symbols import is_valid_symbol_cached, filter_valid_symbols, resolve_symbol_or_name
+from services.symbols import is_valid_symbol_cached, filter_valid_symbols, resolve_symbol_or_name, KNOWN_DELISTED
 
 ai_trading_bp = Blueprint("ai_trading", __name__)
 
@@ -485,6 +485,10 @@ def bot_import_positions():
 def bot_scan():
     """Run a market scan based on strategy"""
     global bot_state
+    
+    # Bot must be running (Start Trading Bot button must be ON)
+    if not bot_state.get('running', False):
+        return jsonify({'success': False, 'error': 'Bot is not running. Click "Start Trading Bot" first.'}), 400
     
     req = request.get_json(force=True)
     strategy = req.get('strategy', bot_state['strategy'])
@@ -2102,6 +2106,10 @@ def bot_trade():
     """Execute a trade"""
     global bot_state
     
+    # Bot must be running (Start Trading Bot button must be ON)
+    if not bot_state.get('running', False):
+        return jsonify({'success': False, 'error': 'Bot is not running. Click "Start Trading Bot" first.'}), 400
+    
     req = request.get_json(force=True)
     symbol = req.get('symbol')
     action = req.get('action')
@@ -2275,6 +2283,10 @@ def bot_trade():
 def bot_trade_option():
     """Execute an option trade (buy call/put) from the intraday options scanner"""
     global bot_state
+
+    # Bot must be running (Start Trading Bot button must be ON)
+    if not bot_state.get('running', False):
+        return jsonify({'success': False, 'error': 'Bot is not running. Click "Start Trading Bot" first.'}), 400
 
     req = request.get_json(force=True)
     symbol = req.get('symbol')

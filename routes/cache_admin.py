@@ -73,6 +73,7 @@ def cache_clear():
 
 _bg_monitor_running = False
 _bg_monitor_thread = None
+_bg_app = None  # Flask app reference, set by start_background_monitor()
 _BG_INTERVAL = 10  # seconds — matches the frontend auto-cycle rate
 
 def _background_position_monitor():
@@ -110,7 +111,7 @@ def _background_position_monitor():
                 pass  # If pytz fails, still run the check
             
             # Call the auto_cycle endpoint internally via test_client
-            with app.test_client() as client:
+            with _bg_app.test_client() as client:
                 resp = client.post('/api/bot/auto_cycle',
                                    content_type='application/json',
                                    data='{}')
@@ -128,11 +129,20 @@ def _background_position_monitor():
         except Exception as e:
             print(f"⚠️ BG Engine error: {e}")
 
-def start_background_monitor():
-    """Start the background position monitor thread if not already running."""
-    global _bg_monitor_thread, _bg_monitor_running
+def start_background_monitor(app=None):
+    """Start the background position monitor thread if not already running.
+    
+    Args:
+        app: Flask app instance (required for test_client calls from background thread).
+    """
+    global _bg_monitor_thread, _bg_monitor_running, _bg_app
     if _bg_monitor_thread and _bg_monitor_thread.is_alive():
         return  # Already running
+    if app is not None:
+        _bg_app = app
+    if _bg_app is None:
+        print('⚠️ BG Engine: No Flask app provided — background monitor not started')
+        return
     _bg_monitor_running = True
     _bg_monitor_thread = threading.Thread(target=_background_position_monitor, daemon=True)
     _bg_monitor_thread.start()
