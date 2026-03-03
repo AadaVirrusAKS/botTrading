@@ -33,22 +33,22 @@
       "rsi": 56.35124981454983,
       "volume_ratio": 0.9884230377132666,
       "atr": 1.9442847115652901,
-      "live_price_update": "2026-03-03T15:11:20.485925"
+      "live_price_update": "2026-03-03T15:11:40.476179"
     },
     {
       "symbol": "GOOGL",
       "action": "BUY",
       "confidence": 95,
-      "entry": 302.97,
-      "stop_loss": 292.66,
-      "target": 316.72,
+      "entry": 302.89,
+      "stop_loss": 292.58,
+      "target": 316.64,
       "reason": "Bullish EMAs, Above SMA50, RSI healthy (40-60)",
       "instrument_type": "stock",
       "scan_type": "daily",
       "rsi": 59.934079796779564,
       "volume_ratio": 1.2254578157347726,
       "atr": 7.304284232003348,
-      "live_price_update": "2026-03-03T15:11:20.485925"
+      "live_price_update": "2026-03-03T15:11:40.476179"
     },
     {
       "symbol": "XLU",
@@ -63,7 +63,7 @@
       "rsi": 51.004000067408256,
       "volume_ratio": 1.3039323523383075,
       "atr": 0.5842851911272321,
-      "live_price_update": "2026-03-03T15:11:20.485925"
+      "live_price_update": "2026-03-03T15:11:40.476179"
     }
   ],
   "demo_account": {
@@ -77,13 +77,13 @@
         "source": "manual",
         "quantity": 9,
         "entry_price": 303.48,
-        "current_price": 302.97,
+        "current_price": 302.89,
         "stop_loss": 288.31,
         "target": 333.83,
         "timestamp": "2026-03-03T15:08:49.386554",
         "trade_type": "swing",
-        "last_price_update": "2026-03-03T15:11:20.485897",
-        "last_checked": "2026-03-03T15:11:20.485897"
+        "last_price_update": "2026-03-03T15:11:40.476152",
+        "last_checked": "2026-03-03T15:11:40.476152"
       }
     ],
     "trades": [
