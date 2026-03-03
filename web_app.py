@@ -8233,6 +8233,26 @@ def bot_start():
         }
         save_bot_state()
     
+    # --- STARTUP HEALTH CHECK: log all potential blockers upfront ---
+    _acct = bot_state['demo_account'] if bot_state.get('account_mode') == 'demo' else bot_state['real_account']
+    _pos_count = len(_acct.get('positions', []))
+    _max_pos = bot_state['settings'].get('max_positions', 5)
+    _balance = _acct.get('balance', 0)
+    _pos_size = bot_state['settings'].get('position_size', 1000)
+    _blockers = []
+    if _pos_count >= _max_pos:
+        _blockers.append(f"MAX_POSITIONS: {_pos_count}/{_max_pos} slots full")
+    if _balance < _pos_size:
+        _blockers.append(f"LOW_BALANCE: ${_balance:.2f} < position_size ${_pos_size}")
+    if _is_rate_limited('__global__'):
+        _blockers.append("RATE_LIMITED: yfinance globally rate-limited")
+    if _blockers:
+        print(f"⚠️ BOT HEALTH CHECK — {len(_blockers)} blocker(s) detected at startup:")
+        for b in _blockers:
+            print(f"   🔴 {b}")
+    else:
+        print(f"✅ BOT HEALTH CHECK — No blockers. balance=${_balance:.2f}, positions={_pos_count}/{_max_pos}, mode={bot_state.get('account_mode')}")
+    
     return jsonify({
         'success': True,
         'message': f"Bot started in {bot_state['account_mode']} mode with {bot_state['strategy']} strategy",
@@ -9045,6 +9065,7 @@ def bot_auto_cycle():
         
         
         _cycle_now_iso = datetime.now().isoformat()
+        _any_price_updated = False
         for pos in positions:
             symbol = pos['symbol']
             is_option = pos.get('instrument_type') == 'option'
@@ -9056,12 +9077,14 @@ def bot_auto_cycle():
                 current_price = option_premiums[key]
                 pos['current_price'] = current_price  # Update for display
                 pos['last_price_update'] = _cycle_now_iso
+                _any_price_updated = True
             else:
                 if symbol not in live_stock_prices:
                     continue
                 current_price = live_stock_prices[symbol]
                 pos['current_price'] = current_price
                 pos['last_price_update'] = _cycle_now_iso
+                _any_price_updated = True
                 
             entry_price = pos.get('entry_price', 0)
             stop_loss = pos.get('stop_loss', 0)
@@ -9394,8 +9417,8 @@ def bot_auto_cycle():
                 print(f"{emoji} AUTO-EXIT: {display_name} - {exit_reason} | Entry: ${entry_price:.2f} → Exit: ${exit_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:.1f}%)")
         
         # Save state if any price/SL/target updates were made
-        # Always persist current_price + last_price_update so the UI stays fresh
-        if (dynamic_any_updated or _cycle_now_iso) and not positions_to_remove:
+        # Only persist when something actually changed to avoid unnecessary disk I/O
+        if (dynamic_any_updated or _any_price_updated) and not positions_to_remove:
             with BOT_STATE_LOCK:
                 save_bot_state()
         
@@ -9800,6 +9823,13 @@ def bot_auto_cycle():
         if daily_trade_count >= MAX_DAILY_TRADES:
             skipped_reasons.append(f"Max daily trades reached ({MAX_DAILY_TRADES})")
             execution_signals = []  # Skip execution only; keep display signals
+        
+        # Early guard: if balance is too low for even one position, skip execution loop entirely
+        _available_balance = float(account.get('balance', 0))
+        if _available_balance < position_size * 0.5 and execution_signals:
+            skipped_reasons.append(f"Insufficient balance: ${_available_balance:.2f} < 50% of position_size ${position_size}")
+            print(f"⚠️ Balance too low for trading: ${_available_balance:.2f} (need ≥${position_size * 0.5:.2f})")
+            execution_signals = []
         
         print(f"\U0001f916 Auto-trade check: balance=${account.get('balance', 0):.2f}, positions={current_positions}/{max_positions}, today_entries={daily_trade_count}/{MAX_DAILY_TRADES}, today_closed={today_closed_count}, past_cutoff={is_past_day_trade_cutoff}")
         
