@@ -25,6 +25,10 @@ active_positions.json
 top_picks.json
 *.csv
 *.xlsx
+.yfinance_cache/
+*.db
+*.db-shm
+*.db-wal
 
 # OS
 .DS_Store
