@@ -810,7 +810,13 @@ def update_positions_with_live_prices(positions, force_live=False):
                     pos['underlying_price'] = underlying_price
                     pos['last_price_update'] = now_iso
                 
-                if not expiry or expiry not in available_dates:
+                if not expiry:
+                    _mark_price_update(pos, 'skipped', 'no_expiry_on_position')
+                    continue
+                
+                # If we got dates and the expiry isn't in them → genuinely unavailable.
+                # If dates list is empty (likely rate-limited), try fetching chain directly.
+                if available_dates and expiry not in available_dates:
                     _mark_price_update(pos, 'skipped', 'expiry_not_listed_for_symbol')
                     continue
 

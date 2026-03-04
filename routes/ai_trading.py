@@ -20,6 +20,7 @@ from services.market_data import (
     cached_batch_prices, cached_get_price, cached_get_history,
     cached_get_option_dates, cached_get_option_chain, cached_get_ticker_info,
     fetch_quote_api_batch, scanner_cache, scanner_cache_timeout,
+    prewarm_history_cache,
     _is_rate_limited, _log_fetch_event,
     _is_rate_limit_error, _is_expected_no_data_error, _mark_rate_limited,
     _mark_global_rate_limit, clear_rate_limit_blocks
@@ -521,13 +522,13 @@ def bot_scan():
           f"options={run_options_scan}, intraday_stocks={run_intraday_stocks}, daily={run_daily_scan}")
     
     if run_options_scan:
-        # Intraday options scanner
+        # Intraday options scanner (history pre-warmed; option dates/chains still need API calls)
         results = run_intraday_scan_batched(
             INTRADAY_OPTIONS_UNIVERSE,
             scan_intraday_option,
-            max_workers=4,
-            batch_size=5,
-            batch_delay=0.7,
+            max_workers=3,
+            batch_size=4,
+            batch_delay=1.0,
             fallback_symbols=['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'TSLA']
         )
 
@@ -1465,11 +1466,12 @@ def bot_auto_cycle():
                     'exits_triggered': exits_triggered,
                     'skipped_scan': True
                 })
-            # Even with auto_trade, don't scan more than once per 30 seconds to avoid rate limits
-            # BUT still try to execute trades from cached signals
-            elif seconds_since_scan < 30:
+            # Even with auto_trade, enforce minimum 90s between full scans to avoid
+            # Yahoo rate limits. The scanner makes ~100+ API calls per cycle — at 2 req/s
+            # sustained that's ~50s to complete. A 90s floor ensures caches stay warm.
+            elif seconds_since_scan < 90:
                 skip_scan = True
-                skip_message = f'Rate limited, using cached signals (next scan in {int(30 - seconds_since_scan)}s)'
+                skip_message = f'Rate limited, using cached signals (next scan in {int(90 - seconds_since_scan)}s)'
         except:
             pass
     
@@ -1505,9 +1507,9 @@ def bot_auto_cycle():
             intraday_results = run_intraday_scan_batched(
                 valid_options,
                 scan_intraday_option,
-                max_workers=4,
-                batch_size=5,
-                batch_delay=0.7,
+                max_workers=3,
+                batch_size=4,
+                batch_delay=1.0,
                 fallback_symbols=['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'TSLA']
             )
 
@@ -3056,11 +3058,21 @@ def scan_intraday_stock(symbol):
 
 def run_intraday_scan_batched(symbols, scan_fn, max_workers=5, batch_size=6, batch_delay=0.6, fallback_symbols=None):
     """Run intraday scans in small batches to reduce yfinance 429 rate limits.
+    
+    Phase 1: Pre-warm — single yf.download() batch loads 5d/5m history for all
+             symbols into cache. This replaces N individual API calls with 1.
+    Phase 2: Scan — scan_fn() for each symbol hits the warm cache (no API call
+             for history). Only option dates/chains need individual API calls.
+    
     Returns a plain list of results (no metadata).
     """
     filtered_symbols = [s for s in symbols if s and s.upper() not in KNOWN_DELISTED]
     if not filtered_symbols:
         return []
+
+    # Phase 1: Pre-warm history cache with a single batch download
+    # This prevents N individual cached_get_history() calls from each hitting Yahoo
+    prewarm_history_cache(filtered_symbols, period='5d', interval='5m')
 
     results = []
     for i in range(0, len(filtered_symbols), batch_size):
@@ -3518,9 +3530,9 @@ def bot_intraday_options():
                 results = run_intraday_scan_batched(
                     INTRADAY_OPTIONS_UNIVERSE,
                     scan_intraday_option,
-                    max_workers=4,
-                    batch_size=5,
-                    batch_delay=0.7,
+                    max_workers=3,
+                    batch_size=4,
+                    batch_delay=1.0,
                     fallback_symbols=['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'TSLA']
                 )
 

@@ -45,7 +45,7 @@ _price_cache_ttl = 60      # seconds — stock prices cached for 60s
 _price_cache_lock = threading.Lock()
 
 _history_cache = {}        # {(symbol, period, interval): {'data': DataFrame, 'ts': datetime}}
-_history_cache_ttl = 120   # seconds — history data cached for 2 min
+_history_cache_ttl = 300   # seconds — history data cached for 5 min (scanners don't need fresher)
 _history_cache_lock = threading.Lock()
 _history_rate_limit_block = {}  # {key: unix_timestamp_until} — shared by price + history
 _history_rate_limit_ttl = 120   # seconds — cooldown after per-symbol 429
@@ -56,14 +56,16 @@ _rate_limit_log_lock = threading.Lock()
 # GLOBAL rate limit — when Yahoo blocks the IP entirely, stop ALL requests
 _global_rate_limit_until = 0.0  # unix timestamp; 0 = not blocked
 _global_rate_limit_lock = threading.Lock()
-_global_rate_limit_cooldown = 300  # seconds — back off for 5 min on global 429
+_global_rate_limit_cooldown = 60   # seconds — initial backoff on global 429
+_global_rate_limit_consecutive = 0  # consecutive 429s — drives progressive backoff
+_global_rate_limit_max_cooldown = 300  # max backoff cap (5 min)
 
 _chain_cache = {}          # {(symbol, expiry): {'chain': OptionChain, 'ts': datetime}}
-_chain_cache_ttl = 60      # seconds — option chains cached for 60s
+_chain_cache_ttl = 180     # seconds — option chains cached for 3 min
 _chain_cache_lock = threading.Lock()
 
 _options_dates_cache = {}  # {symbol: {'dates': list, 'ts': datetime}}
-_options_dates_ttl = 300   # seconds — expiry dates rarely change (5 min cache)
+_options_dates_ttl = 600   # seconds — expiry dates change at most once a day (10 min)
 _options_dates_lock = threading.Lock()
 
 _ticker_info_cache = {}    # {symbol: {'info': dict, 'ts': datetime}}
@@ -72,6 +74,37 @@ _ticker_info_lock = threading.Lock()
 
 _fetch_log_cache = {}      # {(kind, key): last_log_unix_ts}
 _fetch_log_lock = threading.Lock()
+
+# =============================
+# GLOBAL TOKEN-BUCKET THROTTLE
+# =============================
+# Limits total Yahoo API requests across ALL callers to avoid 429s.
+_throttle_tokens = 5.0           # current tokens (starts full)
+_throttle_max_tokens = 5.0       # max burst
+_throttle_refill_rate = 2.0      # tokens per second (2 req/s sustained)
+_throttle_last_refill = time.time()
+_throttle_lock = threading.Lock()
+
+
+def _throttle_acquire(timeout=10):
+    """Acquire a token from the global rate limiter. Blocks until available or timeout.
+    Returns True if acquired, False if timed out."""
+    global _throttle_tokens, _throttle_last_refill
+    deadline = time.time() + timeout
+    while True:
+        now = time.time()
+        if now > deadline:
+            return False
+        with _throttle_lock:
+            # Refill tokens
+            elapsed = now - _throttle_last_refill
+            _throttle_tokens = min(_throttle_max_tokens, _throttle_tokens + elapsed * _throttle_refill_rate)
+            _throttle_last_refill = now
+            if _throttle_tokens >= 1.0:
+                _throttle_tokens -= 1.0
+                return True
+        # Wait a short time before retrying
+        time.sleep(0.1)
 
 
 def _log_rate_limit(symbol):
@@ -96,12 +129,28 @@ def _is_globally_rate_limited():
 
 
 def _mark_global_rate_limit():
-    """Set the global rate limit flag — blocks ALL Yahoo requests for the cooldown period."""
+    """Set the global rate limit flag with progressive backoff.
+    First 429 → 60s, second consecutive → 120s, third → 180s, max 300s.
+    Resets to 0 after a successful request."""
     now_ts = time.time()
     with _global_rate_limit_lock:
-        global _global_rate_limit_until
-        _global_rate_limit_until = now_ts + _global_rate_limit_cooldown
-    print(f"[RateLimit] ⛔ GLOBAL rate limit triggered. All Yahoo requests paused for {_global_rate_limit_cooldown}s")
+        global _global_rate_limit_until, _global_rate_limit_consecutive
+        _global_rate_limit_consecutive += 1
+        cooldown = min(
+            _global_rate_limit_cooldown * _global_rate_limit_consecutive,
+            _global_rate_limit_max_cooldown
+        )
+        _global_rate_limit_until = now_ts + cooldown
+    print(f"[RateLimit] ⛔ GLOBAL rate limit triggered (#{_global_rate_limit_consecutive}). "
+          f"All Yahoo requests paused for {cooldown}s")
+
+
+def _mark_global_rate_limit_success():
+    """Reset consecutive 429 counter after a successful Yahoo API call."""
+    global _global_rate_limit_consecutive
+    with _global_rate_limit_lock:
+        if _global_rate_limit_consecutive > 0:
+            _global_rate_limit_consecutive = 0
 
 
 def _is_rate_limited(symbol):
@@ -186,11 +235,19 @@ def cached_get_price(symbol, period='1d', interval='1m', prepost=True, use_cache
                 return entry['price'], entry.get('hist')
         return None, None
 
+    # Throttle: wait for a token before making the API call
+    if not _throttle_acquire(timeout=10):
+        with _price_cache_lock:
+            if cache_key in _price_cache:
+                return _price_cache[cache_key]['price'], _price_cache[cache_key].get('hist')
+        return None, None
+
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period=period, interval=interval, prepost=prepost)
         if not hist.empty:
             price = float(hist['Close'].iloc[-1])
+            _mark_global_rate_limit_success()
             with _price_cache_lock:
                 _price_cache[cache_key] = {'price': price, 'hist': hist, 'ts': now}
             return price, hist
@@ -250,12 +307,21 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
         return prices
     
     if uncached:
+        # Throttle: single token for a batch download (it's one HTTP call)
+        if not _throttle_acquire(timeout=15):
+            # Couldn't get token in time, serve stale cache
+            with _price_cache_lock:
+                for sym in uncached:
+                    if sym in _price_cache:
+                        prices[sym] = _price_cache[sym]['price']
+            return prices
         try:
             # yf.download can fetch multiple symbols at once — single API call
             data = yf.download(uncached, period=period, interval=interval, 
                              prepost=prepost, group_by='ticker', threads=True,
                              progress=False)
             now = datetime.now()
+            _mark_global_rate_limit_success()
             
             if data is None or data.empty:
                 _log_fetch_event('batch-empty', 'prices',
@@ -500,6 +566,98 @@ def _fetch_history_v8_api(symbol, period='3mo', interval='1d'):
         return None
 
 
+def prewarm_history_cache(symbols, period='5d', interval='5m'):
+    """Pre-warm the history cache for multiple symbols using a single yf.download() call.
+    This dramatically reduces API calls: 1 batch request vs N individual requests.
+    Scanner functions that later call cached_get_history() will get cache hits.
+    """
+    if not symbols:
+        return 0
+
+    now = datetime.now()
+    uncached = []
+    
+    # Only fetch symbols not already in cache
+    with _history_cache_lock:
+        for sym in symbols:
+            cache_key = (sym, period, interval)
+            if cache_key in _history_cache:
+                entry = _history_cache[cache_key]
+                if (now - entry['ts']).total_seconds() < _history_cache_ttl:
+                    continue
+            uncached.append(sym)
+    
+    if not uncached:
+        return 0  # Everything already cached
+    
+    if _is_globally_rate_limited():
+        _log_fetch_event('prewarm-skip', 'global',
+            f"[PreWarm] Skipping pre-warm ({len(uncached)} symbols) — globally rate-limited", cooldown=60)
+        return 0
+
+    # Throttle: one token for the batch download
+    if not _throttle_acquire(timeout=15):
+        return 0
+
+    warmed = 0
+    # Download in sub-batches of 30 to avoid huge single requests
+    batch_size = 30
+    for i in range(0, len(uncached), batch_size):
+        chunk = uncached[i:i + batch_size]
+        try:
+            data = yf.download(
+                chunk, period=period, interval=interval,
+                group_by='ticker', threads=True, progress=False
+            )
+            fetch_time = datetime.now()
+            
+            if data is None or data.empty:
+                continue
+            
+            _mark_global_rate_limit_success()
+            
+            if len(chunk) == 1:
+                sym = chunk[0]
+                # Single symbol: flat columns
+                if not data.empty and 'Close' in data.columns:
+                    cache_key = (sym, period, interval)
+                    with _history_cache_lock:
+                        _history_cache[cache_key] = {'data': data.copy(), 'ts': fetch_time}
+                    warmed += 1
+            else:
+                # Multiple symbols: MultiIndex columns
+                if hasattr(data.columns, 'get_level_values'):
+                    try:
+                        avail = list(data.columns.get_level_values(0).unique())
+                    except Exception:
+                        avail = []
+                    for sym in chunk:
+                        try:
+                            if sym in avail:
+                                sym_data = data[sym]
+                                if sym_data is not None and not sym_data.empty:
+                                    cache_key = (sym, period, interval)
+                                    with _history_cache_lock:
+                                        _history_cache[cache_key] = {'data': sym_data.copy(), 'ts': fetch_time}
+                                    warmed += 1
+                        except Exception:
+                            pass
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                _mark_global_rate_limit()
+                break  # Stop pre-warming on rate limit
+
+        # Brief pause between sub-batches
+        if i + batch_size < len(uncached):
+            if not _throttle_acquire(timeout=10):
+                break
+            time.sleep(0.5)
+
+    if warmed > 0:
+        print(f"[PreWarm] ✅ Pre-warmed {warmed}/{len(uncached)} symbols ({period}/{interval}) in batch download")
+    return warmed
+
+
 def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
     """Get historical data with caching. Returns DataFrame or None."""
     cache_key = (symbol, period, interval)
@@ -526,10 +684,18 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
             return df
         return None
     
+    # Throttle: wait for a token
+    if not _throttle_acquire(timeout=10):
+        with _history_cache_lock:
+            if cache_key in _history_cache:
+                return _history_cache[cache_key]['data']
+        return None
+
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval, prepost=prepost)
         if not df.empty:
+            _mark_global_rate_limit_success()
             with _history_cache_lock:
                 _history_cache[cache_key] = {'data': df, 'ts': now}
             return df
@@ -564,9 +730,24 @@ def cached_get_option_dates(symbol):
             if (now - entry['ts']).total_seconds() < _options_dates_ttl:
                 return entry['dates']
     
+    # Respect global rate limit — serve stale cache if available
+    if _is_globally_rate_limited():
+        with _options_dates_lock:
+            if symbol in _options_dates_cache:
+                return _options_dates_cache[symbol]['dates']
+        return []
+    
+    # Throttle: wait for a token
+    if not _throttle_acquire(timeout=10):
+        with _options_dates_lock:
+            if symbol in _options_dates_cache:
+                return _options_dates_cache[symbol]['dates']
+        return []
+
     try:
         ticker = yf.Ticker(symbol)
         dates = list(ticker.options)
+        _mark_global_rate_limit_success()
         with _options_dates_lock:
             _options_dates_cache[symbol] = {'dates': dates, 'ts': now}
         return dates
@@ -577,6 +758,10 @@ def cached_get_option_dates(symbol):
         else:
             if not _is_expected_no_data_error(e):
                 _log_fetch_event('option-dates-error', symbol, f"[Cache] Error fetching option dates for {symbol}: {e}", cooldown=180)
+        # On error, serve stale cache if we have any
+        with _options_dates_lock:
+            if symbol in _options_dates_cache:
+                return _options_dates_cache[symbol]['dates']
     return []
 
 
@@ -599,9 +784,17 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
                 return _chain_cache[cache_key]['chain']
         return None
     
+    # Throttle: wait for a token
+    if not _throttle_acquire(timeout=10):
+        with _chain_cache_lock:
+            if cache_key in _chain_cache:
+                return _chain_cache[cache_key]['chain']
+        return None
+
     try:
         ticker = yf.Ticker(symbol)
         chain = ticker.option_chain(expiry)
+        _mark_global_rate_limit_success()
         with _chain_cache_lock:
             _chain_cache[cache_key] = {'chain': chain, 'ts': now}
         return chain
@@ -609,12 +802,13 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
         if _is_rate_limit_error(e):
             _mark_rate_limited(symbol)
             _mark_global_rate_limit()
-            with _chain_cache_lock:
-                if cache_key in _chain_cache:
-                    return _chain_cache[cache_key]['chain']
         else:
             if not _is_expected_no_data_error(e):
                 _log_fetch_event('option-chain-error', f"{symbol}:{expiry}", f"[Cache] Error fetching option chain for {symbol} {expiry}: {e}", cooldown=180)
+        # On any error, serve stale cache if we have it
+        with _chain_cache_lock:
+            if cache_key in _chain_cache:
+                return _chain_cache[cache_key]['chain']
     return None
 
 
@@ -636,9 +830,17 @@ def cached_get_ticker_info(symbol):
                 return _ticker_info_cache[symbol]['info']
         return {}
     
+    # Throttle: wait for a token
+    if not _throttle_acquire(timeout=10):
+        with _ticker_info_lock:
+            if symbol in _ticker_info_cache:
+                return _ticker_info_cache[symbol]['info']
+        return {}
+
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
+        _mark_global_rate_limit_success()
         with _ticker_info_lock:
             _ticker_info_cache[symbol] = {'info': info, 'ts': now}
         return info
@@ -657,7 +859,7 @@ def cached_get_ticker_info(symbol):
 
 def clear_all_caches():
     """Clear all caches — useful for forced refresh."""
-    global _global_rate_limit_until
+    global _global_rate_limit_until, _global_rate_limit_consecutive
     with _price_cache_lock:
         _price_cache.clear()
     with _history_cache_lock:
@@ -672,16 +874,18 @@ def clear_all_caches():
         _ticker_info_cache.clear()
     with _global_rate_limit_lock:
         _global_rate_limit_until = 0.0
+        _global_rate_limit_consecutive = 0
     print("[Cache] All caches and rate-limit blocks cleared")
 
 
 def clear_rate_limit_blocks():
     """Clear only rate-limit guards without dropping data caches."""
-    global _global_rate_limit_until
+    global _global_rate_limit_until, _global_rate_limit_consecutive
     with _history_rate_limit_lock:
         _history_rate_limit_block.clear()
     with _global_rate_limit_lock:
         _global_rate_limit_until = 0.0
+        _global_rate_limit_consecutive = 0
 
 # Scanner results cache (long-lived)
 scanner_cache = {
@@ -759,7 +963,14 @@ def _fetch_all_quotes_batch(symbols):
                 results[sym] = cached_data
         return results
     
-    # 3. Single yf.download() batch call
+    # 3. Throttle: one token for the batch download
+    if not _throttle_acquire(timeout=15):
+        for sym in uncached:
+            if sym in quote_cache:
+                results[sym] = quote_cache[sym][0]
+        return results
+
+    # 4. Single yf.download() batch call
     try:
         data = yf.download(
             uncached,
