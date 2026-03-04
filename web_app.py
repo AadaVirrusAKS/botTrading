@@ -160,7 +160,8 @@ if __name__ == '__main__':
     except Exception:
         pass
 
-    # Verify yfinance can fetch data
+    # Verify yfinance can fetch data (non-blocking — don't let startup failures
+    # poison the rate-limit state for the rest of the session)
     try:
         _test_ticker = yf.Ticker('SPY')
         _test_hist = _test_ticker.history(period='5d', interval='1d')
@@ -169,7 +170,8 @@ if __name__ == '__main__':
         else:
             raise Exception("Empty data")
     except Exception as _e:
-        _log_fetch_event('startup-yf-check', 'SPY', f"⚠️ Initial yfinance check failed: {_e}", cooldown=60)
+        print(f"⚠️ Initial yfinance check failed: {_e}")
+        # Clear cookies and try ONE more time
         try:
             import shutil as _shutil
             _yf_cache = YF_CACHE_DIR
@@ -180,9 +182,19 @@ if __name__ == '__main__':
             if len(_test_hist) > 0:
                 print(f"✅ yfinance recovered: SPY ${_test_hist['Close'].iloc[-1]:.2f}")
             else:
-                print("🔴 yfinance still returning empty data — Yahoo may be rate-limiting.")
+                print("🔴 yfinance returning empty data — Yahoo may be rate-limiting. Will use API fallbacks.")
         except Exception as _e2:
-            print(f"🔴 yfinance still failing ({_e2}) — will rely on cache fallbacks")
+            print(f"🔴 yfinance still failing ({_e2}) — will use API fallbacks")
+    
+    # CRITICAL: Always clear any rate-limit blocks that may have been set during
+    # startup checks. The startup check is just a health probe — it should never
+    # block the entire session's price fetching.
+    try:
+        from services.market_data import clear_rate_limit_blocks
+        clear_rate_limit_blocks()
+        print("✅ Rate-limit blocks cleared (clean start)")
+    except Exception:
+        pass
 
     print(f"\n🌐 Open your browser and go to: http://localhost:{PORT}")
     print("="*100 + "\n")

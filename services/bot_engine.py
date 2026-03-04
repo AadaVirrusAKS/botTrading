@@ -731,7 +731,7 @@ def update_positions_with_live_prices(positions, force_live=False):
     # --- Update stock positions (BATCHED — single API call for all symbols) ---
     stock_symbols = list(set(p['symbol'] for p in stock_positions))
     if stock_symbols:
-        stock_prices = cached_batch_prices(stock_symbols, period='1d', interval='1m', prepost=True, use_cache=use_cache)
+        stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='5m', prepost=True, use_cache=use_cache)
         quote_api_prices = fetch_quote_api_batch(stock_symbols) if force_live else {}
         for pos in stock_positions:
             if pos['symbol'] in stock_prices:
@@ -743,7 +743,7 @@ def update_positions_with_live_prices(positions, force_live=False):
                 pos['last_price_update'] = now_iso
                 _mark_price_update(pos, 'updated', 'stock_quote_api_refreshed')
             else:
-                fallback_price, _ = cached_get_price(pos['symbol'], period='1d', interval='1m', prepost=True, use_cache=use_cache)
+                fallback_price, _ = cached_get_price(pos['symbol'], period='5d', interval='5m', prepost=True, use_cache=use_cache)
                 if fallback_price is not None:
                     pos['current_price'] = float(fallback_price)
                     pos['last_price_update'] = now_iso
@@ -774,7 +774,7 @@ def update_positions_with_live_prices(positions, force_live=False):
     # Batch fetch underlying prices for all option symbols too
     option_symbols = list(option_by_symbol.keys())
     if option_symbols:
-        underlying_prices = cached_batch_prices(option_symbols, period='1d', interval='1m', prepost=True, use_cache=use_cache)
+        underlying_prices = cached_batch_prices(option_symbols, period='5d', interval='5m', prepost=True, use_cache=use_cache)
     else:
         underlying_prices = {}
     
@@ -976,7 +976,7 @@ def refresh_signal_entries_with_live_prices(signals, force_refresh=False):
             for sym in stock_symbols:
                 _price_cache.pop(sym, None)
 
-    stock_prices = cached_batch_prices(stock_symbols, period='1d', interval='1m', prepost=True) if stock_symbols else {}
+    stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='5m', prepost=True) if stock_symbols else {}
 
     for signal in signals:
         instrument_type = signal.get('instrument_type', 'stock')

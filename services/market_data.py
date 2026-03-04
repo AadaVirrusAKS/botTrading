@@ -158,17 +158,24 @@ def _log_fetch_event(kind, key, message, cooldown=120):
     print(message)
 
 
+# Minimum cache TTL even when force_live is requested — prevents
+# aggressive polling (e.g. 10-second interval) from hammering Yahoo.
+_FORCE_LIVE_MIN_TTL = 15   # seconds — fresh-enough for real-time monitoring
+
 def cached_get_price(symbol, period='1d', interval='1m', prepost=True, use_cache=True):
     """Get current price for a symbol with caching. Returns (price, hist_df) or (None, None)."""
     cache_key = symbol
     now = datetime.now()
     
-    if use_cache:
-        with _price_cache_lock:
-            if cache_key in _price_cache:
-                entry = _price_cache[cache_key]
-                if (now - entry['ts']).total_seconds() < _price_cache_ttl:
-                    return entry['price'], entry.get('hist')
+    with _price_cache_lock:
+        if cache_key in _price_cache:
+            entry = _price_cache[cache_key]
+            age = (now - entry['ts']).total_seconds()
+            if use_cache and age < _price_cache_ttl:
+                return entry['price'], entry.get('hist')
+            # Even for force-live, honour a short minimum TTL
+            if (not use_cache) and age < _FORCE_LIVE_MIN_TTL:
+                return entry['price'], entry.get('hist')
     
     # Skip if rate-limited (per-symbol or global)
     if _is_rate_limited(symbol):
@@ -187,7 +194,14 @@ def cached_get_price(symbol, period='1d', interval='1m', prepost=True, use_cache
             with _price_cache_lock:
                 _price_cache[cache_key] = {'price': price, 'hist': hist, 'ts': now}
             return price, hist
-        # Fallback to 5d
+        # Fallback: try 5d with 5m interval (works pre-market when 1m is empty)
+        hist = ticker.history(period='5d', interval='5m', prepost=prepost)
+        if not hist.empty:
+            price = float(hist['Close'].iloc[-1])
+            with _price_cache_lock:
+                _price_cache[cache_key] = {'price': price, 'hist': hist, 'ts': now}
+            return price, hist
+        # Last resort: 5d daily (always available)
         hist = ticker.history(period='5d', prepost=prepost)
         if not hist.empty:
             price = float(hist['Close'].iloc[-1])
@@ -210,13 +224,18 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
     prices = {}
     uncached = []
 
-    # Always check cache first (even with use_cache=False, serve stale data when globally blocked)
+    # Always check cache first.
+    # Even with use_cache=False (force-live), honour a short minimum TTL
+    # so that 10-second polling doesn't fire redundant API calls.
     with _price_cache_lock:
         for sym in symbols:
             if sym in _price_cache:
                 entry = _price_cache[sym]
                 age = (now - entry['ts']).total_seconds()
                 if use_cache and age < _price_cache_ttl:
+                    prices[sym] = entry['price']
+                elif (not use_cache) and age < _FORCE_LIVE_MIN_TTL:
+                    # force-live but data is very recent — reuse it
                     prices[sym] = entry['price']
                 elif _is_globally_rate_limited():
                     # Serve stale cache when globally rate-limited (better than nothing)
@@ -238,7 +257,10 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
                              progress=False)
             now = datetime.now()
             
-            if data.empty:
+            if data is None or data.empty:
+                _log_fetch_event('batch-empty', 'prices',
+                    f"[BatchPrices] yf.download returned empty for {uncached} ({period}/{interval})",
+                    cooldown=60)
                 pass  # No data returned, fall through to fallback
             elif len(uncached) == 1:
                 sym = uncached[0]
@@ -291,54 +313,152 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
                         if sym not in prices and sym in _price_cache:
                             prices[sym] = _price_cache[sym]['price']
                 return prices
-            elif "'Close'" not in str(e):
-                _log_fetch_event('batch-error', 'prices', f"[Cache] Batch download error: {e}", cooldown=120)
+            else:
+                if "'Close'" not in str(e):
+                    _log_fetch_event('batch-error', 'prices', f"[Cache] Batch download error: {e}", cooldown=120)
+
+        # ── Retry with longer period / coarser interval if 1m batch was empty ──
+        # Before market open (or early pre-market), 1-minute data for the new
+        # trading day doesn't exist yet, so the initial batch returns empty.
+        # A second batch with 5d/5m (or 5d/1d) is far more reliable.
+        missing_after_batch = [s for s in uncached if s not in prices]
+        if missing_after_batch and interval in ('1m', '2m'):
+            _log_fetch_event('batch-retry', 'prices',
+                f"[Cache] {len(missing_after_batch)} symbols missing after {interval} batch — retrying with 5d/5m",
+                cooldown=300)
+            try:
+                data2 = yf.download(missing_after_batch, period='5d', interval='5m',
+                                    prepost=prepost, group_by='ticker', threads=True,
+                                    progress=False)
+                now2 = datetime.now()
+                if data2 is not None and not data2.empty:
+                    if len(missing_after_batch) == 1:
+                        sym = missing_after_batch[0]
+                        if 'Close' in data2.columns:
+                            close_col = data2['Close'].dropna()
+                            if not close_col.empty:
+                                price = float(close_col.iloc[-1])
+                                prices[sym] = price
+                                with _price_cache_lock:
+                                    _price_cache[sym] = {'price': price, 'hist': data2, 'ts': now2}
+                    else:
+                        if hasattr(data2.columns, 'get_level_values'):
+                            try:
+                                avail2 = list(data2.columns.get_level_values(0).unique())
+                            except Exception:
+                                avail2 = []
+                            for sym in missing_after_batch:
+                                try:
+                                    if sym in avail2:
+                                        sd = data2[sym]
+                                        if not sd.empty and 'Close' in sd.columns:
+                                            cl = sd['Close'].dropna()
+                                            if not cl.empty:
+                                                price = float(cl.iloc[-1])
+                                                prices[sym] = price
+                                                with _price_cache_lock:
+                                                    _price_cache[sym] = {'price': price, 'hist': sd, 'ts': now2}
+                                except Exception:
+                                    pass
+            except Exception as e2:
+                if _is_rate_limit_error(e2):
+                    _mark_global_rate_limit()
+                    with _price_cache_lock:
+                        for sym in missing_after_batch:
+                            if sym not in prices and sym in _price_cache:
+                                prices[sym] = _price_cache[sym]['price']
+                    return prices
 
         # Fallback: individually fetch any symbols still missing after batch
         # (batch can return empty for some symbols, e.g. outside market hours
         # with 1m interval, or partial data from yf.download)
-        for sym in uncached:
-            if sym not in prices:
-                p, _ = cached_get_price(sym, period, interval, prepost, use_cache=use_cache)
-                if p is not None:
-                    prices[sym] = p
+        still_missing = [s for s in uncached if s not in prices]
+        if still_missing:
+            # Try individual yfinance calls first
+            for sym in still_missing:
+                if sym not in prices:
+                    p, _ = cached_get_price(sym, period='5d', interval='5m', prepost=prepost, use_cache=use_cache)
+                    if p is not None:
+                        prices[sym] = p
+            
+            # If yfinance is completely blocked, use non-yfinance API fallback
+            final_missing = [s for s in uncached if s not in prices]
+            if final_missing:
+                print(f"[BatchPrices] {len(final_missing)} symbols still missing after all yfinance attempts, trying API fallback")
+                api_prices = fetch_quote_api_batch(final_missing)
+                now_fb = datetime.now()
+                for sym, price in api_prices.items():
+                    if sym not in prices:
+                        prices[sym] = price
+                        with _price_cache_lock:
+                            _price_cache[sym] = {'price': price, 'ts': now_fb}
+                        print(f"[BatchPrices] ✅ Got {sym} from API fallback: ${price:.2f}")
+                
+                # Last resort: ticker info
+                for sym in uncached:
+                    if sym not in prices:
+                        try:
+                            info = cached_get_ticker_info(sym)
+                            p = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+                            if p and float(p) > 0:
+                                prices[sym] = float(p)
+                                with _price_cache_lock:
+                                    _price_cache[sym] = {'price': float(p), 'ts': datetime.now()}
+                                print(f"[BatchPrices] ✅ Got {sym} from ticker info: ${float(p):.2f}")
+                        except Exception:
+                            pass
     
     return prices
 
 
-def fetch_quote_api_batch(symbols, timeout=6):
-    """Fetch best-effort live prices from Yahoo quote API (non-yfinance fallback)."""
+def fetch_quote_api_batch(symbols, timeout=8):
+    """Fetch best-effort live prices using multiple Yahoo Finance API endpoints."""
     unique_symbols = sorted(set((s or '').strip().upper() for s in symbols if s))
     if not unique_symbols:
         return {}
 
+    out = {}
+    
+    # Strategy 1: Yahoo v8 finance/chart endpoint (one per symbol, but very reliable)
     try:
         import requests
-        url = "https://query1.finance.yahoo.com/v7/finance/quote"
-        resp = requests.get(url, params={'symbols': ','.join(unique_symbols)}, timeout=timeout)
-        if resp.status_code != 200:
-            return {}
-        payload = resp.json() or {}
-        rows = (payload.get('quoteResponse') or {}).get('result') or []
-        out = {}
-        for item in rows:
-            symbol = (item.get('symbol') or '').upper()
-            if not symbol:
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+        for sym in unique_symbols:
+            if sym in out:
                 continue
-            price = (
-                item.get('regularMarketPrice')
-                or item.get('postMarketPrice')
-                or item.get('preMarketPrice')
-                or item.get('currentPrice')
-            )
-            if price is not None:
-                try:
-                    out[symbol] = float(price)
-                except Exception:
-                    pass
-        return out
-    except Exception:
-        return {}
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                resp = session.get(url, params={'range': '1d', 'interval': '1m'}, timeout=timeout)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    meta = (data.get('chart', {}).get('result') or [{}])[0].get('meta', {})
+                    price = meta.get('regularMarketPrice') or meta.get('previousClose')
+                    if price:
+                        out[sym] = float(price)
+            except Exception:
+                pass
+        if out:
+            return out
+    except ImportError:
+        pass
+    
+    # Strategy 2: yf.Ticker().fast_info (per-symbol, uses yfinance internals)
+    for sym in unique_symbols:
+        if sym in out:
+            continue
+        try:
+            t = yf.Ticker(sym)
+            fi = t.fast_info
+            price = getattr(fi, 'last_price', None) or getattr(fi, 'previous_close', None)
+            if price and float(price) > 0:
+                out[sym] = float(price)
+        except Exception:
+            pass
+
+    return out
 
 
 def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):

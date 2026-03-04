@@ -540,7 +540,8 @@ def bot_scan():
         min_conf = bot_state['settings'].get('min_confidence', 75)
         
         for r in sorted(results, key=lambda x: x['score'], reverse=True)[:10]:
-            confidence = min(100, max(50, int(40 + r['score'] * 4)))
+            # Score 7-18 maps to ~60-98% confidence
+            confidence = min(98, max(50, int(35 + r['score'] * 3.5)))
             option_signal = {
                 'symbol': r['symbol'],
                 'action': 'BUY',
@@ -548,7 +549,7 @@ def bot_scan():
                 'entry': r['premium'],
                 'stop_loss': r['stop_premium'],
                 'target': r['target_1_premium'],
-                'reason': ', '.join(r['signals'][:3]),
+                'reason': ', '.join(r['signals'][:4]),
                 'instrument_type': 'option',
                 'option_type': r['option_type'],
                 'contract': r['contract'],
@@ -890,7 +891,7 @@ def bot_auto_cycle():
         live_stock_prices = {}
         
         # Batch fetch live stock prices (single API call via cache)
-        live_stock_prices = cached_batch_prices(position_symbols, period='1d', interval='1m', prepost=True)
+        live_stock_prices = cached_batch_prices(position_symbols, period='5d', interval='5m', prepost=True)
         missing_symbols = [s for s in position_symbols if s not in live_stock_prices]
         if missing_symbols:
             quote_api_prices = fetch_quote_api_batch(missing_symbols)
@@ -1042,11 +1043,26 @@ def bot_auto_cycle():
             side = pos.get('side', 'LONG')
             multiplier = 100 if is_option else 1
             
+            # GRACE PERIOD: Don't adjust SL/target or check exits for positions < 60s old
+            # Prevents dynamic SL (VWAP) from instantly killing new positions before they develop
+            _POSITION_GRACE_SECONDS = 60
+            _pos_age_seconds = 999999  # default: no grace
+            _pos_ts = pos.get('timestamp', '')
+            if _pos_ts:
+                try:
+                    _pos_dt = datetime.fromisoformat(_pos_ts.replace('Z', '+00:00'))
+                    if _pos_dt.tzinfo:
+                        _pos_dt = _pos_dt.replace(tzinfo=None)
+                    _pos_age_seconds = (datetime.now() - _pos_dt).total_seconds()
+                except Exception:
+                    pass
+            _in_grace_period = (_pos_age_seconds < _POSITION_GRACE_SECONDS)
+            
             # DYNAMIC SL/TARGET UPDATE for intraday stocks in uptrend
             # Uses VWAP, ATR, EMA to recalculate SL and target based on current conditions
             # Falls back to simple percentage trailing stop for options or if data unavailable
             dynamic_updated = False
-            if not is_option and entry_price > 0 and pos.get('trade_type', 'swing') == 'day':
+            if not _in_grace_period and not is_option and entry_price > 0 and pos.get('trade_type', 'swing') == 'day':
                 pre_df = intraday_5min_data.get(symbol)
                 result = recalculate_intraday_sl_target(symbol, entry_price, stop_loss, target, side, df=pre_df)
                 if result:
@@ -1066,7 +1082,7 @@ def bot_auto_cycle():
                         print(f"🔄 Dynamic SL/Target update for {symbol}: SL=${stop_loss:.2f} Target=${target:.2f} [{sig_str}]")
             
             # TRAILING STOP FALLBACK: ATR-based or simple % trailing for options or if dynamic didn't update
-            if not dynamic_updated:
+            if not dynamic_updated and not _in_grace_period:
                 trailing_mode = str(bot_state['settings'].get('trailing_stop', 'atr')).strip()
                 if not trailing_mode:
                     trailing_mode = 'atr'  # Default to ATR if empty
@@ -1274,7 +1290,8 @@ def bot_auto_cycle():
                         # Continue to check other exit conditions with updated values
             
             # Check exit conditions based on position side (full exit)
-            if not exit_reason:
+            # Skip exit checks during grace period — let the trade develop before evaluating
+            if not exit_reason and not _in_grace_period:
                 if side == 'LONG':
                     if stop_loss > 0 and current_price <= stop_loss:
                         exit_reason = 'TRAILING_STOP' if _stop_is_trailing else 'STOP_LOSS'
@@ -1289,6 +1306,8 @@ def bot_auto_cycle():
                     elif target > 0 and current_price <= target:
                         exit_reason = 'TARGET_HIT'
                         exit_price = current_price
+            elif _in_grace_period and not exit_reason:
+                print(f"⏳ {symbol}: In grace period ({_pos_age_seconds:.0f}s/{_POSITION_GRACE_SECONDS}s) — skipping SL/target/trailing checks")
             
             # TIME-BASED EXIT: Close DAY TRADE positions at 3:45 PM ET
             # Only applies to positions with trade_type='day', NOT swing trades
@@ -1494,7 +1513,8 @@ def bot_auto_cycle():
 
             option_candidates = []
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                confidence = min(100, max(50, int(40 + r['score'] * 4)))
+                # Score 7-18 maps to ~60-98% confidence
+                confidence = min(98, max(50, int(35 + r['score'] * 3.5)))
                 option_signal = {
                     'symbol': r['symbol'],
                     'action': 'BUY',
@@ -1503,7 +1523,7 @@ def bot_auto_cycle():
                     'stop_loss': r['stop_premium'],
                     'target': r['target_1_premium'],
                     'target_2': r.get('target_2_premium'),
-                    'reason': ', '.join(r['signals'][:3]),
+                    'reason': ', '.join(r['signals'][:4]),
                     'score': r['score'],
                     'direction': r['direction'],
                     'rsi': r['rsi'],
@@ -2524,7 +2544,7 @@ def bot_close_all():
         
         # Batch fetch all position prices in a single API call
         all_symbols = list(set(pos['symbol'] for pos in account['positions']))
-        batch_prices = cached_batch_prices(all_symbols, period='1d', interval='1m', prepost=True) if all_symbols else {}
+        batch_prices = cached_batch_prices(all_symbols, period='5d', interval='5m', prepost=True) if all_symbols else {}
         
         total_pnl = 0
         for pos in list(account['positions']):
@@ -3217,7 +3237,9 @@ def scan_intraday_option(symbol):
         if premium <= 0:
             return None
 
-        # Scoring
+        # Scoring (0-18 range)
+        # Factors: volume(1-3), momentum(1-3), IV(0-2), OI(0-2), option_vol(0-2),
+        #          directional_strength(0-2), RSI_sweet_spot(0-2), bid_ask_penalty(0 to -2)
         score = 0
         signals = []
 
@@ -3226,6 +3248,7 @@ def scan_intraday_option(symbol):
         else:
             signals.append(f'📉 {opt_type.upper()} setup')
 
+        # --- Volume ratio (1-3 pts) ---
         if vol_ratio > 2.0:
             score += 3
             signals.append(f'🔥 Vol Spike {vol_ratio:.1f}x')
@@ -3235,6 +3258,7 @@ def scan_intraday_option(symbol):
         else:
             score += 1
 
+        # --- MACD momentum (1-3 pts) ---
         if abs(macd_hist) > 0.1:
             score += 3
             signals.append('Strong Momentum')
@@ -3243,23 +3267,63 @@ def scan_intraday_option(symbol):
         else:
             score += 1
 
+        # --- Implied volatility (0-2 pts) ---
         if iv > 0.5:
             score += 2
             signals.append(f'IV {iv*100:.0f}%')
         elif iv > 0.3:
             score += 1
 
+        # --- Open interest (0-2 pts) ---
         if oi > 1000:
             score += 2
             signals.append(f'OI {oi:,}')
         elif oi > 300:
             score += 1
 
+        # --- Option volume (0-2 pts) ---
         if opt_vol > 500:
             score += 2
             signals.append(f'Opt Vol {opt_vol:,}')
         elif opt_vol > 100:
             score += 1
+
+        # --- Directional alignment strength (0-2 pts) ---
+        # Rewards setups where ALL directional indicators agree
+        dir_pts = bull_pts if direction == 'BULLISH' else bear_pts
+        if dir_pts >= 4:
+            score += 2
+            signals.append('✅ Full Alignment')
+        elif dir_pts >= 3:
+            score += 1
+
+        # --- RSI sweet spot (0-2 pts) ---
+        # Calls are best bought on pullbacks (lower RSI), puts on overbought (higher RSI)
+        if direction == 'BULLISH':
+            if 25 <= rsi <= 45:
+                score += 2
+                signals.append(f'🎯 RSI Sweet Spot ({rsi:.0f})')
+            elif 45 < rsi <= 55:
+                score += 1
+        else:  # BEARISH
+            if 55 <= rsi <= 75:
+                score += 2
+                signals.append(f'🎯 RSI Sweet Spot ({rsi:.0f})')
+            elif 45 <= rsi < 55:
+                score += 1
+
+        # --- Bid-ask spread penalty (0 to -2 pts) ---
+        # Wide spreads = poor liquidity = bad fills
+        if bid > 0 and ask > 0 and premium > 0:
+            spread_pct = (ask - bid) / premium
+            if spread_pct > 0.30:
+                score -= 2
+                signals.append(f'⚠️ Wide Spread ({spread_pct*100:.0f}%)')
+            elif spread_pct > 0.20:
+                score -= 1
+                signals.append(f'⚠️ Spread ({spread_pct*100:.0f}%)')
+            elif spread_pct < 0.10:
+                signals.append('✅ Tight Spread')
 
         # R:R on premium
         sl_premium = round(premium * 0.50, 2)  # 50% stop
@@ -3272,7 +3336,7 @@ def scan_intraday_option(symbol):
         if dte < min_dte_days:
             return None
 
-        if score < 6:
+        if score < 7:
             return None
 
         contract_name = f"{symbol} ${strike:.0f}{opt_type[0].upper()} {best_exp}"

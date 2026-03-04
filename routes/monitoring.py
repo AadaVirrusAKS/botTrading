@@ -106,13 +106,20 @@ def active_positions():
                 ticker = p.get('ticker')
                 if ticker:
                     active_stock_symbols.append(ticker)
-        stock_live_prices = cached_batch_prices(
-            list(set(active_stock_symbols)),
-            period='1d',
-            interval='1m',
-            prepost=True,
-            use_cache=not force_live
-        ) if active_stock_symbols else {}
+        
+        stock_live_prices = {}
+        if active_stock_symbols:
+            unique_symbols = list(set(active_stock_symbols))
+            stock_live_prices = cached_batch_prices(
+                unique_symbols,
+                period='5d',
+                interval='5m',
+                prepost=True,
+                use_cache=not force_live
+            )
+            missing = len(unique_symbols) - len(stock_live_prices)
+            if missing > 0:
+                print(f"[Monitoring] ⚠️ Missing prices for {missing}/{len(unique_symbols)} symbols")
 
         positions_array = []
         for key, pos in positions_dict.items():
