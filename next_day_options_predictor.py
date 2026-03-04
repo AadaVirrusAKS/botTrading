@@ -44,14 +44,26 @@ class NextDayOptionsPredictor:
         return market_open and market_close and is_weekday
     
     def get_live_price(self, ticker):
-        """Get current live price - robust fallback approach"""
+        """Get current live price - uses cached service layer when available for rate-limit resilience"""
+        # Try cached service layer first (has v8 API fallback, handles rate limits)
+        try:
+            from services.market_data import cached_batch_prices
+            prices = cached_batch_prices([ticker], period='5d', interval='5m', prepost=True)
+            if prices and ticker in prices and prices[ticker] is not None:
+                return float(prices[ticker])
+        except ImportError:
+            pass  # Standalone mode - no service layer available
+        except Exception:
+            pass  # Service layer failed, try raw yfinance below
+
+        # Fallback: raw yfinance (for standalone mode or if service layer fails)
         try:
             stock = yf.Ticker(ticker)
             
             # Try historical data first (most reliable)
             hist = stock.history(period='5d')
             if not hist.empty and len(hist) > 0:
-                return hist['Close'].iloc[-1]
+                return float(hist['Close'].iloc[-1])
             
             # Fallback to info
             info = stock.info
@@ -59,11 +71,6 @@ class NextDayOptionsPredictor:
                 return info['currentPrice']
             elif 'regularMarketPrice' in info and info['regularMarketPrice']:
                 return info['regularMarketPrice']
-            
-            # Last resort: intraday data
-            intraday = stock.history(period='1d', interval='1m')
-            if len(intraday) > 0:
-                return intraday['Close'].iloc[-1]
             
             return None
         except Exception as e:
@@ -77,8 +84,13 @@ class NextDayOptionsPredictor:
         Returns live market data instead of estimates.
         """
         try:
-            stock = yf.Ticker(ticker)
-            expirations = stock.options
+            # Try cached service layer first
+            try:
+                from services.market_data import cached_get_option_dates, cached_get_option_chain
+                expirations = cached_get_option_dates(ticker)
+            except ImportError:
+                stock = yf.Ticker(ticker)
+                expirations = list(stock.options) if stock.options else []
             
             if not expirations:
                 return None
@@ -127,8 +139,13 @@ class NextDayOptionsPredictor:
             closest_exp = min(expirations, 
                             key=lambda x: abs((datetime.strptime(x, '%Y-%m-%d') - target_date).days))
             
-            # Get option chain
-            opt_chain = stock.option_chain(closest_exp)
+            # Get option chain (try cached service layer first)
+            try:
+                from services.market_data import cached_get_option_chain
+                opt_chain = cached_get_option_chain(ticker, closest_exp)
+            except ImportError:
+                stock_obj = yf.Ticker(ticker)
+                opt_chain = stock_obj.option_chain(closest_exp)
             chain = opt_chain.calls if option_type.lower() == 'call' else opt_chain.puts
             
             # Find strike closest to requested
@@ -205,9 +222,7 @@ class NextDayOptionsPredictor:
         expiry_type: '0dte', 'daily', 'weekly', 'monthly'
         """
         try:
-            stock = yf.Ticker(ticker)
-            
-            # Get live current price
+            # Get live current price (uses cached service layer with fallbacks)
             current_price = self.get_live_price(ticker)
             if current_price is None:
                 if verbose:
@@ -220,13 +235,29 @@ class NextDayOptionsPredictor:
                 print(f"{'=' * 100}")
                 print(f"  💹 Current Price: ${current_price:.2f}")
             
-            # Get historical data for analysis
-            data_daily = stock.history(period='3mo', interval='1d')
-            data_hourly = stock.history(period='1mo', interval='1h')
+            # Get historical data for analysis (use cached service layer when available)
+            data_daily = None
+            try:
+                from services.market_data import cached_get_history
+                data_daily = cached_get_history(ticker, period='3mo', interval='1d')
+            except ImportError:
+                pass  # Standalone mode
+            except Exception:
+                pass  # Service layer failed
             
-            if len(data_daily) < 50:
+            if data_daily is None or (hasattr(data_daily, 'empty') and data_daily.empty):
+                # Fallback to raw yfinance
+                try:
+                    stock = yf.Ticker(ticker)
+                    data_daily = stock.history(period='3mo', interval='1d')
+                except Exception as e:
+                    if verbose:
+                        print(f"  ❌ Could not get history for {ticker}: {e}")
+                    return None
+            
+            if data_daily is None or len(data_daily) < 50:
                 if verbose:
-                    print(f"  ❌ Insufficient data")
+                    print(f"  ❌ Insufficient data for {ticker}")
                 return None
             
             # Calculate indicators
@@ -239,14 +270,15 @@ class NextDayOptionsPredictor:
             week_ago = data_daily.iloc[-5] if len(data_daily) >= 5 else prev
             
             # Analyze trend and momentum
-            print(f"\n  📈 TECHNICAL ANALYSIS:")
-            print(f"     EMAs: 9={latest['9EMA']:.2f}, 21={latest['21EMA']:.2f}, 50={latest['50EMA']:.2f}, 200={latest['200EMA']:.2f}")
-            print(f"     RSI: {latest['RSI']:.2f}")
-            print(f"     MACD: {latest['MACD']:.2f}, Signal: {latest['Signal']:.2f}")
-            print(f"     Bollinger: Lower={latest['BB_Lower']:.2f}, Upper={latest['BB_Upper']:.2f}")
-            print(f"     ATR: ${latest['ATR']:.2f}")
-            print(f"     Volume Ratio: {latest['Volume_Ratio']:.2f}x")
-            print(f"     ROC (10-day): {latest['ROC']:.2f}%")
+            if verbose:
+                print(f"\n  📈 TECHNICAL ANALYSIS:")
+                print(f"     EMAs: 9={latest['9EMA']:.2f}, 21={latest['21EMA']:.2f}, 50={latest['50EMA']:.2f}, 200={latest['200EMA']:.2f}")
+                print(f"     RSI: {latest['RSI']:.2f}")
+                print(f"     MACD: {latest['MACD']:.2f}, Signal: {latest['Signal']:.2f}")
+                print(f"     Bollinger: Lower={latest['BB_Lower']:.2f}, Upper={latest['BB_Upper']:.2f}")
+                print(f"     ATR: ${latest['ATR']:.2f}")
+                print(f"     Volume Ratio: {latest['Volume_Ratio']:.2f}x")
+                print(f"     ROC (10-day): {latest['ROC']:.2f}%")
             
             # Determine bias (CALL or PUT)
             bullish_score = 0
@@ -255,49 +287,49 @@ class NextDayOptionsPredictor:
             # Trend analysis
             if latest['9EMA'] > latest['21EMA'] > latest['50EMA']:
                 bullish_score += 3
-                print(f"     ✅ Strong bullish EMA alignment")
+                if verbose: print(f"     ✅ Strong bullish EMA alignment")
             elif latest['9EMA'] < latest['21EMA'] < latest['50EMA']:
                 bearish_score += 3
-                print(f"     ✅ Strong bearish EMA alignment")
+                if verbose: print(f"     ✅ Strong bearish EMA alignment")
             
             if current_price > latest['200EMA']:
                 bullish_score += 2
-                print(f"     ✅ Price above 200 EMA (bullish long-term)")
+                if verbose: print(f"     ✅ Price above 200 EMA (bullish long-term)")
             else:
                 bearish_score += 2
-                print(f"     ✅ Price below 200 EMA (bearish long-term)")
+                if verbose: print(f"     ✅ Price below 200 EMA (bearish long-term)")
             
             # MACD
             if latest['MACD'] > latest['Signal']:
                 bullish_score += 2
                 if prev['MACD'] <= prev['Signal']:
                     bullish_score += 1
-                    print(f"     ✅ Fresh MACD bullish crossover")
+                    if verbose: print(f"     ✅ Fresh MACD bullish crossover")
             else:
                 bearish_score += 2
                 if prev['MACD'] >= prev['Signal']:
                     bearish_score += 1
-                    print(f"     ✅ Fresh MACD bearish crossover")
+                    if verbose: print(f"     ✅ Fresh MACD bearish crossover")
             
             # RSI
             if latest['RSI'] < 40:
                 bullish_score += 2
-                print(f"     ✅ RSI oversold - bounce likely")
+                if verbose: print(f"     ✅ RSI oversold - bounce likely")
             elif latest['RSI'] > 60:
                 bearish_score += 2
-                print(f"     ✅ RSI overbought - pullback likely")
+                if verbose: print(f"     ✅ RSI overbought - pullback likely")
             
             # Bollinger Bands
             if current_price <= latest['BB_Lower']:
                 bullish_score += 2
-                print(f"     ✅ At lower Bollinger Band - mean reversion up")
+                if verbose: print(f"     ✅ At lower Bollinger Band - mean reversion up")
             elif current_price >= latest['BB_Upper']:
                 bearish_score += 2
-                print(f"     ✅ At upper Bollinger Band - mean reversion down")
+                if verbose: print(f"     ✅ At upper Bollinger Band - mean reversion down")
             
             # Volume
             if latest['Volume_Ratio'] > 1.5:
-                print(f"     ✅ High volume - strong conviction")
+                if verbose: print(f"     ✅ High volume - strong conviction")
                 if bullish_score > bearish_score:
                     bullish_score += 1
                 else:
@@ -306,25 +338,26 @@ class NextDayOptionsPredictor:
             # Momentum
             if latest['ROC'] > 2:
                 bullish_score += 1
-                print(f"     ✅ Strong positive momentum")
+                if verbose: print(f"     ✅ Strong positive momentum")
             elif latest['ROC'] < -2:
                 bearish_score += 1
-                print(f"     ✅ Strong negative momentum")
+                if verbose: print(f"     ✅ Strong negative momentum")
             
-            print(f"\n  📊 PREDICTION SCORE:")
-            print(f"     Bullish Score: {bullish_score}/15")
-            print(f"     Bearish Score: {bearish_score}/15")
+            if verbose:
+                print(f"\n  📊 PREDICTION SCORE:")
+                print(f"     Bullish Score: {bullish_score}/15")
+                print(f"     Bearish Score: {bearish_score}/15")
             
             # Determine direction
             is_weak_signal = False
             if bullish_score > bearish_score and bullish_score >= 7:
                 direction = 'CALL'
                 confidence = bullish_score
-                print(f"\n  🎯 PREDICTION: CALL (Bullish)")
+                if verbose: print(f"\n  🎯 PREDICTION: CALL (Bullish)")
             elif bearish_score > bullish_score and bearish_score >= 7:
                 direction = 'PUT'
                 confidence = bearish_score
-                print(f"\n  🎯 PREDICTION: PUT (Bearish)")
+                if verbose: print(f"\n  🎯 PREDICTION: PUT (Bearish)")
             else:
                 # Weak signal - still return data but mark as not recommended
                 is_weak_signal = True
@@ -338,8 +371,9 @@ class NextDayOptionsPredictor:
                     # Equal scores - default to bearish for safety
                     direction = 'PUT'
                     confidence = bearish_score
-                print(f"\n  ⚠️  WEAK SIGNAL - Not recommended (scores too close or too low)")
-                print(f"     Direction: {direction} (Low confidence: {confidence}/15)")
+                if verbose:
+                    print(f"\n  ⚠️  WEAK SIGNAL - Not recommended (scores too close or too low)")
+                    print(f"     Direction: {direction} (Low confidence: {confidence}/15)")
             
             # Calculate expected price range for tomorrow
             atr = latest['ATR']
@@ -349,10 +383,11 @@ class NextDayOptionsPredictor:
             expected_high = current_price + atr
             expected_low = current_price - atr
             
-            print(f"\n  📈 EXPECTED TOMORROW'S RANGE:")
-            print(f"     Low: ${expected_low:.2f}")
-            print(f"     High: ${expected_high:.2f}")
-            print(f"     Daily Volatility: {daily_volatility:.2f}%")
+            if verbose:
+                print(f"\n  📈 EXPECTED TOMORROW'S RANGE:")
+                print(f"     Low: ${expected_low:.2f}")
+                print(f"     High: ${expected_high:.2f}")
+                print(f"     Daily Volatility: {daily_volatility:.2f}%")
             
             # Calculate option strike and pricing based on expiry type
             # Different expiry types need different strike offsets and time values

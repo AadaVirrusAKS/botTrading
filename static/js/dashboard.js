@@ -2124,18 +2124,26 @@ class TradingDashboard {
         // Calculate sentiment based on ratio
         if (sentEl && sentDetail && total > 0) {
             const ratio = advancing / total;
-            if (ratio > 0.6) {
+            if (ratio > 0.65) {
+                sentEl.textContent = '🟢 Strong Bullish';
+                sentEl.style.color = '#10b981';
+                sentDetail.textContent = 'Broad market strength';
+            } else if (ratio > 0.52) {
                 sentEl.textContent = '🟢 Bullish';
                 sentEl.style.color = '#10b981';
-                sentDetail.textContent = 'Market strength';
-            } else if (ratio < 0.4) {
-                sentEl.textContent = '🔴 Bearish';
-                sentEl.style.color = '#ef4444';
-                sentDetail.textContent = 'Under pressure';
-            } else {
+                sentDetail.textContent = 'More stocks advancing';
+            } else if (ratio >= 0.48) {
                 sentEl.textContent = '🟡 Neutral';
                 sentEl.style.color = '#f59e0b';
                 sentDetail.textContent = 'Mixed signals';
+            } else if (ratio >= 0.35) {
+                sentEl.textContent = '🔴 Bearish';
+                sentEl.style.color = '#ef4444';
+                sentDetail.textContent = 'More stocks declining';
+            } else {
+                sentEl.textContent = '🔴 Strong Bearish';
+                sentEl.style.color = '#ef4444';
+                sentDetail.textContent = 'Broad market weakness';
             }
         }
         

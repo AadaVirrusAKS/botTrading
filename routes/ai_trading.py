@@ -540,8 +540,8 @@ def bot_scan():
         min_conf = bot_state['settings'].get('min_confidence', 75)
         
         for r in sorted(results, key=lambda x: x['score'], reverse=True)[:10]:
-            # Score 7-18 maps to ~60-98% confidence
-            confidence = min(98, max(50, int(35 + r['score'] * 3.5)))
+            # Score range -1 to 20; 15+ maps to 95%+ confidence
+            confidence = min(98, max(50, int(45 + r['score'] * 3.5)))
             option_signal = {
                 'symbol': r['symbol'],
                 'action': 'BUY',
@@ -1513,8 +1513,8 @@ def bot_auto_cycle():
 
             option_candidates = []
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                # Score 7-18 maps to ~60-98% confidence
-                confidence = min(98, max(50, int(35 + r['score'] * 3.5)))
+                # Score range -1 to 20; 15+ maps to 95%+ confidence
+                confidence = min(98, max(50, int(45 + r['score'] * 3.5)))
                 option_signal = {
                     'symbol': r['symbol'],
                     'action': 'BUY',
@@ -3155,17 +3155,36 @@ def scan_intraday_option(symbol):
         macd_bull = macd_hist > 0
         macd_bear = macd_hist < 0
 
-        # === SIGNAL CONFLICT FILTER (options) ===
-        # Reject if EMA and MACD disagree on direction
+        # === SIGNAL CONFLICT: penalty instead of hard block ===
+        # On recovery/reversal days, EMA crosses before MACD histogram — that's normal.
+        # Only hard-block when MACD histogram is strongly opposed (> 30% of ATR).
+        # Smaller disagreements get a scoring penalty instead.
+        ema_macd_conflict = False
+        strong_conflict = abs(macd_hist) > (atr * 0.3)
         if ema_bull and macd_bear:
-            return None  # Conflicting signals
+            ema_macd_conflict = True
+            if strong_conflict:
+                return None  # Strongly conflicting signals
         if ema_bear and macd_bull:
-            return None  # Conflicting signals
+            ema_macd_conflict = True
+            if strong_conflict:
+                return None  # Strongly conflicting signals
 
         bull_pts = sum([above_vwap, ema_bull, macd_bull, rsi < 65])
         bear_pts = sum([not above_vwap, ema_bear, not macd_bull, rsi > 35])
 
-        if bull_pts >= 3:
+        # If EMA and MACD have a mild conflict, use VWAP and RSI as tiebreakers
+        if ema_macd_conflict:
+            # Price above VWAP and EMA trend = still bullish (EMA leading MACD)
+            if above_vwap and ema_bull and rsi < 70:
+                direction = 'BULLISH'
+                opt_type = 'call'
+            elif not above_vwap and ema_bear and rsi > 30:
+                direction = 'BEARISH'
+                opt_type = 'put'
+            else:
+                return None  # True conflict with no clear tiebreaker
+        elif bull_pts >= 3:
             direction = 'BULLISH'
             opt_type = 'call'
         elif bear_pts >= 3:
@@ -3237,11 +3256,16 @@ def scan_intraday_option(symbol):
         if premium <= 0:
             return None
 
-        # Scoring (0-18 range)
+        # Scoring (0-20 range)
         # Factors: volume(1-3), momentum(1-3), IV(0-2), OI(0-2), option_vol(0-2),
-        #          directional_strength(0-2), RSI_sweet_spot(0-2), bid_ask_penalty(0 to -2)
+        #          directional_strength(0-2), RSI_sweet_spot(0-2), VWAP_alignment(0-2),
+        #          ema_macd_conflict_penalty(0 to -1), bid_ask_penalty(0 to -2)
         score = 0
         signals = []
+
+        # Penalty for EMA/MACD mild conflict (passed the filter but still not ideal)
+        if ema_macd_conflict:
+            score -= 1
 
         if direction == 'BULLISH':
             signals.append(f'📞 {opt_type.upper()} setup')
@@ -3310,6 +3334,22 @@ def scan_intraday_option(symbol):
                 score += 2
                 signals.append(f'🎯 RSI Sweet Spot ({rsi:.0f})')
             elif 45 <= rsi < 55:
+                score += 1
+
+        # --- VWAP alignment (0-2 pts) ---
+        # Price strongly above/below VWAP confirms direction
+        vwap_dist_pct = abs(price - vwap) / vwap * 100 if vwap > 0 else 0
+        if direction == 'BULLISH' and above_vwap:
+            if vwap_dist_pct > 0.3:
+                score += 2
+                signals.append(f'📈 Strong VWAP ({vwap_dist_pct:.1f}%)')
+            else:
+                score += 1
+        elif direction == 'BEARISH' and not above_vwap:
+            if vwap_dist_pct > 0.3:
+                score += 2
+                signals.append(f'📉 Strong VWAP ({vwap_dist_pct:.1f}%)')
+            else:
                 score += 1
 
         # --- Bid-ask spread penalty (0 to -2 pts) ---

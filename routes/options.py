@@ -5,6 +5,7 @@ from flask import Blueprint, render_template, jsonify, request
 import json
 import time
 import re
+import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import yfinance as yf
@@ -12,11 +13,12 @@ import numpy as np
 import pandas as pd
 
 from services.utils import clean_nan_values, SECTOR_ETFS
+from services.symbols import resolve_symbol_or_name
 from services.market_data import (
     cached_get_history, cached_get_option_dates, cached_get_option_chain,
     cached_get_ticker_info, cached_get_price, _log_fetch_event, _is_rate_limited,
     _is_rate_limit_error, _mark_rate_limited, _mark_global_rate_limit,
-    _is_expected_no_data_error, scanner_cache
+    _is_expected_no_data_error, scanner_cache, scanner_cache_timeout
 )
 from next_day_options_predictor import NextDayOptionsPredictor
 

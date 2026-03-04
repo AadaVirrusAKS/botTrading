@@ -461,6 +461,45 @@ def fetch_quote_api_batch(symbols, timeout=8):
     return out
 
 
+def _fetch_history_v8_api(symbol, period='3mo', interval='1d'):
+    """Fallback: fetch historical OHLCV data via Yahoo v8 chart API when yfinance is rate-limited.
+    Returns a DataFrame compatible with yfinance output, or None."""
+    try:
+        import requests
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        params = {'range': period, 'interval': interval, 'includePrePost': 'false'}
+        resp = requests.get(url, params=params, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        result = (data.get('chart', {}).get('result') or [None])[0]
+        if not result:
+            return None
+        timestamps = result.get('timestamp', [])
+        quote = (result.get('indicators', {}).get('quote') or [{}])[0]
+        if not timestamps or not quote:
+            return None
+        df = pd.DataFrame({
+            'Open': quote.get('open', []),
+            'High': quote.get('high', []),
+            'Low': quote.get('low', []),
+            'Close': quote.get('close', []),
+            'Volume': quote.get('volume', []),
+        }, index=pd.to_datetime(timestamps, unit='s'))
+        # Match yfinance convention: intraday index named 'Datetime', daily named 'Date'
+        is_intraday = interval in ('1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h')
+        df.index.name = 'Datetime' if is_intraday else 'Date'
+        df = df.dropna(subset=['Close'])
+        if df.empty:
+            return None
+        _log_fetch_event('history-v8', symbol, f"[History] Got {len(df)} rows for {symbol} via v8 API ({period}/{interval})", cooldown=60)
+        return df
+    except Exception:
+        return None
+
+
 def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
     """Get historical data with caching. Returns DataFrame or None."""
     cache_key = (symbol, period, interval)
@@ -479,6 +518,12 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
         with _history_cache_lock:
             if cache_key in _history_cache:
                 return _history_cache[cache_key]['data']
+        # Try v8 API fallback (different rate-limit pool)
+        df = _fetch_history_v8_api(symbol, period=period, interval=interval)
+        if df is not None and not df.empty:
+            with _history_cache_lock:
+                _history_cache[cache_key] = {'data': df, 'ts': now}
+            return df
         return None
     
     try:
@@ -499,6 +544,13 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
         else:
             if not _is_expected_no_data_error(e):
                 _log_fetch_event('history-error', symbol, f"[Cache] Error fetching history for {symbol}: {e}", cooldown=180)
+    
+    # Final fallback: v8 API
+    df = _fetch_history_v8_api(symbol, period=period, interval=interval)
+    if df is not None and not df.empty:
+        with _history_cache_lock:
+            _history_cache[cache_key] = {'data': df, 'ts': now}
+        return df
     return None
 
 
