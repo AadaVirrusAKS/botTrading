@@ -663,17 +663,31 @@
                 html += `<div><strong>Strike:</strong> $${pred.strike_price ? pred.strike_price.toFixed(0) : 'N/A'}</div>`;
                 html += `</div></div>`;
                 
-                // Premium with LIVE/ESTIMATED indicator
+                // Premium with delayed/estimated indicator
                 const premiumBadge = pred.premium_source === 'LIVE' 
-                    ? '<span style="background: var(--accent-green); color: #000; font-size: 9px; padding: 2px 5px; border-radius: 3px; font-weight: 600; margin-left: 5px;">🔴 LIVE</span>'
+                    ? '<span style="background: #ff9800; color: #000; font-size: 9px; padding: 2px 5px; border-radius: 3px; font-weight: 600; margin-left: 5px;" title="Yahoo Finance data may be 15-20 min delayed">⚠️ DELAYED</span>'
                     : '<span style="background: var(--text-secondary); color: #fff; font-size: 9px; padding: 2px 5px; border-radius: 3px; margin-left: 5px;">EST</span>';
+                
+                // Bid/Ask display
+                const hasBidAsk = pred.option_bid > 0 && pred.option_ask > 0;
+                const bidAskSpread = hasBidAsk ? (pred.option_ask - pred.option_bid).toFixed(2) : null;
                 
                 html += `<div style="background: rgba(255, 255, 255, 0.05); padding: 8px; border-radius: 4px;">`;
                 html += `<div style="font-weight: 600; margin-bottom: 6px; color: var(--accent-blue); font-size: 11px;">📊 PREMIUM TARGETS</div>`;
                 html += `<div style="display: grid; gap: 4px; font-size: 11px;">`;
                 html += `<div style="display: flex; justify-content: space-between;">`;
-                html += `<span>Entry:</span><strong>$${pred.entry_premium ? pred.entry_premium.toFixed(2) : 'N/A'}${premiumBadge}</strong>`;
+                html += `<span>Entry (mid):</span><strong>$${pred.entry_premium ? pred.entry_premium.toFixed(2) : 'N/A'}${premiumBadge}</strong>`;
                 html += `</div>`;
+                if (hasBidAsk) {
+                    html += `<div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-secondary);">`;
+                    html += `<span>Bid / Ask:</span><span>$${pred.option_bid.toFixed(2)} / $${pred.option_ask.toFixed(2)} <span style="opacity: 0.7;">(spread $${bidAskSpread})</span></span>`;
+                    html += `</div>`;
+                }
+                if (pred.option_last > 0) {
+                    html += `<div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-secondary);">`;
+                    html += `<span>Last Traded:</span><span>$${pred.option_last.toFixed(2)}</span>`;
+                    html += `</div>`;
+                }
                 html += `<div style="display: flex; justify-content: space-between; color: var(--accent-green);">`;
                 html += `<span>🎯 1:3:</span><strong>$${pred.target_premium_3x ? pred.target_premium_3x.toFixed(2) : 'N/A'} (+${target3xGain}%)</strong>`;
                 html += `</div>`;
@@ -730,7 +744,10 @@
                                 const signalColor = isBullish ? 'var(--accent-green)' : 'var(--accent-red)';
                                 const target3xGain = pred.target_premium_3x && pred.entry_premium ? ((pred.target_premium_3x - pred.entry_premium) / pred.entry_premium * 100).toFixed(0) : 0;
                                 const target5xGain = pred.target_premium_5x && pred.entry_premium ? ((pred.target_premium_5x - pred.entry_premium) / pred.entry_premium * 100).toFixed(0) : 0;
-                                const premiumBadge = pred.premium_source === 'LIVE' ? '🔴' : '';
+                                const premiumBadge = pred.premium_source === 'LIVE' 
+                                    ? '<span style="background: #ff9800; color: #000; font-size: 8px; padding: 1px 4px; border-radius: 3px; font-weight: 600;" title="Yahoo Finance data may be 15-20 min delayed">⚠️</span>' 
+                                    : '<span style="font-size: 8px; color: var(--text-secondary);">(est)</span>';
+                                const hasBidAsk = pred.option_bid > 0 && pred.option_ask > 0;
                                 
                                 return `
                                     <tr style="border-bottom: 1px solid var(--border-color);">
@@ -757,7 +774,8 @@
                                             $${pred.strike_price ? pred.strike_price.toFixed(0) : 'N/A'}
                                         </td>
                                         <td style="text-align: right; padding: 12px; color: var(--accent-blue); font-weight: 600;">
-                                            $${pred.entry_premium ? pred.entry_premium.toFixed(2) : 'N/A'} ${premiumBadge}
+                                            <div>$${pred.entry_premium ? pred.entry_premium.toFixed(2) : 'N/A'} ${premiumBadge}</div>
+                                            ${hasBidAsk ? `<div style="font-size: 9px; color: var(--text-secondary); margin-top: 2px;">B: $${pred.option_bid.toFixed(2)} / A: $${pred.option_ask.toFixed(2)}</div>` : ''}
                                         </td>
                                         <td style="text-align: right; padding: 12px; color: var(--accent-green);">
                                             <div>$${pred.target_premium_3x ? pred.target_premium_3x.toFixed(2) : 'N/A'}</div>

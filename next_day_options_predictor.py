@@ -454,7 +454,16 @@ class NextDayOptionsPredictor:
             # Try to get REAL option premium from market (pass expiry_type)
             real_option = self.get_real_option_premium(ticker, strike_price, option_type=direction.lower(), expiry_type=expiry_type)
             
+            # Track bid/ask/last for transparency
+            option_bid = 0
+            option_ask = 0
+            option_last = 0
+            
             if real_option:
+                option_bid = real_option.get('bid', 0) or 0
+                option_ask = real_option.get('ask', 0) or 0
+                option_last = real_option.get('lastPrice', 0) or 0
+                
                 # Use real market data - but only if premium is meaningful
                 actual_premium = real_option['mid']  # Mid price (avg of bid/ask)
                 
@@ -566,7 +575,10 @@ class NextDayOptionsPredictor:
                 'strike_price': strike_price,
                 'estimated_premium': estimated_premium,
                 'entry_premium': estimated_premium,
-                'premium_source': premium_source,  # NEW: 'LIVE' or 'ESTIMATED'
+                'premium_source': premium_source,  # 'LIVE' or 'ESTIMATED'
+                'option_bid': round(option_bid, 2),
+                'option_ask': round(option_ask, 2),
+                'option_last': round(option_last, 2),
                 'entry_price': current_price,
                 'target_premium_3x': target_premium_3x,
                 'target_premium_5x': target_premium_5x,
