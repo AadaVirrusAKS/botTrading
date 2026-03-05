@@ -15,7 +15,9 @@ from services.market_data import (
     _chain_cache, _chain_cache_lock, _chain_cache_ttl,
     _options_dates_cache, _options_dates_lock, _options_dates_ttl,
     _ticker_info_cache, _ticker_info_lock, _ticker_info_ttl,
-    clear_all_caches, YF_CACHE_DIR
+    clear_all_caches, YF_CACHE_DIR,
+    _global_rate_limit_until, _global_rate_limit_lock,
+    _global_rate_limit_consecutive
 )
 from services.bot_engine import (
     bot_state, BOT_STATE_LOCK, update_positions_with_live_prices,
@@ -61,6 +63,32 @@ def cache_clear():
     """Clear all caches for forced refresh"""
     clear_all_caches()
     return jsonify({'success': True, 'message': 'All caches cleared'})
+
+@cache_bp.route('/api/cache/rate_limit')
+def rate_limit_status():
+    """Check current rate limit state"""
+    import services.market_data as md
+    now_ts = time.time()
+    with md._global_rate_limit_lock:
+        until = md._global_rate_limit_until
+        consecutive = md._global_rate_limit_consecutive
+    is_limited = now_ts < until
+    remaining = max(0, until - now_ts) if is_limited else 0
+    return jsonify({
+        'success': True,
+        'rate_limited': is_limited,
+        'remaining_seconds': round(remaining, 1),
+        'consecutive_429s': consecutive
+    })
+
+@cache_bp.route('/api/cache/rate_limit/reset', methods=['POST'])
+def rate_limit_reset():
+    """Reset the global rate limit to allow requests again"""
+    import services.market_data as md
+    with md._global_rate_limit_lock:
+        md._global_rate_limit_until = 0.0
+        md._global_rate_limit_consecutive = 0
+    return jsonify({'success': True, 'message': 'Rate limit reset'})
 
 
 # ============================================================================

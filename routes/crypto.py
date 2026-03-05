@@ -13,7 +13,7 @@ from services.utils import clean_nan_values
 from services.market_data import (
     cached_get_ticker_info, _log_fetch_event, _is_rate_limited,
     _ticker_info_cache, _ticker_info_lock, _ticker_info_ttl,
-    _fetch_all_quotes_batch
+    _fetch_all_quotes_batch, quote_cache
 )
 
 crypto_bp = Blueprint("crypto", __name__)
@@ -103,9 +103,79 @@ def _get_cached_info_only(symbol):
     return {}
 
 
+def _direct_crypto_download(symbols):
+    """Fallback: fetch crypto quotes via direct yf.download, bypassing throttle/rate-limit guards."""
+    try:
+        data = yf.download(
+            symbols, period='5d', interval='1d',
+            group_by='ticker', threads=True, progress=False, timeout=60
+        )
+        if data is None or data.empty:
+            return {}
+
+        results = {}
+        fetch_time = datetime.now()
+
+        if len(symbols) == 1:
+            sym = symbols[0]
+            close_vals = data['Close'].dropna() if 'Close' in data.columns else None
+            if close_vals is not None and len(close_vals) >= 2:
+                cur = float(close_vals.iloc[-1])
+                prev = float(close_vals.iloc[-2])
+                change = cur - prev
+                q = {
+                    'symbol': sym, 'price': round(cur, 2),
+                    'change': round(change, 2),
+                    'changePct': round((change / prev * 100) if prev else 0, 2),
+                    'volume': int(data['Volume'].iloc[-1]) if 'Volume' in data.columns else 0,
+                    'high': round(float(data['High'].iloc[-1]), 2) if 'High' in data.columns else 0,
+                    'low': round(float(data['Low'].iloc[-1]), 2) if 'Low' in data.columns else 0,
+                }
+                results[sym] = q
+                quote_cache[sym] = (q, fetch_time)
+        else:
+            avail = list(data.columns.get_level_values(0).unique()) if hasattr(data.columns, 'get_level_values') else []
+            for sym in symbols:
+                try:
+                    if sym not in avail:
+                        continue
+                    sd = data[sym]
+                    cv = sd['Close'].dropna() if 'Close' in sd.columns else None
+                    if cv is None or len(cv) < 2:
+                        continue
+                    cur = float(cv.iloc[-1])
+                    prev = float(cv.iloc[-2])
+                    if cur <= 0:
+                        continue
+                    change = cur - prev
+                    q = {
+                        'symbol': sym, 'price': round(cur, 2),
+                        'change': round(change, 2),
+                        'changePct': round((change / prev * 100) if prev else 0, 2),
+                        'volume': int(sd['Volume'].iloc[-1]) if 'Volume' in sd.columns else 0,
+                        'high': round(float(sd['High'].iloc[-1]), 2) if 'High' in sd.columns else 0,
+                        'low': round(float(sd['Low'].iloc[-1]), 2) if 'Low' in sd.columns else 0,
+                    }
+                    results[sym] = q
+                    quote_cache[sym] = (q, fetch_time)
+                except Exception:
+                    continue
+        print(f"🪙 Crypto fallback fetch: got {len(results)}/{len(symbols)} symbols")
+        return results
+    except Exception as e:
+        print(f"🪙 Crypto fallback fetch error: {e}")
+        return {}
+
+
 def _get_crypto_data_batch(symbols):
-    """Get crypto quote rows via single batch quote call plus cached-only metadata."""
+    """Get crypto quote rows via single batch quote call plus cached-only metadata.
+    Falls back to direct yf.download if the shared fetcher returns empty (rate-limited)."""
     quotes_map = _fetch_all_quotes_batch(symbols)
+
+    # Fallback: if shared fetcher returned nothing, try direct download
+    if not quotes_map:
+        quotes_map = _direct_crypto_download(symbols)
+
     cryptos = []
 
     for symbol in symbols:

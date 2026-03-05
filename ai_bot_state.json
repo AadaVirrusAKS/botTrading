@@ -46,7 +46,7 @@
       "open_interest": 945,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T17:03:17.386152"
+      "live_price_update": "2026-03-05T17:46:29.299913"
     },
     {
       "symbol": "ORCL",
@@ -73,7 +73,7 @@
       "open_interest": 1366,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T17:03:17.386152"
+      "live_price_update": "2026-03-05T17:46:29.299913"
     },
     {
       "symbol": "SOFI",
@@ -100,7 +100,7 @@
       "open_interest": 6716,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T17:03:17.386152"
+      "live_price_update": "2026-03-05T17:46:29.299913"
     },
     {
       "symbol": "AAPL",
@@ -127,7 +127,7 @@
       "open_interest": 588,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T17:03:17.386152"
+      "live_price_update": "2026-03-05T17:46:29.299913"
     },
     {
       "symbol": "MSFT",
@@ -154,7 +154,7 @@
       "open_interest": 2612,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T17:03:17.386152"
+      "live_price_update": "2026-03-05T17:46:29.299913"
     }
   ],
   "demo_account": {
