@@ -78,6 +78,11 @@ def crypto_page():
     """Crypto Dashboard page"""
     return render_template('crypto.html')
 
+@pages_bp.route('/alpaca')
+def alpaca_page():
+    """Alpaca Paper Trading page"""
+    return render_template('alpaca.html')
+
 @pages_bp.route('/ai-analysis')
 def ai_analysis_page():
     """AI Stock Analysis - Candlestick pattern recognition & price prediction"""

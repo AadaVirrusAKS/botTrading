@@ -34,7 +34,8 @@ from services.bot_engine import (
     add_or_update_position, update_positions_with_live_prices,
     get_live_option_premium, is_zero_dte_or_expired,
     get_min_option_dte_days, get_option_dte, is_option_expiry_blocked,
-    refresh_signal_entries_with_live_prices, WATCHLISTS
+    refresh_signal_entries_with_live_prices, WATCHLISTS,
+    is_alpaca_execution_enabled, execute_alpaca_entry, execute_alpaca_exit
 )
 from services.symbols import is_valid_symbol_cached, filter_valid_symbols, resolve_symbol_or_name, KNOWN_DELISTED
 
@@ -127,6 +128,8 @@ def bot_status():
         'success': True,
         'running': state_copy['running'],
         'auto_trade': state_copy['auto_trade'],
+        'alpaca_execution': bot_state.get('alpaca_execution', False),
+        'alpaca_connected': is_alpaca_execution_enabled(),
         'account_mode': state_copy['account_mode'],
         'strategy': state_copy['strategy'],
         'settings': state_copy['settings'],
@@ -159,6 +162,7 @@ def bot_start():
         load_bot_state()  # Load existing state first
         bot_state['running'] = True
         bot_state['auto_trade'] = req.get('auto_trade', False)  # Enable auto-trading
+        bot_state['alpaca_execution'] = req.get('alpaca_execution', bot_state.get('alpaca_execution', False))
         bot_state['account_mode'] = req.get('account_mode', 'demo')
         bot_state['strategy'] = req.get('strategy', 'trend_following')
         bot_state['last_scan'] = None  # Clear last scan so first auto_cycle runs immediately
@@ -238,6 +242,11 @@ def bot_update_settings():
         if 'auto_trade' in req:
             bot_state['auto_trade'] = req['auto_trade']
             print(f"\U0001f527 Updated auto_trade: {bot_state['auto_trade']}")
+        
+        # Update alpaca_execution if provided
+        if 'alpaca_execution' in req:
+            bot_state['alpaca_execution'] = req['alpaca_execution']
+            print(f"\U0001f527 Updated alpaca_execution: {bot_state['alpaca_execution']}")
         
         # Update strategy if provided
         if 'strategy' in req:
@@ -1345,6 +1354,14 @@ def bot_auto_cycle():
                 # Mark position for removal
                 positions_to_remove.append(pos)
                 
+                # Close on Alpaca if this position has an Alpaca order
+                alpaca_close_order_id = None
+                if is_alpaca_execution_enabled() and pos.get('alpaca_order_id'):
+                    close_sym = pos.get('option_ticker') or symbol
+                    alpaca_close = execute_alpaca_exit(close_sym, qty=quantity)
+                    if alpaca_close['success']:
+                        alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
+                
                 # Log the exit trade with instrument info
                 exit_trade = {
                     'symbol': symbol,
@@ -1363,7 +1380,8 @@ def bot_auto_cycle():
                     'reason': exit_reason,
                     'timestamp': datetime.now().isoformat(),
                     'auto_exit': True,
-                    'trade_type': pos.get('trade_type', 'swing')
+                    'trade_type': pos.get('trade_type', 'swing'),
+                    'alpaca_order_id': alpaca_close_order_id
                 }
                 account['trades'].append(exit_trade)
                 
@@ -1974,6 +1992,19 @@ def bot_auto_cycle():
                     }
                     account['positions'].append(position)
                     
+                    # Execute on Alpaca if enabled (options use the option_ticker symbol)
+                    alpaca_order_id = None
+                    if is_alpaca_execution_enabled() and signal.get('option_ticker'):
+                        alpaca_result = execute_alpaca_entry(
+                            signal['option_ticker'], contracts_qty, 'LONG',
+                            stop_loss=live_stop_loss, take_profit=signal.get('target')
+                        )
+                        if alpaca_result['success']:
+                            alpaca_order_id = alpaca_result['order'].get('id')
+                            position['alpaca_order_id'] = alpaca_order_id
+                        else:
+                            print(f"⚠️ Alpaca option order failed for {signal.get('contract')}, tracked locally only: {alpaca_result['error']}")
+                    
                     trade = {
                         'symbol': signal['symbol'],
                         'contract': signal.get('contract', ''),
@@ -1991,7 +2022,8 @@ def bot_auto_cycle():
                         'reason': signal.get('reason', ''),
                         'timestamp': datetime.now().isoformat(),
                         'auto_trade': True,
-                        'source': 'bot'
+                        'source': 'bot',
+                        'alpaca_order_id': alpaca_order_id
                     }
                     account['trades'].append(trade)
                     # Recalculate balance from trade history (authoritative)
@@ -2072,6 +2104,19 @@ def bot_auto_cycle():
                         extra_fields={'auto_trade': True, 'source': 'bot', 'instrument_type': 'stock', 'trade_type': trade_type, '_cached_atr': _cached_atr_stock}
                     )
                     
+                    # Execute on Alpaca if enabled
+                    alpaca_order_id = None
+                    if is_alpaca_execution_enabled():
+                        alpaca_result = execute_alpaca_entry(
+                            signal['symbol'], quantity, side,
+                            stop_loss=live_stop_loss, take_profit=signal.get('target')
+                        )
+                        if alpaca_result['success']:
+                            alpaca_order_id = alpaca_result['order'].get('id')
+                            position['alpaca_order_id'] = alpaca_order_id
+                        else:
+                            print(f"⚠️ Alpaca order failed for {signal['symbol']}, position tracked locally only: {alpaca_result['error']}")
+                    
                     trade = {
                         'symbol': signal['symbol'],
                         'action': signal['action'],
@@ -2084,7 +2129,8 @@ def bot_auto_cycle():
                         'timestamp': datetime.now().isoformat(),
                         'auto_trade': True,
                         'source': 'bot',
-                        'trade_type': trade_type
+                        'trade_type': trade_type,
+                        'alpaca_order_id': alpaca_order_id
                     }
                     account['trades'].append(trade)
                     # Recalculate balance from trade history (authoritative)
@@ -2196,6 +2242,14 @@ def bot_trade():
                 extra_fields={'instrument_type': 'stock', 'trade_type': trade_type, 'source': 'manual'}
             )
 
+            # Execute on Alpaca if enabled
+            alpaca_order_id = None
+            if is_alpaca_execution_enabled():
+                alpaca_result = execute_alpaca_entry(symbol, quantity, 'LONG', stop_loss=stop_loss, take_profit=target)
+                if alpaca_result['success']:
+                    alpaca_order_id = alpaca_result['order'].get('id')
+                    position['alpaca_order_id'] = alpaca_order_id
+
             # Log trade
             trade = {
                 'symbol': symbol,
@@ -2207,7 +2261,8 @@ def bot_trade():
                 'price': price,
                 'trade_type': trade_type,
                 'added_to_existing': not is_new,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'alpaca_order_id': alpaca_order_id
             }
             account['trades'].append(trade)
             
@@ -2238,6 +2293,13 @@ def bot_trade():
                 
                 pnl = (price - long_position['entry_price']) * long_position['quantity']
                 
+                # Close on Alpaca if this position has an Alpaca order
+                alpaca_close_id = None
+                if is_alpaca_execution_enabled() and long_position.get('alpaca_order_id'):
+                    alpaca_close = execute_alpaca_exit(symbol)
+                    if alpaca_close['success']:
+                        alpaca_close_id = alpaca_close.get('order', {}).get('id')
+                
                 # Log trade with P&L
                 trade = {
                     'symbol': symbol,
@@ -2249,7 +2311,8 @@ def bot_trade():
                     'price': price,
                     'pnl': pnl,
                     'pnl_pct': ((price - long_position['entry_price']) / long_position['entry_price'] * 100) if long_position['entry_price'] > 0 else 0,
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat(),
+                    'alpaca_order_id': alpaca_close_id
                 }
                 account['trades'].append(trade)
                 account['positions'].remove(long_position)

@@ -1,6 +1,7 @@
 {
-  "running": true,
+  "running": false,
   "auto_trade": true,
+  "alpaca_execution": false,
   "account_mode": "demo",
   "strategy": "trend_following",
   "settings": {
@@ -18,7 +19,7 @@
     "trailing_stop": "2",
     "instrument_type": "options"
   },
-  "last_scan": "2026-03-05T14:59:10.961924",
+  "last_scan": "2026-03-05T16:53:06.469695",
   "signals": [
     {
       "symbol": "GOOGL",
@@ -45,7 +46,7 @@
       "open_interest": 945,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T15:36:41.597918"
+      "live_price_update": "2026-03-05T17:03:17.386152"
     },
     {
       "symbol": "ORCL",
@@ -72,7 +73,7 @@
       "open_interest": 1366,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T15:36:41.597918"
+      "live_price_update": "2026-03-05T17:03:17.386152"
     },
     {
       "symbol": "SOFI",
@@ -99,7 +100,7 @@
       "open_interest": 6716,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T15:36:41.597918"
+      "live_price_update": "2026-03-05T17:03:17.386152"
     },
     {
       "symbol": "AAPL",
@@ -126,7 +127,7 @@
       "open_interest": 588,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T15:36:41.597918"
+      "live_price_update": "2026-03-05T17:03:17.386152"
     },
     {
       "symbol": "MSFT",
@@ -153,11 +154,11 @@
       "open_interest": 2612,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-05T15:36:41.597918"
+      "live_price_update": "2026-03-05T17:03:17.386152"
     }
   ],
   "demo_account": {
-    "balance": 39144.7,
+    "balance": 41184.7,
     "initial_balance": 10000.0,
     "positions": [],
     "trades": [
@@ -11665,25 +11666,6 @@
         "trade_type": "swing"
       },
       {
-        "symbol": "TSLA",
-        "contract": "TSLA $400P 2026-03-09",
-        "option_ticker": "",
-        "action": "BUY",
-        "side": "LONG",
-        "instrument_type": "option",
-        "option_type": "put",
-        "quantity": 8,
-        "price": 6.25,
-        "cost": 5000.0,
-        "strike": 400.0,
-        "expiry": "2026-03-09",
-        "confidence": 90,
-        "reason": "\ud83d\udcc9 PUT setup, Strong Momentum, OI 2,142, Opt Vol 10,400",
-        "timestamp": "2026-03-05T14:11:06.111439",
-        "auto_trade": true,
-        "source": "bot"
-      },
-      {
         "symbol": "CRM",
         "contract": "CRM $205C 2026-03-13",
         "action": "SELL",
@@ -11748,25 +11730,6 @@
         "pnl": 257.99999999999983,
         "pnl_pct": 6.46616541353383,
         "timestamp": "2026-03-05T14:45:19.267158"
-      },
-      {
-        "symbol": "TSLA",
-        "contract": "TSLA $400P 2026-03-09",
-        "action": "SELL",
-        "side": "LONG",
-        "instrument_type": "option",
-        "option_type": "put",
-        "source": "bot",
-        "quantity": 8,
-        "entry_price": 6.25,
-        "exit_price": 3.7,
-        "price": 3.7,
-        "pnl": -2039.9999999999998,
-        "pnl_pct": -40.8,
-        "reason": "MAX_LOSS_GUARD",
-        "timestamp": "2026-03-05T15:27:27.326988",
-        "auto_exit": true,
-        "trade_type": "swing"
       }
     ],
     "pnl_history": []

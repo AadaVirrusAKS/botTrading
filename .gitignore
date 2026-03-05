@@ -23,6 +23,7 @@ env/
 .browser_launched
 active_positions.json
 top_picks.json
+alpaca_config.json
 *.csv
 *.xlsx
 .yfinance_cache/

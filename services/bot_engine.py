@@ -32,6 +32,7 @@ from services.symbols import resolve_symbol_or_name, is_valid_symbol_cached
 bot_state = {
     'running': False,
     'auto_trade': False,  # Auto-execute trades when signals meet criteria
+    'alpaca_execution': False,  # Execute trades via Alpaca paper trading
     'account_mode': 'demo',
     'strategy': 'trend_following',
     'settings': {
@@ -376,6 +377,59 @@ def load_bot_state():
 def save_bot_state():
     with open(BOT_STATE_FILE, 'w') as f:
         json.dump(bot_state, f, indent=2, default=str)
+
+
+# =============================
+# ALPACA EXECUTION HELPERS
+# =============================
+def is_alpaca_execution_enabled():
+    """Check if Alpaca execution is enabled and configured."""
+    if not bot_state.get('alpaca_execution', False):
+        return False
+    try:
+        from services.alpaca_service import is_configured, ALPACA_AVAILABLE
+        return ALPACA_AVAILABLE and is_configured()
+    except ImportError:
+        return False
+
+
+def execute_alpaca_entry(symbol, qty, side, order_type='market', stop_loss=None, take_profit=None):
+    """
+    Execute a BUY/SELL entry order on Alpaca paper trading.
+    Returns dict with 'success', 'order', and 'error' keys.
+    """
+    try:
+        from services.alpaca_service import place_order
+        alpaca_side = 'buy' if side == 'LONG' else 'sell'
+        result = place_order(
+            symbol=symbol,
+            qty=qty,
+            side=alpaca_side,
+            order_type=order_type,
+            stop_loss=round(stop_loss, 2) if stop_loss else None,
+            take_profit=round(take_profit, 2) if take_profit else None,
+        )
+        print(f"📈 ALPACA ORDER: {alpaca_side.upper()} {qty} {symbol} → {result.get('status', 'unknown')} (ID: {result.get('id', 'N/A')})")
+        return {'success': True, 'order': result}
+    except Exception as e:
+        print(f"❌ ALPACA ORDER FAILED: {symbol} - {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def execute_alpaca_exit(symbol, qty=None):
+    """
+    Close a position on Alpaca paper trading (full or partial).
+    Returns dict with 'success', 'order'/'error' keys.
+    """
+    try:
+        from services.alpaca_service import close_position
+        result = close_position(symbol, qty=float(qty) if qty else None)
+        print(f"📉 ALPACA CLOSE: {symbol} → {result.get('status', 'closed')}")
+        return {'success': True, 'order': result}
+    except Exception as e:
+        print(f"❌ ALPACA CLOSE FAILED: {symbol} - {e}")
+        return {'success': False, 'error': str(e)}
+
 
 # Load saved state on module initialization
 load_bot_state()

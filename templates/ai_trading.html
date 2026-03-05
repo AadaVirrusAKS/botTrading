@@ -791,6 +791,7 @@
                         <li><a href="/ai-analysis">🧠 AI Analysis</a></li>
                         <li><a href="/crypto">🪙 Crypto</a></li>
                         <li><a href="/monitoring">Positions</a></li>
+                        <li><a href="/alpaca">📈 Alpaca</a></li>
                     </ul>
                 </nav>
             </div>
@@ -1057,6 +1058,13 @@
                                 <span style="font-size: 11px; color: #f59e0b;">(Auto-buys when signals meet criteria)</span>
                             </label>
                         </div>
+                        <div class="control-item" style="grid-column: span 2;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="alpaca-execution" style="width: 20px; height: 20px; accent-color: #4a9eff;" onchange="saveAlpacaExecutionSetting(this.checked)">
+                                <span>📈 Execute via Alpaca</span>
+                                <span id="alpaca-status-badge" style="font-size: 11px; color: var(--text-secondary);">(Not connected)</span>
+                            </label>
+                        </div>
                     </div>
                     
                     <!-- Auto-Trade Status Indicator -->
@@ -1065,6 +1073,15 @@
                         <div>
                             <div style="font-weight: 600; color: #10b981;">Auto-Trading ACTIVE</div>
                             <div style="font-size: 12px; color: var(--text-secondary);">Bot will automatically execute trades</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Alpaca Execution Status Indicator -->
+                    <div id="alpaca-exec-status" class="hidden" style="background: rgba(74, 158, 255, 0.1); border: 1px solid #4a9eff; border-radius: 8px; padding: 10px 15px; margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 20px;">📈</span>
+                        <div>
+                            <div style="font-weight: 600; color: #4a9eff;">Alpaca Paper Trading ACTIVE</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Orders will be sent to your Alpaca paper account</div>
                         </div>
                     </div>
                     
@@ -1255,6 +1272,7 @@
         let instrumentType = 'stocks';
         let botRunning = false;
         let autoTradeEnabled = false;
+        let alpacaExecutionEnabled = false;
         let refreshInterval = null;
         let autoCycleInterval = null;
         let statusRefreshCount = 0;
@@ -1548,9 +1566,15 @@
             }
             
             const autoTrade = document.getElementById('auto-trade').checked;
-            console.log('🤖 Starting bot with auto_trade:', autoTrade);
+            const alpacaExec = document.getElementById('alpaca-execution').checked;
+            console.log('🤖 Starting bot with auto_trade:', autoTrade, 'alpaca_execution:', alpacaExec);
             
             if (autoTrade && !confirm('🤖 Auto-Trade is ENABLED. The bot will automatically execute BUY orders when signals meet your criteria. Continue?')) {
+                return;
+            }
+            
+            if (alpacaExec && !confirm('📈 Alpaca Execution is ENABLED. Orders will be sent to your Alpaca paper trading account. Continue?')) {
+                document.getElementById('alpaca-execution').checked = false;
                 return;
             }
             
@@ -1559,6 +1583,7 @@
                 strategy: selectedStrategy,
                 account_mode: accountMode,
                 auto_trade: autoTrade,
+                alpaca_execution: alpacaExec,
                 instrument_type: instrumentType,
                 watchlist: document.getElementById('watchlist').value,
                 scan_interval: parseInt(document.getElementById('scan-interval').value),
@@ -1589,6 +1614,7 @@
                 if (data.success) {
                     botRunning = true;
                     autoTradeEnabled = autoTrade;
+                    alpacaExecutionEnabled = alpacaExec;
                     updateBotStatus(true);
                     
                     // Restart fast polling intervals
@@ -1685,6 +1711,16 @@
                 autoTradeStatus.classList.add('hidden');
                 autoTradeStatus.style.display = 'none';
             }
+            
+            // Update Alpaca execution status indicator
+            const alpacaExecStatus = document.getElementById('alpaca-exec-status');
+            if (running && alpacaExecutionEnabled) {
+                alpacaExecStatus.classList.remove('hidden');
+                alpacaExecStatus.style.display = 'flex';
+            } else {
+                alpacaExecStatus.classList.add('hidden');
+                alpacaExecStatus.style.display = 'none';
+            }
         }
         
         // Test auto-trade execution
@@ -1777,6 +1813,26 @@
                     // The server is the source of truth for this setting
                     autoTradeEnabled = data.auto_trade || false;
                     document.getElementById('auto-trade').checked = autoTradeEnabled;
+                    
+                    // Sync Alpaca execution state from server
+                    alpacaExecutionEnabled = data.alpaca_execution || false;
+                    document.getElementById('alpaca-execution').checked = alpacaExecutionEnabled;
+                    const alpacaBadge = document.getElementById('alpaca-status-badge');
+                    const alpacaExecStatus = document.getElementById('alpaca-exec-status');
+                    if (data.alpaca_connected) {
+                        alpacaBadge.textContent = '(Connected)';
+                        alpacaBadge.style.color = '#10b981';
+                    } else {
+                        alpacaBadge.textContent = '(Not connected)';
+                        alpacaBadge.style.color = 'var(--text-secondary)';
+                    }
+                    if (botRunning && alpacaExecutionEnabled) {
+                        alpacaExecStatus.classList.remove('hidden');
+                        alpacaExecStatus.style.display = 'flex';
+                    } else {
+                        alpacaExecStatus.classList.add('hidden');
+                        alpacaExecStatus.style.display = 'none';
+                    }
                     
                     updateBotStatus(data.running);
                     if (data.last_scan) {
@@ -3018,6 +3074,39 @@
                 }
             } catch (error) {
                 console.error('Error saving auto-trade setting:', error);
+            }
+        }
+        
+        async function saveAlpacaExecutionSetting(enabled) {
+            alpacaExecutionEnabled = enabled;
+            console.log('🔧 Saving alpaca_execution setting:', enabled);
+            
+            try {
+                const response = await fetch('/api/bot/update_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ alpaca_execution: enabled })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('✅ Alpaca execution setting saved:', enabled);
+                    const alpacaStatus = document.getElementById('alpaca-exec-status');
+                    if (botRunning && enabled) {
+                        alpacaStatus.classList.remove('hidden');
+                        alpacaStatus.style.display = 'flex';
+                    } else {
+                        alpacaStatus.classList.add('hidden');
+                        alpacaStatus.style.display = 'none';
+                    }
+                } else {
+                    console.error('Failed to save alpaca execution setting:', data.error);
+                    document.getElementById('alpaca-execution').checked = false;
+                    alpacaExecutionEnabled = false;
+                }
+            } catch (error) {
+                console.error('Error saving alpaca execution setting:', error);
             }
         }
         

@@ -33,12 +33,12 @@ from unified_trading_system import UnifiedTradingSystem
 
 # Optional: Alpaca for actual order execution
 try:
-    from alpaca_trade_api import REST as AlpacaREST
+    from alpaca.trading.client import TradingClient
     ALPACA_AVAILABLE = True
 except ImportError:
     ALPACA_AVAILABLE = False
     print("⚠️  Alpaca not installed. Running in simulation mode only.")
-    print("   Install with: pip install alpaca-trade-api")
+    print("   Install with: pip install alpaca-py")
 
 
 class DeepSeekAnalyzer:
@@ -317,8 +317,7 @@ class AutonomousTrader:
         self.paper_trading = paper_trading
         self.broker = None
         if ALPACA_AVAILABLE and alpaca_key and alpaca_secret:
-            base_url = 'https://paper-api.alpaca.markets' if paper_trading else 'https://api.alpaca.markets'
-            self.broker = AlpacaREST(alpaca_key, alpaca_secret, base_url)
+            self.broker = TradingClient(alpaca_key, alpaca_secret, paper=paper_trading)
             print(f"✅ Connected to Alpaca ({'PAPER' if paper_trading else '⚠️ LIVE'} trading)")
         else:
             print("📝 Running in SIMULATION mode (no broker connected)")
@@ -484,16 +483,17 @@ class AutonomousTrader:
         # Execute order
         if self.broker:
             try:
-                self.broker.submit_order(
+                from alpaca.trading.requests import MarketOrderRequest
+                from alpaca.trading.enums import OrderSide, TimeInForce
+                order_data = MarketOrderRequest(
                     symbol=ticker,
                     qty=shares,
-                    side='buy',
-                    type='market',
-                    time_in_force='day',
-                    order_class='bracket',
-                    stop_loss={'stop_price': round(stop_loss, 2)},
-                    take_profit={'limit_price': round(target_price, 2)}
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY,
+                    take_profit={"limit_price": round(target_price, 2)},
+                    stop_loss={"stop_price": round(stop_loss, 2)},
                 )
+                self.broker.submit_order(order_data)
                 print(f"   ✅ {ticker}: BOUGHT {shares} shares @ ${entry_price:.2f}")
                 print(f"      Stop: ${stop_loss:.2f} | Target: ${target_price:.2f}")
             except Exception as e:
