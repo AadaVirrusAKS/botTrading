@@ -333,50 +333,104 @@ def reconcile_orphan_positions(account, acct_key=''):
     return fixed
 
 
+def _try_load_json(filepath):
+    """Attempt to load and validate a bot state JSON file. Returns dict or None."""
+    try:
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+        # Sanity check: must be a dict with expected keys
+        if not isinstance(data, dict):
+            return None
+        # A valid state file with trade history will have demo_account with trades list
+        return data
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        print(f"⚠️ Failed to load {filepath}: {e}")
+        return None
+
+
 def load_bot_state():
     global bot_state
-    if os.path.exists(BOT_STATE_FILE):
-        try:
-            with open(BOT_STATE_FILE, 'r') as f:
-                saved = json.load(f)
-                bot_state.update(saved)
+    if not os.path.exists(BOT_STATE_FILE):
+        return bot_state
 
-            # Backfill new settings keys for older state files
-            if 'settings' not in bot_state:
-                bot_state['settings'] = {}
-            if 'min_option_dte_days' not in bot_state['settings']:
-                bot_state['settings']['min_option_dte_days'] = 1
-            if 'max_per_symbol_daily' not in bot_state['settings']:
-                bot_state['settings']['max_per_symbol_daily'] = 6
-            if 'reentry_cooldown_minutes' not in bot_state['settings']:
-                bot_state['settings']['reentry_cooldown_minutes'] = 10
-            # Migrate: backfill 'source' field on existing positions
-            for acct_key in ('demo_account', 'real_account'):
-                acct = bot_state.get(acct_key, {})
-                for pos in acct.get('positions', []):
-                    if 'source' not in pos:
-                        pos['source'] = 'bot' if pos.get('auto_trade') else 'manual'
+    saved = _try_load_json(BOT_STATE_FILE)
 
-                # --- Reconcile orphan positions on every load/restart ---
-                orphan_count = reconcile_orphan_positions(acct, acct_key)
-                if orphan_count > 0:
-                    print(f"🔧 [{acct_key}] Reconciled {orphan_count} orphan position(s) on startup")
+    # If main file is corrupt or empty, try backups in order
+    if saved is None:
+        print("⚠️ Main state file corrupt or unreadable, trying backups...")
+        for suffix in ('.bak', '.bak2', '.bak3'):
+            backup_path = BOT_STATE_FILE + suffix
+            if os.path.exists(backup_path):
+                saved = _try_load_json(backup_path)
+                if saved is not None:
+                    print(f"✅ Restored state from {backup_path}")
+                    break
+    if saved is None:
+        print("❌ All state files unreadable — keeping defaults")
+        return bot_state
 
-                # Recalculate balance from trade history to prevent drift
-                correct_balance = recalculate_balance(acct)
-                if abs(acct.get('balance', 0) - correct_balance) > 0.01:
-                    print(f"🔧 [{acct_key}] Balance corrected: ${acct.get('balance', 0):.2f} → ${correct_balance:.2f} (drift of ${acct.get('balance', 0) - correct_balance:.2f})")
-                    acct['balance'] = correct_balance
+    # Guard against loading a reset/empty state over a richer one already in memory
+    saved_trades = len(saved.get('demo_account', {}).get('trades', []))
+    mem_trades = len(bot_state.get('demo_account', {}).get('trades', []))
+    if saved_trades == 0 and mem_trades > 10:
+        print(f"⚠️ State file has 0 trades but memory has {mem_trades} — skipping load to protect data")
+        return bot_state
 
-            # Persist any reconciliation changes
-            save_bot_state()
-        except:
-            pass
+    bot_state.update(saved)
+
+    # Backfill new settings keys for older state files
+    if 'settings' not in bot_state:
+        bot_state['settings'] = {}
+    if 'min_option_dte_days' not in bot_state['settings']:
+        bot_state['settings']['min_option_dte_days'] = 1
+    if 'max_per_symbol_daily' not in bot_state['settings']:
+        bot_state['settings']['max_per_symbol_daily'] = 6
+    if 'reentry_cooldown_minutes' not in bot_state['settings']:
+        bot_state['settings']['reentry_cooldown_minutes'] = 10
+    # Migrate: backfill 'source' field on existing positions
+    for acct_key in ('demo_account', 'real_account'):
+        acct = bot_state.get(acct_key, {})
+        for pos in acct.get('positions', []):
+            if 'source' not in pos:
+                pos['source'] = 'bot' if pos.get('auto_trade') else 'manual'
+
+        # --- Reconcile orphan positions on every load/restart ---
+        orphan_count = reconcile_orphan_positions(acct, acct_key)
+        if orphan_count > 0:
+            print(f"🔧 [{acct_key}] Reconciled {orphan_count} orphan position(s) on startup")
+
+        # Recalculate balance from trade history to prevent drift
+        correct_balance = recalculate_balance(acct)
+        if abs(acct.get('balance', 0) - correct_balance) > 0.01:
+            print(f"🔧 [{acct_key}] Balance corrected: ${acct.get('balance', 0):.2f} → ${correct_balance:.2f} (drift of ${acct.get('balance', 0) - correct_balance:.2f})")
+            acct['balance'] = correct_balance
+
+    # Persist any reconciliation changes
+    save_bot_state()
     return bot_state
 
 def save_bot_state():
-    with open(BOT_STATE_FILE, 'w') as f:
+    # Rotate backups before writing (keeps last 3 good copies)
+    import shutil
+    if os.path.exists(BOT_STATE_FILE):
+        try:
+            # Only back up if the current file has meaningful data (> 1KB)
+            if os.path.getsize(BOT_STATE_FILE) > 1024:
+                for i in (3, 2, 1):
+                    src = BOT_STATE_FILE + (f'.bak{i-1}' if i > 1 else '')
+                    dst = BOT_STATE_FILE + f'.bak{i}'
+                    if i == 1:
+                        src = BOT_STATE_FILE
+                    if os.path.exists(src):
+                        shutil.copy2(src, dst)
+        except OSError as e:
+            print(f"⚠️ Backup rotation failed: {e}")
+
+    # Write to temp file first, then atomic rename to prevent corruption
+    tmp_path = BOT_STATE_FILE + '.tmp'
+    with open(tmp_path, 'w') as f:
         json.dump(bot_state, f, indent=2, default=str)
+    os.replace(tmp_path, BOT_STATE_FILE)
 
 
 # =============================

@@ -61,6 +61,7 @@ def bot_status():
         state_copy = {
             'running': bot_state['running'],
             'auto_trade': bot_state.get('auto_trade', False),
+            'alpaca_execution': bot_state.get('alpaca_execution', False),
             'account_mode': account_mode,
             'strategy': bot_state['strategy'],
             'settings': bot_state['settings'],
@@ -128,7 +129,7 @@ def bot_status():
         'success': True,
         'running': state_copy['running'],
         'auto_trade': state_copy['auto_trade'],
-        'alpaca_execution': bot_state.get('alpaca_execution', False),
+        'alpaca_execution': state_copy['alpaca_execution'],
         'alpaca_connected': is_alpaca_execution_enabled(),
         'account_mode': state_copy['account_mode'],
         'strategy': state_copy['strategy'],
@@ -500,6 +501,9 @@ def bot_scan():
     if not bot_state.get('running', False):
         return jsonify({'success': False, 'error': 'Bot is not running. Click "Start Trading Bot" first.'}), 400
     
+    # Manual scans should bypass rate limiting so the user gets fresh data
+    clear_rate_limit_blocks()
+    
     req = request.get_json(force=True)
     strategy = req.get('strategy', bot_state['strategy'])
     watchlist_name = req.get('watchlist', bot_state['settings']['watchlist'])
@@ -667,15 +671,23 @@ def bot_scan():
     signals = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
     
     with BOT_STATE_LOCK:
-        bot_state['signals'] = signals
-        bot_state['last_scan'] = datetime.now().isoformat()
-        save_bot_state()
+        load_bot_state()
+        if signals:
+            bot_state['signals'] = signals
+            bot_state['last_scan'] = datetime.now().isoformat()
+            save_bot_state()
+        else:
+            # Preserve previous signals when scan finds nothing (e.g. rate-limited)
+            previous_signals = bot_state.get('signals', [])
+            if previous_signals:
+                signals = previous_signals
+                response_message = response_message or 'Scanner returned no new results; showing previous signals (provider may be rate-limited).'
     
     return jsonify({
         'success': True,
         'signals': signals,
         'count': len(signals),
-        'timestamp': bot_state['last_scan'],
+        'timestamp': bot_state.get('last_scan'),
         'message': response_message
     })
 
@@ -1186,9 +1198,13 @@ def bot_auto_cycle():
                     display_name = pos.get('contract', symbol)
                     print(f"🛡️ MAX LOSS GUARD: {display_name} down {option_loss_pct*100:.1f}% (limit: {max_option_loss_pct*100:.0f}%) — force closing")
             
-            # ===== 0DTE EXPIRY PROTECTION =====
-            # Close options that expire today or tomorrow if not in profit
-            # Prevents holding short-dated options overnight that will likely expire worthless
+            # ===== 0DTE / SHORT-DTE EXPIRY PROTECTION =====
+            # Prevents holding short-dated options that bleed value via theta decay.
+            # Three tiers:
+            #   1. 0DTE (expires today): close immediately at market open (any P&L)
+            #   2. 1DTE (expires tomorrow): close immediately if losing money
+            #   3. DTE <= min_option_dte_days & losing: close at next check
+            #      (catches options that were valid at entry but aged past the threshold)
             if is_option and bot_state['settings'].get('close_0dte_before_expiry', True):
                 try:
                     import pytz
@@ -1198,21 +1214,26 @@ def bot_auto_cycle():
                     if expiry_str:
                         expiry_dt = datetime.strptime(expiry_str, '%Y-%m-%d')
                         days_to_expiry = (expiry_dt.date() - now_et.date()).days
+                        pnl_check = (current_price - entry_price) if side == 'LONG' else (entry_price - current_price)
                         
-                        # Close at 3:00 PM ET if expiring today (0DTE)
-                        if days_to_expiry <= 0 and now_et.hour >= 15:
-                            pnl_check = (current_price - entry_price) if side == 'LONG' else (entry_price - current_price)
+                        # Close IMMEDIATELY if expiring today (0DTE) — any P&L
+                        if days_to_expiry <= 0:
                             exit_reason = 'EXPIRY_PROTECTION'
                             exit_price = current_price
-                            print(f"⏰ EXPIRY PROTECTION: Closing {pos.get('contract', symbol)} - expires today, P&L: ${pnl_check * quantity * multiplier:.2f}")
+                            print(f"⏰ EXPIRY PROTECTION: Closing {pos.get('contract', symbol)} - expires today (0DTE), P&L: ${pnl_check * quantity * multiplier:.2f}")
                         
-                        # Close at 3:45 PM ET if expiring tomorrow and losing money
-                        elif days_to_expiry == 1 and now_et.hour >= 15 and now_et.minute >= 45:
-                            pnl_check = (current_price - entry_price) if side == 'LONG' else (entry_price - current_price)
-                            if pnl_check < 0:  # Only force-close if losing
-                                exit_reason = 'EXPIRY_PROTECTION'
-                                exit_price = current_price
-                                print(f"⏰ EXPIRY PROTECTION: Closing losing {pos.get('contract', symbol)} - expires tomorrow, P&L: ${pnl_check * quantity * multiplier:.2f}")
+                        # Close IMMEDIATELY if expiring tomorrow (1DTE) and losing money
+                        elif days_to_expiry == 1 and pnl_check < 0:
+                            exit_reason = 'EXPIRY_PROTECTION'
+                            exit_price = current_price
+                            print(f"⏰ EXPIRY PROTECTION: Closing losing {pos.get('contract', symbol)} - expires tomorrow (1DTE), P&L: ${pnl_check * quantity * multiplier:.2f}")
+                        
+                        # Close if option aged below min DTE threshold and losing
+                        # (e.g. entered at 3DTE with min_dte=2, now it's 1DTE and underwater)
+                        elif days_to_expiry < get_min_option_dte_days() and pnl_check < 0:
+                            exit_reason = 'EXPIRY_PROTECTION'
+                            exit_price = current_price
+                            print(f"⏰ EXPIRY PROTECTION: Closing {pos.get('contract', symbol)} - DTE={days_to_expiry} below min {get_min_option_dte_days()}, losing ${abs(pnl_check * quantity * multiplier):.2f}")
                 except Exception as e:
                     print(f"⚠️ Error in expiry protection for {symbol}: {e}")
             
@@ -1497,6 +1518,9 @@ def bot_auto_cycle():
     
     # Run scan (unless rate limited)
     if not skip_scan:
+        # Clear stale rate-limit flags so this full scan can fetch fresh data
+        clear_rate_limit_blocks()
+        
         strategy = bot_state.get('strategy', 'trend_following')
         watchlist_name = bot_state['settings'].get('watchlist', 'top_50')
         instrument_type = bot_state['settings'].get('instrument_type', 'stocks')
@@ -1649,9 +1673,16 @@ def bot_auto_cycle():
         signals = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
 
         with BOT_STATE_LOCK:
-            bot_state['signals'] = signals
-            bot_state['last_scan'] = datetime.now().isoformat()
-            save_bot_state()
+            load_bot_state()
+            if signals:
+                bot_state['signals'] = signals
+                bot_state['last_scan'] = datetime.now().isoformat()
+                save_bot_state()
+            else:
+                # Preserve previous signals when scan finds nothing (e.g. rate-limited)
+                signals = bot_state.get('signals', [])
+                if signals:
+                    print("🤖 Scan returned 0 results; keeping previous cached signals")
     else:
         # Use cached signals when rate limited
         signals = bot_state.get('signals', [])
@@ -2339,17 +2370,29 @@ def bot_trade():
 
                     position, is_new = add_or_update_position(
                         account, symbol, 'SHORT', quantity, price,
-                        stop_loss=stop_loss, target=target
+                        stop_loss=stop_loss, target=target,
+                        extra_fields={'instrument_type': 'stock', 'source': 'manual'}
                     )
+
+                    # Execute on Alpaca if enabled
+                    alpaca_order_id = None
+                    if is_alpaca_execution_enabled():
+                        alpaca_result = execute_alpaca_entry(symbol, quantity, 'SHORT', stop_loss=stop_loss, take_profit=target)
+                        if alpaca_result['success']:
+                            alpaca_order_id = alpaca_result['order'].get('id')
+                            position['alpaca_order_id'] = alpaca_order_id
                     
                     trade = {
                         'symbol': symbol,
                         'action': 'SELL',
                         'side': 'SHORT',
+                        'instrument_type': 'stock',
+                        'source': 'manual',
                         'quantity': quantity,
                         'price': price,
                         'added_to_existing': not is_new,
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': datetime.now().isoformat(),
+                        'alpaca_order_id': alpaca_order_id
                     }
                     account['trades'].append(trade)
         
@@ -2468,6 +2511,19 @@ def bot_trade_option():
             'target_2': target_2,
             'timestamp': datetime.now().isoformat()
         }
+
+        # Execute on Alpaca if enabled
+        alpaca_order_id = None
+        alpaca_sym = option_ticker or contract or symbol
+        if is_alpaca_execution_enabled():
+            alpaca_result = execute_alpaca_entry(
+                alpaca_sym, contracts, 'LONG',
+                stop_loss=stop_premium, take_profit=target_1
+            )
+            if alpaca_result['success']:
+                alpaca_order_id = alpaca_result['order'].get('id')
+                position['alpaca_order_id'] = alpaca_order_id
+
         account['positions'].append(position)
 
         # Log trade
@@ -2485,7 +2541,8 @@ def bot_trade_option():
             'cost': cost,
             'strike': strike,
             'expiry': expiry,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'alpaca_order_id': alpaca_order_id
         }
         account['trades'].append(trade)
         # Recalculate balance from trade history (authoritative)
@@ -2569,6 +2626,14 @@ def bot_close_position():
             else:
                 pnl = (target_pos['entry_price'] - price) * target_pos['quantity']
         
+        # Close on Alpaca if this position has an Alpaca order
+        alpaca_close_id = None
+        if is_alpaca_execution_enabled() and target_pos.get('alpaca_order_id'):
+            close_sym = target_pos.get('option_ticker') or target_pos.get('contract') or symbol
+            alpaca_close = execute_alpaca_exit(close_sym, qty=target_pos['quantity'])
+            if alpaca_close['success']:
+                alpaca_close_id = alpaca_close.get('order', {}).get('id')
+        
         trade = {
             'symbol': symbol,
             'contract': target_pos.get('contract', ''),
@@ -2581,7 +2646,8 @@ def bot_close_position():
             'price': price,
             'pnl': pnl,
             'pnl_pct': ((price - target_pos['entry_price']) / target_pos['entry_price'] * 100) if target_pos['entry_price'] > 0 else 0,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'alpaca_order_id': alpaca_close_id
         }
         account['trades'].append(trade)
         account['positions'].remove(target_pos)
@@ -2611,6 +2677,17 @@ def bot_close_all():
         all_symbols = list(set(pos['symbol'] for pos in account['positions']))
         batch_prices = cached_batch_prices(all_symbols, period='5d', interval='5m', prepost=True) if all_symbols else {}
         
+        # Close all positions on Alpaca first (single API call)
+        if is_alpaca_execution_enabled():
+            has_alpaca_positions = any(pos.get('alpaca_order_id') for pos in account['positions'])
+            if has_alpaca_positions:
+                try:
+                    from services.alpaca_service import close_all_positions
+                    close_all_positions()
+                    print("📉 ALPACA CLOSE-ALL: All positions closed")
+                except Exception as e:
+                    print(f"⚠️ ALPACA CLOSE-ALL failed, will close individually: {e}")
+
         total_pnl = 0
         for pos in list(account['positions']):
             is_option = pos.get('instrument_type') == 'option'
@@ -2640,7 +2717,8 @@ def bot_close_all():
                 'price': price,
                 'pnl': pnl,
                 'pnl_pct': ((price - pos['entry_price']) / pos['entry_price'] * 100) if pos.get('entry_price', 0) > 0 else 0,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'alpaca_order_id': pos.get('alpaca_order_id')
             }
             account['trades'].append(trade)
         
