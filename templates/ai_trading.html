@@ -1872,7 +1872,7 @@
                     renderPositions(latestPositions);
                     
                     if (data.trades) {
-                        renderTradeLog(data.trades);
+                        renderTradeLog(data.trades, latestPositions);
                     }
                     
                     // Sync accountMode with server's account_mode to ensure close operations work correctly
@@ -2304,7 +2304,7 @@
         }
         
         // Render trade log
-        function renderTradeLog(trades) {
+        function renderTradeLog(trades, currentPositions) {
             const container = document.getElementById('trade-log');
             
             if (!trades || trades.length === 0) {
@@ -2492,6 +2492,19 @@
                 });
             });
             
+            // Reconcile: mark orphan "open" round trips as closed if the symbol
+            // is not in the actual server positions list (handles Alpaca duplicate buys, etc.)
+            if (currentPositions && Array.isArray(currentPositions)) {
+                const openSymbols = new Set(currentPositions.map(p => p.symbol));
+                roundTrips.forEach(rt => {
+                    if (!rt.completed && !openSymbols.has(rt.symbol)) {
+                        rt.completed = true;
+                        rt.pnl = 0;  // Unknown P&L for orphan entries
+                        rt._orphan = true;
+                    }
+                });
+            }
+
             // Sort by most recent activity (exit time or entry time)
             roundTrips.sort((a, b) => {
                 const timeA = new Date(a.exitTime || a.entryTime);
@@ -2569,7 +2582,9 @@
                                 ${actionLabel}: ${formatCurrency(rt.entryPrice)}${priceLabel}
                             </span>
                         ` : ''}
-                        ${rt.completed ? `
+                        ${rt.completed ? (rt._orphan ? `
+                            <span class="trend-badge" style="background: rgba(107, 114, 128, 0.2); color: #9ca3af;">CLOSED</span>
+                        ` : `
                             <span style="color: #8b5cf6;">→</span>
                             <span style="color: #8b5cf6;">
                                 Close: ${formatCurrency(rt.exitPrice)}${priceLabel}
@@ -2577,7 +2592,7 @@
                             <span class="${(rt.pnl || 0) >= 0 ? 'position-pnl positive' : 'position-pnl negative'}" style="font-weight: 600;">
                                 ${(rt.pnl || 0) >= 0 ? '+' : ''}${formatCurrency(rt.pnl || 0)}
                             </span>
-                        ` : `
+                        `) : `
                             <span class="trend-badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">OPEN</span>
                         `}
                     </div>

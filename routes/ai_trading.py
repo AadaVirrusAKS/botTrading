@@ -1058,10 +1058,10 @@ def bot_auto_cycle():
                 pos['last_price_update'] = _cycle_now_iso
                 _any_price_updated = True
                 
-            entry_price = pos.get('entry_price', 0)
-            stop_loss = pos.get('stop_loss', 0)
-            target = pos.get('target', 0)
-            quantity = pos.get('quantity', 0)
+            entry_price = pos.get('entry_price') or 0
+            stop_loss = pos.get('stop_loss') or 0
+            target = pos.get('target') or 0
+            quantity = pos.get('quantity') or 0
             side = pos.get('side', 'LONG')
             multiplier = 100 if is_option else 1
             

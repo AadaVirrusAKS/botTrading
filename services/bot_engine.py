@@ -358,7 +358,7 @@ def load_bot_state():
     # If main file is corrupt or empty, try backups in order
     if saved is None:
         print("⚠️ Main state file corrupt or unreadable, trying backups...")
-        for suffix in ('.bak', '.bak2', '.bak3'):
+        for suffix in ('.bak1', '.bak2', '.bak3'):
             backup_path = BOT_STATE_FILE + suffix
             if os.path.exists(backup_path):
                 saved = _try_load_json(backup_path)

@@ -875,7 +875,10 @@ def clear_all_caches():
     with _global_rate_limit_lock:
         _global_rate_limit_until = 0.0
         _global_rate_limit_consecutive = 0
-    print("[Cache] All caches and rate-limit blocks cleared")
+    # Also reset scanner results cache
+    for key in scanner_cache:
+        scanner_cache[key] = {'data': None, 'timestamp': None, 'running': False}
+    print("[Cache] All caches, scanner cache, and rate-limit blocks cleared")
 
 
 def clear_rate_limit_blocks():
