@@ -607,6 +607,7 @@ def bot_scan():
                 'instrument_type': 'option',
                 'option_type': r['option_type'],
                 'contract': r['contract'],
+                'option_ticker': r.get('option_ticker', ''),
                 'strike': r['strike'],
                 'expiry': r['expiry'],
                 'dte': r['dte'],
@@ -881,6 +882,7 @@ def build_live_option_fallback_signals(symbols, max_candidates=6):
                     'instrument_type': 'option',
                     'option_type': option_type,
                     'contract': f"{symbol} {best_exp} {strike:.0f}{'C' if option_type == 'call' else 'P'}",
+                    'option_ticker': str(row.get('contractSymbol', '') or ''),
                     'strike': strike,
                     'expiry': best_exp,
                     'dte': dte_val,
@@ -1631,6 +1633,7 @@ def bot_auto_cycle():
                     'instrument_type': 'option',
                     'option_type': r['option_type'],
                     'contract': r['contract'],
+                    'option_ticker': r.get('option_ticker', ''),
                     'strike': r['strike'],
                     'expiry': r['expiry'],
                     'dte': r['dte'],
@@ -2141,11 +2144,12 @@ def bot_auto_cycle():
                     account['positions'].append(position)
                     
                     # Execute on Alpaca if enabled (options use the option_ticker symbol)
+                    # NOTE: Don't pass stop_loss/take_profit for options — Alpaca doesn't
+                    # support bracket orders on options; the bot manages stops internally.
                     alpaca_order_id = None
                     if is_alpaca_execution_enabled() and signal.get('option_ticker'):
                         alpaca_result = execute_alpaca_entry(
-                            signal['option_ticker'], contracts_qty, 'LONG',
-                            stop_loss=live_stop_loss, take_profit=signal.get('target')
+                            signal['option_ticker'], contracts_qty, 'LONG'
                         )
                         if alpaca_result['success']:
                             alpaca_order_id = alpaca_result['order'].get('id')
@@ -2634,8 +2638,7 @@ def bot_trade_option():
         alpaca_sym = option_ticker or contract or symbol
         if is_alpaca_execution_enabled():
             alpaca_result = execute_alpaca_entry(
-                alpaca_sym, contracts, 'LONG',
-                stop_loss=stop_premium, take_profit=target_1
+                alpaca_sym, contracts, 'LONG'
             )
             if alpaca_result['success']:
                 alpaca_order_id = alpaca_result['order'].get('id')
