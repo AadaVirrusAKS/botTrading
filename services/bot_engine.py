@@ -67,7 +67,7 @@ bot_state = {
 }
 
 BOT_STATE_FILE = 'ai_bot_state.json'
-BOT_STATE_LOCK = threading.Lock()
+BOT_STATE_LOCK = threading.RLock()
 AUTO_TRADE_DEDUP_LOCK = threading.Lock()
 AUTO_TRADE_EXECUTION_GUARD = {}  # key -> unix timestamp
 AUTO_TRADE_DEDUP_SECONDS = 60
@@ -388,25 +388,30 @@ def load_bot_state():
     if 'reentry_cooldown_minutes' not in bot_state['settings']:
         bot_state['settings']['reentry_cooldown_minutes'] = 10
     # Migrate: backfill 'source' field on existing positions
+    _needs_save = False
     for acct_key in ('demo_account', 'real_account'):
         acct = bot_state.get(acct_key, {})
         for pos in acct.get('positions', []):
             if 'source' not in pos:
                 pos['source'] = 'bot' if pos.get('auto_trade') else 'manual'
+                _needs_save = True
 
         # --- Reconcile orphan positions on every load/restart ---
         orphan_count = reconcile_orphan_positions(acct, acct_key)
         if orphan_count > 0:
             print(f"🔧 [{acct_key}] Reconciled {orphan_count} orphan position(s) on startup")
+            _needs_save = True
 
         # Recalculate balance from trade history to prevent drift
         correct_balance = recalculate_balance(acct)
         if abs(acct.get('balance', 0) - correct_balance) > 0.01:
             print(f"🔧 [{acct_key}] Balance corrected: ${acct.get('balance', 0):.2f} → ${correct_balance:.2f} (drift of ${acct.get('balance', 0) - correct_balance:.2f})")
             acct['balance'] = correct_balance
+            _needs_save = True
 
-    # Persist any reconciliation changes
-    save_bot_state()
+    # Only persist if reconciliation actually changed something
+    if _needs_save:
+        save_bot_state()
     return bot_state
 
 def save_bot_state():

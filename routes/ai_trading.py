@@ -44,19 +44,62 @@ ai_trading_bp = Blueprint("ai_trading", __name__)
 @ai_trading_bp.route('/api/bot/status')
 def bot_status():
     """Get bot status and account info"""
-    # First, get the state data inside the lock
-    with BOT_STATE_LOCK:
+    # Try to acquire the lock with a timeout so the UI never hangs indefinitely
+    lock_acquired = BOT_STATE_LOCK.acquire(timeout=5)
+    if not lock_acquired:
+        # Lock is held by a long-running operation (e.g. auto_cycle scan).
+        # Return stale in-memory state so the UI stays responsive.
+        account_mode = bot_state.get('account_mode', 'demo')
+        account = bot_state.get('demo_account', {}) if account_mode == 'demo' else bot_state.get('real_account', {})
+        positions = [pos.copy() for pos in account.get('positions', [])]
+        total_pnl = 0
+        for pos in positions:
+            entry = pos.get('entry_price', 0)
+            current = pos.get('current_price', entry)
+            qty = pos.get('quantity', 0)
+            is_option = pos.get('instrument_type') == 'option'
+            multiplier = 100 if is_option else 1
+            side_mult = 1 if pos.get('side') == 'LONG' else -1
+            total_pnl += (current - entry) * qty * multiplier * side_mult
+        response = jsonify({
+            'success': True,
+            'running': bot_state.get('running', False),
+            'auto_trade': bot_state.get('auto_trade', False),
+            'alpaca_execution': bot_state.get('alpaca_execution', False),
+            'alpaca_connected': is_alpaca_execution_enabled(),
+            'account_mode': account_mode,
+            'strategy': bot_state.get('strategy', 'trend_following'),
+            'settings': bot_state.get('settings', {}),
+            'last_scan': bot_state.get('last_scan'),
+            'signals': bot_state.get('signals', []),
+            'daily_analysis': bot_state.get('daily_analysis'),
+            'positions': positions,
+            'trades': account.get('trades', []),
+            'demo_account': {
+                **bot_state.get('demo_account', {}),
+                'positions': positions if account_mode == 'demo' else bot_state.get('demo_account', {}).get('positions', []),
+                'unrealized_pnl': total_pnl
+            },
+            'force_live': False,
+            '_stale': True
+        })
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+
+    try:
         load_bot_state()
-        
+
         account_mode = bot_state['account_mode']
         account = bot_state['demo_account'] if account_mode == 'demo' else bot_state['real_account']
-        
+
         # Recalculate balance from trade history (authoritative source of truth)
         account['balance'] = recalculate_balance(account)
-        
+
         # Make a copy of positions to update outside the lock
         positions = [pos.copy() for pos in account.get('positions', [])]
-        
+
         # Copy other needed state
         state_copy = {
             'running': bot_state['running'],
@@ -71,7 +114,9 @@ def bot_status():
             'demo_account': bot_state['demo_account'].copy(),
             'daily_analysis': bot_state.get('daily_analysis')
         }
-    
+    finally:
+        BOT_STATE_LOCK.release()
+
     # Update positions with live prices OUTSIDE the lock (force_live bypasses cache)
     force_live = request.args.get('force_live', '0').lower() in ('1', 'true', 'yes')
     if force_live:
@@ -79,15 +124,11 @@ def bot_status():
     positions = update_positions_with_live_prices(positions, force_live=force_live)
     signals = refresh_signal_entries_with_live_prices(state_copy.get('signals', []), force_refresh=force_live)
 
-    # Persist refreshed signals to keep UI and auto-cycle state aligned
+    # Persist refreshed signals + position prices in a single lock acquisition
     with BOT_STATE_LOCK:
         load_bot_state()
         bot_state['signals'] = signals
-        save_bot_state()
 
-    # Persist refreshed position prices so subsequent polls keep latest known values
-    with BOT_STATE_LOCK:
-        load_bot_state()
         account_mode_latest = bot_state['account_mode']
         account_latest = bot_state['demo_account'] if account_mode_latest == 'demo' else bot_state['real_account']
         stored_positions = account_latest.get('positions', [])
@@ -111,8 +152,7 @@ def bot_status():
                     stored_pos[field] = updated_pos.get(field)
                     changed = True
 
-        if changed:
-            save_bot_state()
+        save_bot_state()
     
     # Calculate total unrealized P&L
     total_pnl = 0
@@ -884,7 +924,8 @@ def bot_auto_cycle():
         })
     
     # Reload state from file to ensure we have latest
-    load_bot_state()
+    with BOT_STATE_LOCK:
+        load_bot_state()
     
     # Re-check after reload (in case bot was stopped via another client)
     if not bot_state.get('running', False):

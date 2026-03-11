@@ -403,9 +403,18 @@ def _get_batch_dashboard_data():
             print(f"Extended hours fetch error: {e}")
     
     # Calculate market pulse from comprehensive US market breadth (1800+ stocks)
-    market_pulse = calculate_market_breadth()
+    # Use cached breadth if available; otherwise use fast watchlist fallback
+    # and trigger heavy breadth calculation in the background
+    market_pulse = None
+    with _market_breadth_lock:
+        if (_market_breadth_cache['data'] is not None and
+            _market_breadth_cache['timestamp'] is not None):
+            age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
+            if age < _market_breadth_cache.get('cache_ttl', 600):
+                market_pulse = _market_breadth_cache['data']
+
     if market_pulse is None:
-        # Fallback to simple calculation from fetched watchlist
+        # Use fast fallback from already-fetched watchlist data
         advancing = 0
         declining = 0
         unchanged = 0
@@ -426,6 +435,8 @@ def _get_batch_dashboard_data():
             'breadth_pct': round((advancing / max(len(all_quotes), 1)) * 100, 1),
             'source': 'dashboard watchlist (fallback)'
         }
+        # Kick off heavy breadth calculation in background so next request has it
+        threading.Thread(target=calculate_market_breadth, daemon=True).start()
     
     return {
         'timestamp': datetime.now().isoformat(),
@@ -459,10 +470,11 @@ def dashboard_batch():
     """
     try:
         with _batch_cache_lock:
-            # Check cache
+            # Check cache — only serve if data is non-empty
             if _batch_cache['data'] is not None and _batch_cache['timestamp'] is not None:
                 age = (datetime.now() - _batch_cache['timestamp']).total_seconds()
-                if age < _batch_cache['cache_ttl']:
+                has_data = _batch_cache['data'].get('symbols_fetched', 0) > 0
+                if age < _batch_cache['cache_ttl'] and has_data:
                     cached_data = _batch_cache['data'].copy()
                     cached_data['cached'] = True
                     cached_data['cache_age_seconds'] = int(age)
@@ -471,10 +483,18 @@ def dashboard_batch():
         # Fetch fresh data
         data = _get_batch_dashboard_data()
         
-        # Update cache
-        with _batch_cache_lock:
-            _batch_cache['data'] = data
-            _batch_cache['timestamp'] = datetime.now()
+        # Only cache if we actually got meaningful data (indices or sectors present)
+        symbols_fetched = data.get('symbols_fetched', 0)
+        if symbols_fetched > 0:
+            with _batch_cache_lock:
+                _batch_cache['data'] = data
+                _batch_cache['timestamp'] = datetime.now()
+        else:
+            # Don't cache empty results — clear any stale empty cache
+            print(f"⚠️ Batch dashboard returned 0 symbols — skipping cache to allow retry")
+            with _batch_cache_lock:
+                _batch_cache['data'] = None
+                _batch_cache['timestamp'] = None
         
         return jsonify({'success': True, **data})
     
