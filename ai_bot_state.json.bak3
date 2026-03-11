@@ -132,7 +132,7 @@
         "trade_type": "swing",
         "_cached_atr": 1.7325000000000002,
         "alpaca_order_id": "f0094391-c1a1-4544-aef8-ddbd7093d192",
-        "last_price_update": "2026-03-11T15:26:27.543678",
+        "last_price_update": "2026-03-11T15:27:48.377453",
         "current_bid": 10.75,
         "current_ask": 11.4,
         "underlying_price": 273.49,
