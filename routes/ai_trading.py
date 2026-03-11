@@ -41,6 +41,10 @@ from services.symbols import is_valid_symbol_cached, filter_valid_symbols, resol
 
 ai_trading_bp = Blueprint("ai_trading", __name__)
 
+# Guard: only one auto_cycle scan can run at a time.
+# Concurrent callers return cached signals instead of stacking up threads.
+_SCAN_IN_PROGRESS = threading.Lock()
+
 @ai_trading_bp.route('/api/bot/status')
 def bot_status():
     """Get bot status and account info"""
@@ -117,42 +121,40 @@ def bot_status():
     finally:
         BOT_STATE_LOCK.release()
 
-    # Update positions with live prices OUTSIDE the lock (force_live bypasses cache)
+    # Update positions with live prices OUTSIDE the lock.
+    # ONLY do expensive live-price fetches when force_live=1 is explicitly
+    # requested (user clicks refresh). Normal 5s polling returns cached
+    # in-memory state instantly so the UI never hangs.
     force_live = request.args.get('force_live', '0').lower() in ('1', 'true', 'yes')
+    signals = state_copy.get('signals', [])
     if force_live:
         clear_rate_limit_blocks()
-    positions = update_positions_with_live_prices(positions, force_live=force_live)
-    signals = refresh_signal_entries_with_live_prices(state_copy.get('signals', []), force_refresh=force_live)
+        positions = update_positions_with_live_prices(positions, force_live=True)
+        signals = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
 
-    # Persist refreshed signals + position prices in a single lock acquisition
-    with BOT_STATE_LOCK:
-        load_bot_state()
-        bot_state['signals'] = signals
+        # Persist refreshed prices in a single lock acquisition
+        with BOT_STATE_LOCK:
+            load_bot_state()
+            bot_state['signals'] = signals
 
-        account_mode_latest = bot_state['account_mode']
-        account_latest = bot_state['demo_account'] if account_mode_latest == 'demo' else bot_state['real_account']
-        stored_positions = account_latest.get('positions', [])
-        changed = False
+            account_mode_latest = bot_state['account_mode']
+            account_latest = bot_state['demo_account'] if account_mode_latest == 'demo' else bot_state['real_account']
+            stored_positions = account_latest.get('positions', [])
 
-        # Best-effort index-based sync (positions copy preserves order from source)
-        for idx, updated_pos in enumerate(positions):
-            if idx >= len(stored_positions):
-                break
-            stored_pos = stored_positions[idx]
+            for idx, updated_pos in enumerate(positions):
+                if idx >= len(stored_positions):
+                    break
+                stored_pos = stored_positions[idx]
+                if (
+                    stored_pos.get('symbol') != updated_pos.get('symbol')
+                    or stored_pos.get('timestamp') != updated_pos.get('timestamp')
+                ):
+                    continue
+                for field in ('current_price', 'current_bid', 'current_ask', 'underlying_price', 'last_price_update', 'last_checked'):
+                    if field in updated_pos and stored_pos.get(field) != updated_pos.get(field):
+                        stored_pos[field] = updated_pos.get(field)
 
-            # Safety guard: only sync when these core identifiers match
-            if (
-                stored_pos.get('symbol') != updated_pos.get('symbol')
-                or stored_pos.get('timestamp') != updated_pos.get('timestamp')
-            ):
-                continue
-
-            for field in ('current_price', 'current_bid', 'current_ask', 'underlying_price', 'last_price_update', 'last_checked'):
-                if field in updated_pos and stored_pos.get(field) != updated_pos.get(field):
-                    stored_pos[field] = updated_pos.get(field)
-                    changed = True
-
-        save_bot_state()
+            save_bot_state()
     
     # Calculate total unrealized P&L
     total_pnl = 0
@@ -915,6 +917,28 @@ def bot_auto_cycle():
     """
     global bot_state
     
+    # CONCURRENCY GUARD: If another auto_cycle is already running (e.g.
+    # background engine + browser both calling), return cached state
+    # immediately. This prevents thread exhaustion when scans are slow.
+    if not _SCAN_IN_PROGRESS.acquire(blocking=False):
+        return jsonify({
+            'success': True,
+            'message': 'Scan already in progress',
+            'signals': bot_state.get('signals', []),
+            'trades_executed': [],
+            'exits_triggered': [],
+            'skipped_scan': True,
+            'auto_trade_enabled': bot_state.get('auto_trade', False)
+        })
+    try:
+        return _bot_auto_cycle_inner()
+    finally:
+        _SCAN_IN_PROGRESS.release()
+
+def _bot_auto_cycle_inner():
+    """Inner implementation of auto_cycle, guarded by _SCAN_IN_PROGRESS lock."""
+    global bot_state
+    
     # Quick check in-memory flag BEFORE loading full state from disk
     # Avoids reading ~7K-line JSON file every 10s when bot is stopped
     if not bot_state.get('running', False):
@@ -1146,80 +1170,160 @@ def bot_auto_cycle():
                         sig_str = ', '.join(signals)
                         print(f"🔄 Dynamic SL/Target update for {symbol}: SL=${stop_loss:.2f} Target=${target:.2f} [{sig_str}]")
             
-            # TRAILING STOP FALLBACK: ATR-based or simple % trailing for options or if dynamic didn't update
+            # TRAILING STOP: Tiered, trend-aware, with minimum hold time
+            # - Options: wider ATR (5-8% of premium), min 15min hold before trailing activates
+            # - Tiered: trailing widens as profit grows (let runners run)
+            # - Trend-aware: if underlying is trending in our favor, use widest trailing
             if not dynamic_updated and not _in_grace_period:
                 trailing_mode = str(bot_state['settings'].get('trailing_stop', 'atr')).strip()
                 if not trailing_mode:
-                    trailing_mode = 'atr'  # Default to ATR if empty
-                min_profit_to_trail = 0.005  # 0.5% minimum profit before trailing activates
-                
+                    trailing_mode = 'atr'
+
+                # ---- MINIMUM HOLD TIME: Don't trail for first N minutes ----
+                _MIN_HOLD_MINUTES_OPTIONS = 15   # Options need time to develop
+                _MIN_HOLD_MINUTES_STOCKS = 5     # Stocks can trail sooner
+                _min_hold = _MIN_HOLD_MINUTES_OPTIONS if is_option else _MIN_HOLD_MINUTES_STOCKS
+                _hold_minutes = _pos_age_seconds / 60.0
+
+                # ---- MIN PROFIT THRESHOLD: Higher for options to avoid micro-exits ----
+                if is_option:
+                    min_profit_to_trail = 0.03   # 3% minimum before trailing (was 0.5%)
+                else:
+                    min_profit_to_trail = 0.005  # 0.5% for stocks (unchanged)
+
                 # For SWING trades: use high/low watermark instead of current_price
-                # This catches after-hours/pre-market peaks that occurred while bot was offline
                 is_swing = pos.get('trade_type', 'swing') == 'swing'
                 if is_swing and not is_option:
                     if side == 'LONG':
                         trail_reference_price = swing_high_watermarks.get(symbol, current_price)
-                        # Use the higher of current price and historical high
                         trail_reference_price = max(trail_reference_price, current_price)
                         if trail_reference_price > current_price:
                             print(f"📊 {symbol} SWING: Using high watermark ${trail_reference_price:.2f} for trailing (current: ${current_price:.2f})")
-                    else:  # SHORT
+                    else:
                         trail_reference_price = swing_low_watermarks.get(symbol, current_price)
                         trail_reference_price = min(trail_reference_price, current_price)
                         if trail_reference_price < current_price:
                             print(f"📊 {symbol} SWING: Using low watermark ${trail_reference_price:.2f} for trailing (current: ${current_price:.2f})")
                 else:
                     trail_reference_price = current_price
-                
-                if trailing_mode == 'atr' and entry_price > 0:
-                    # ==== ATR-BASED TRAILING STOP ====
-                    # Uses 1.5x ATR from reference price (high watermark for swing, current for day)
-                    # This lets trades breathe during normal volatility
-                    pos_atr = pos.get('_cached_atr', 0)
-                    if pos_atr <= 0:
-                        # Estimate ATR from entry price (roughly 1-2% for most stocks)
-                        pos_atr = entry_price * 0.015
-                    atr_multiplier = 2.5
-                    
+
+                # ---- MARKET TREND DETECTION (underlying stock trend) ----
+                # Check if the underlying is trending in our direction
+                # Uses cached daily data to determine trend without extra API calls
+                _trend_direction = 0  # -1 bearish, 0 neutral, +1 bullish
+                _underlying_sym = symbol
+                try:
+                    _trend_hist = cached_get_history(_underlying_sym, period='5d', interval='1d')
+                    if _trend_hist is not None and len(_trend_hist) >= 3:
+                        _closes = _trend_hist['Close'].values
+                        _sma3 = sum(_closes[-3:]) / 3
+                        _last_close = float(_closes[-1])
+                        if _last_close > _sma3 * 1.002:
+                            _trend_direction = 1   # Bullish
+                        elif _last_close < _sma3 * 0.998:
+                            _trend_direction = -1  # Bearish
+                except Exception:
+                    pass
+
+                # ---- TIERED TRAILING STOP WIDTHS ----
+                # As profit grows, trailing gets WIDER to let winners run
+                # Trend alignment further widens the trailing
+                if entry_price > 0:
                     if side == 'LONG':
                         profit_pct = (trail_reference_price - entry_price) / entry_price
-                        if profit_pct >= min_profit_to_trail:
+                    else:
+                        profit_pct = (entry_price - trail_reference_price) / entry_price
+
+                    # Check trend alignment: bullish = good for LONG, bearish = good for SHORT
+                    _trend_aligned = (side == 'LONG' and _trend_direction >= 1) or \
+                                     (side == 'SHORT' and _trend_direction <= -1)
+
+                    # Only trail if enough hold time AND enough profit
+                    _can_trail = (_hold_minutes >= _min_hold) and (profit_pct >= min_profit_to_trail)
+
+                    if _can_trail and (trailing_mode == 'atr'):
+                        # ==== ATR-BASED TIERED TRAILING STOP ====
+                        pos_atr = pos.get('_cached_atr', 0)
+                        if pos_atr <= 0:
+                            if is_option:
+                                pos_atr = entry_price * 0.06  # 6% of premium (was 1.5%)
+                            else:
+                                pos_atr = entry_price * 0.015
+
+                        # Tiered ATR multiplier based on profit level
+                        if profit_pct < 0.10:
+                            # <10% profit: wide trailing, give room to breathe
+                            atr_multiplier = 3.5 if is_option else 2.5
+                        elif profit_pct < 0.25:
+                            # 10-25% profit: medium trailing
+                            atr_multiplier = 3.0 if is_option else 2.0
+                        elif profit_pct < 0.50:
+                            # 25-50% profit: start tightening to lock gains
+                            atr_multiplier = 2.5 if is_option else 1.8
+                        else:
+                            # >50% profit: big runner, protect but give room
+                            atr_multiplier = 2.0 if is_option else 1.5
+
+                        # TREND BONUS: If trend is in our favor, widen trailing by 30%
+                        if _trend_aligned:
+                            atr_multiplier *= 1.3
+                            _tier_label = "TREND+"
+                        else:
+                            _tier_label = ""
+
+                        if side == 'LONG':
                             new_trailing_stop = round(trail_reference_price - (pos_atr * atr_multiplier), 2)
                             if new_trailing_stop > stop_loss and new_trailing_stop > entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
-                                print(f"📈 ATR Trailing stop UP for {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}, ref=${trail_reference_price:.2f}, profit: {profit_pct*100:.2f}%)")
-                    else:  # SHORT
-                        profit_pct = (entry_price - trail_reference_price) / entry_price
-                        if profit_pct >= min_profit_to_trail:
+                                print(f"📈 ATR Trail{_tier_label} UP {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}x{atr_multiplier:.1f}, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
+                        else:
                             new_trailing_stop = round(trail_reference_price + (pos_atr * atr_multiplier), 2)
                             if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop < entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
-                                print(f"📉 ATR Trailing stop DOWN for {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}, ref=${trail_reference_price:.2f}, profit: {profit_pct*100:.2f}%)")
-                else:
-                    # ==== FIXED % TRAILING STOP (legacy fallback) ====
-                    try:
-                        trailing_pct = float(trailing_mode) / 100
-                    except (ValueError, TypeError):
-                        trailing_pct = 0.05  # Default 5% (wider to let winners run)
-                    if trailing_pct > 0 and entry_price > 0:
-                        if side == 'LONG':
-                            profit_pct = (trail_reference_price - entry_price) / entry_price
-                            if profit_pct >= min_profit_to_trail:
+                                print(f"📉 ATR Trail{_tier_label} DN {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}x{atr_multiplier:.1f}, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
+
+                    elif _can_trail:
+                        # ==== FIXED % TIERED TRAILING STOP ====
+                        try:
+                            base_trailing_pct = float(trailing_mode) / 100
+                        except (ValueError, TypeError):
+                            base_trailing_pct = 0.05
+
+                        # Tier the fixed % based on profit
+                        if is_option:
+                            if profit_pct < 0.10:
+                                trailing_pct = max(base_trailing_pct, 0.08)  # 8% min for options
+                            elif profit_pct < 0.25:
+                                trailing_pct = max(base_trailing_pct, 0.06)
+                            else:
+                                trailing_pct = max(base_trailing_pct, 0.05)
+                        else:
+                            trailing_pct = base_trailing_pct
+
+                        # Trend bonus: widen by 30%
+                        if _trend_aligned:
+                            trailing_pct *= 1.3
+
+                        if trailing_pct > 0:
+                            if side == 'LONG':
                                 new_trailing_stop = trail_reference_price * (1 - trailing_pct)
                                 if new_trailing_stop > stop_loss and new_trailing_stop > entry_price:
                                     pos['stop_loss'] = round(new_trailing_stop, 2)
                                     stop_loss = pos['stop_loss']
-                                    print(f"📈 Trailing stop moved UP for {symbol}: ${stop_loss:.2f} (ref=${trail_reference_price:.2f}, profit: {profit_pct*100:.2f}%)")
-                        else:  # SHORT
-                            profit_pct = (entry_price - trail_reference_price) / entry_price
-                            if profit_pct >= min_profit_to_trail:
+                                    print(f"📈 %Trail UP {symbol}: ${stop_loss:.2f} ({trailing_pct*100:.1f}%, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
+                            else:
                                 new_trailing_stop = trail_reference_price * (1 + trailing_pct)
                                 if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop < entry_price:
                                     pos['stop_loss'] = round(new_trailing_stop, 2)
                                     stop_loss = pos['stop_loss']
-                                    print(f"📉 Trailing stop moved DOWN for {symbol}: ${stop_loss:.2f} (ref=${trail_reference_price:.2f}, profit: {profit_pct*100:.2f}%)")
+                                    print(f"📉 %Trail DN {symbol}: ${stop_loss:.2f} ({trailing_pct*100:.1f}%, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
+
+                    elif not _can_trail and profit_pct >= min_profit_to_trail and _hold_minutes < _min_hold:
+                        # In profit but hold time not met — log but don't trail yet
+                        _remaining = _min_hold - _hold_minutes
+                        print(f"⏳ {pos.get('contract', symbol)}: +{profit_pct*100:.1f}% but hold minimum {_remaining:.0f}m remaining")
             
             exit_reason = None
             exit_price = current_price
@@ -1870,9 +1974,6 @@ def bot_auto_cycle():
         MAX_PER_SYMBOL = max(1, int(bot_state['settings'].get('max_per_symbol_daily', 2)))
 
         # 2b. Max unique symbols per day
-        MAX_SYMBOLS_PER_DAY = int(bot_state['settings'].get('max_symbols_per_day', 4))
-        unique_symbols_today = set(t['symbol'] for t in today_entries)
-
         # Prefer symbols with fewer entries today to avoid repeatedly picking the same top ticker
         signals = sorted(
             signals,
@@ -1970,14 +2071,9 @@ def bot_auto_cycle():
             # --- PER-SYMBOL OVERTRADING GUARDS ---
             sym = signal['symbol']
             
-            # Check per-symbol daily cap
+            # Check per-symbol daily cap (avoid repeat SL hits on same ticker)
             if sym_trade_counts.get(sym, 0) >= MAX_PER_SYMBOL:
                 skipped_reasons.append(f"{sym}: Max {MAX_PER_SYMBOL} entries/symbol/day reached")
-                continue
-            
-            # Check max unique symbols per day
-            if sym not in unique_symbols_today and len(unique_symbols_today) >= MAX_SYMBOLS_PER_DAY:
-                skipped_reasons.append(f"{sym}: Max {MAX_SYMBOLS_PER_DAY} unique symbols/day reached (today: {', '.join(sorted(unique_symbols_today))})")
                 continue
             
             # ===== MARKET REGIME FILTER (direction gating) =====
@@ -2080,20 +2176,36 @@ def bot_auto_cycle():
                     skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} below minimum ${min_premium:.2f} — too cheap, spread kills edge")
                     continue
 
-                signal_stop = float(signal.get('stop_loss', premium * 0.5) or (premium * 0.5))
-                risk_pct = max(0.01, min(0.95, 1 - (signal_stop / signal_premium))) if signal_premium > 0 else 0.5
-                live_stop_loss = round(premium * (1 - risk_pct), 2)
-
+                # ===== POSITION SIZING =====
+                # 1. Size contracts from position_size budget
                 contracts_qty = max(1, int(position_size / (premium * 100)))
                 cost = contracts_qty * premium * 100
 
-                # ===== MAX LOSS PER TRADE CAP =====
-                # Cap position size so max possible loss doesn't exceed threshold
+                # 2. Derive stop loss from max_loss_per_trade (tighter stop, not fewer contracts)
                 max_loss_per_trade = float(bot_state['settings'].get('max_loss_per_trade', 500))
-                if cost > max_loss_per_trade and max_loss_per_trade > 0:
-                    contracts_qty = max(1, int(max_loss_per_trade / (premium * 100)))
-                    cost = contracts_qty * premium * 100
-                    print(f"🛡️ Position sized down for {signal.get('contract', sym)}: {contracts_qty} contracts (max loss cap ${max_loss_per_trade})")
+                signal_stop = float(signal.get('stop_loss', premium * 0.5) or (premium * 0.5))
+                risk_pct_signal = max(0.01, min(0.95, 1 - (signal_stop / signal_premium))) if signal_premium > 0 else 0.5
+                signal_based_stop = round(premium * (1 - risk_pct_signal), 2)
+
+                if max_loss_per_trade > 0 and contracts_qty > 0:
+                    # Max $ we can lose per contract to stay within max_loss_per_trade
+                    max_risk_per_contract = max_loss_per_trade / contracts_qty / 100  # in $ premium terms
+                    # Tighter stop derived from risk budget
+                    risk_based_stop = round(premium - max_risk_per_contract, 2)
+                    # Use the TIGHTER (higher) stop: risk-budget vs signal-based
+                    live_stop_loss = max(risk_based_stop, signal_based_stop)
+                    # Floor: stop can't be above 85% of entry (minimum 15% room)
+                    min_stop_floor = round(premium * 0.15, 2)
+                    if (premium - live_stop_loss) < min_stop_floor:
+                        live_stop_loss = round(premium - min_stop_floor, 2)
+                        # Recalc contracts if floor forces wider risk
+                        actual_risk = (premium - live_stop_loss) * 100
+                        if actual_risk > 0:
+                            contracts_qty = max(1, int(max_loss_per_trade / actual_risk))
+                            cost = contracts_qty * premium * 100
+                    print(f"📊 {signal.get('contract', sym)}: {contracts_qty}x @ ${premium:.2f}, stop ${live_stop_loss:.2f} (max loss ${max_loss_per_trade})")
+                else:
+                    live_stop_loss = signal_based_stop
 
                 pre_balance = _get_live_available_balance()
                 if cost > pre_balance:

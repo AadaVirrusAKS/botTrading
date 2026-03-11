@@ -118,6 +118,10 @@ def _background_position_monitor():
     _bg_monitor_running = True
     print(f"🔄 Background bot engine started ({_BG_INTERVAL}s interval) — trades execute even with no browser open")
     
+    # Delay first cycle so the initial page load + scan don't compete
+    # with the background engine for yfinance API slots.
+    time.sleep(30)
+    
     while _bg_monitor_running:
         try:
             time.sleep(_BG_INTERVAL)

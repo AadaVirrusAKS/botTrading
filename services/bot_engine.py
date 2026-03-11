@@ -43,7 +43,7 @@ bot_state = {
         'max_positions': 3,
         'max_daily_trades': 20,
         'max_per_symbol_daily': 2,
-        'max_symbols_per_day': 4,
+        'max_per_symbol_daily': 4,
         'reentry_cooldown_minutes': 10,
         'position_size': 4000,
         'stop_loss': 2.0,

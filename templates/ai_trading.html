@@ -1360,7 +1360,9 @@
             // Await settings restore so dropdowns (instrument-type, watchlist, etc.)
             // are set before we fetch/filter signals
             await loadAccountState();
-            refreshStatus(true);
+            // Don't force_live on first load — use cached state so UI appears instantly.
+            // The auto_cycle / background engine will refresh prices within seconds.
+            refreshStatus(false);
             refreshInterval = setInterval(refreshStatus, 5000);
             
             // Auto-cycle interval (runs when bot is running)
@@ -1378,8 +1380,12 @@
             // trade execution and exit monitoring (stop-loss, targets, EOD closes).
             // Other pages may throttle polling on blur — this page must NOT.
             
-            // Run initial scan to get fresh live data
-            runInitialScan();
+            // Only run initial scan if bot is NOT already running.
+            // When running, auto_cycle already provides fresh signals — no need
+            // to fire an extra heavy /api/bot/scan that competes for yfinance.
+            if (!botRunning) {
+                runInitialScan();
+            }
         });
         
         // Run initial scan on page load for fresh data
