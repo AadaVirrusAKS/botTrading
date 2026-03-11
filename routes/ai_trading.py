@@ -1177,7 +1177,7 @@ def bot_auto_cycle():
                     if pos_atr <= 0:
                         # Estimate ATR from entry price (roughly 1-2% for most stocks)
                         pos_atr = entry_price * 0.015
-                    atr_multiplier = 1.5
+                    atr_multiplier = 2.5
                     
                     if side == 'LONG':
                         profit_pct = (trail_reference_price - entry_price) / entry_price
@@ -1200,7 +1200,7 @@ def bot_auto_cycle():
                     try:
                         trailing_pct = float(trailing_mode) / 100
                     except (ValueError, TypeError):
-                        trailing_pct = 0.02  # Default 2%
+                        trailing_pct = 0.05  # Default 5% (wider to let winners run)
                     if trailing_pct > 0 and entry_price > 0:
                         if side == 'LONG':
                             profit_pct = (trail_reference_price - entry_price) / entry_price
@@ -1238,6 +1238,21 @@ def bot_auto_cycle():
                     exit_price = current_price
                     display_name = pos.get('contract', symbol)
                     print(f"🛡️ MAX LOSS GUARD: {display_name} down {option_loss_pct*100:.1f}% (limit: {max_option_loss_pct*100:.0f}%) — force closing")
+            
+            # ===== MAX DOLLAR LOSS PER TRADE GUARD =====
+            # Hard cap: close any position whose unrealized loss exceeds max_loss_per_trade dollars
+            if not exit_reason and entry_price > 0:
+                max_loss_dollars = float(bot_state['settings'].get('max_loss_per_trade', 500))
+                if max_loss_dollars > 0:
+                    if side == 'LONG':
+                        unrealized_loss = (entry_price - current_price) * quantity * multiplier
+                    else:
+                        unrealized_loss = (current_price - entry_price) * quantity * multiplier
+                    if unrealized_loss >= max_loss_dollars:
+                        exit_reason = 'MAX_LOSS_GUARD'
+                        exit_price = current_price
+                        display_name = pos.get('contract', symbol)
+                        print(f"🛡️ MAX LOSS $ GUARD: {display_name} loss ${unrealized_loss:.2f} >= limit ${max_loss_dollars:.0f} — force closing")
             
             # ===== 0DTE / SHORT-DTE EXPIRY PROTECTION =====
             # Prevents holding short-dated options that bleed value via theta decay.
@@ -1849,7 +1864,11 @@ def bot_auto_cycle():
         # 2. Track per-symbol entry count today
         from collections import Counter
         sym_trade_counts = Counter(t['symbol'] for t in today_entries)
-        MAX_PER_SYMBOL = max(1, int(bot_state['settings'].get('max_per_symbol_daily', 6)))
+        MAX_PER_SYMBOL = max(1, int(bot_state['settings'].get('max_per_symbol_daily', 2)))
+
+        # 2b. Max unique symbols per day
+        MAX_SYMBOLS_PER_DAY = int(bot_state['settings'].get('max_symbols_per_day', 4))
+        unique_symbols_today = set(t['symbol'] for t in today_entries)
 
         # Prefer symbols with fewer entries today to avoid repeatedly picking the same top ticker
         signals = sorted(
@@ -1885,6 +1904,31 @@ def bot_auto_cycle():
             skipped_reasons.append(f"Max daily trades reached ({MAX_DAILY_TRADES})")
             execution_signals = []  # Skip execution only; keep display signals
         
+        # ===== MARKET REGIME FILTER =====
+        # Check SPY trend to avoid trading CALLs in bearish conditions
+        _market_regime = 'neutral'  # default: allow all
+        if bot_state['settings'].get('market_regime_filter', True):
+            try:
+                spy_hist = cached_get_history('SPY', period='5d', interval='1d')
+                if spy_hist is not None and len(spy_hist) >= 3:
+                    spy_close = spy_hist['Close'].dropna()
+                    if len(spy_close) >= 3:
+                        spy_sma3 = spy_close.rolling(3).mean().iloc[-1]
+                        spy_latest = float(spy_close.iloc[-1])
+                        spy_prev = float(spy_close.iloc[-2])
+                        # Bearish: price below 3-day SMA AND last close was down
+                        if spy_latest < spy_sma3 and spy_latest < spy_prev:
+                            _market_regime = 'bearish'
+                            print(f"🐻 Market regime: BEARISH (SPY ${spy_latest:.2f} < SMA3 ${spy_sma3:.2f}) — CALL entries will be blocked")
+                        # Bullish: price above 3-day SMA AND last close was up
+                        elif spy_latest > spy_sma3 and spy_latest > spy_prev:
+                            _market_regime = 'bullish'
+                            print(f"🐂 Market regime: BULLISH (SPY ${spy_latest:.2f} > SMA3 ${spy_sma3:.2f}) — PUT entries will be blocked")
+                        else:
+                            print(f"⚖️ Market regime: NEUTRAL (SPY ${spy_latest:.2f}, SMA3 ${spy_sma3:.2f})")
+            except Exception as e:
+                print(f"⚠️ Market regime check failed: {e} — allowing all directions")
+
         # Early guard: if balance is too low for even one position, skip execution loop entirely
         _available_balance = float(account.get('balance', 0))
         if _available_balance < position_size * 0.5 and execution_signals:
@@ -1925,8 +1969,26 @@ def bot_auto_cycle():
             
             # Check per-symbol daily cap
             if sym_trade_counts.get(sym, 0) >= MAX_PER_SYMBOL:
-                skipped_reasons.append(f"{sym}: Max {MAX_PER_SYMBOL} trades/day reached")
+                skipped_reasons.append(f"{sym}: Max {MAX_PER_SYMBOL} entries/symbol/day reached")
                 continue
+            
+            # Check max unique symbols per day
+            if sym not in unique_symbols_today and len(unique_symbols_today) >= MAX_SYMBOLS_PER_DAY:
+                skipped_reasons.append(f"{sym}: Max {MAX_SYMBOLS_PER_DAY} unique symbols/day reached (today: {', '.join(sorted(unique_symbols_today))})")
+                continue
+            
+            # ===== MARKET REGIME FILTER (direction gating) =====
+            signal_direction = signal.get('option_type', signal.get('action', '')).lower()
+            if _market_regime == 'bearish' and signal_direction in ('call', 'BUY'):
+                # In bearish regime, block CALL/BUY entries
+                if is_option_signal and signal.get('option_type', '').lower() == 'call':
+                    skipped_reasons.append(f"{sym}: CALL blocked — bearish market regime (SPY trending down)")
+                    continue
+            elif _market_regime == 'bullish' and signal_direction == 'put':
+                # In bullish regime, block PUT entries
+                if is_option_signal and signal.get('option_type', '').lower() == 'put':
+                    skipped_reasons.append(f"{sym}: PUT blocked — bullish market regime (SPY trending up)")
+                    continue
             
             # Check cooldown after stop loss (30 min)
             if sym in recent_stop_losses:
@@ -2009,12 +2071,26 @@ def bot_auto_cycle():
                 if not premium or premium <= 0:
                     premium = signal_premium
 
+                # ===== MINIMUM PREMIUM FILTER =====
+                min_premium = float(bot_state['settings'].get('min_option_premium', 1.0))
+                if premium < min_premium:
+                    skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} below minimum ${min_premium:.2f} — too cheap, spread kills edge")
+                    continue
+
                 signal_stop = float(signal.get('stop_loss', premium * 0.5) or (premium * 0.5))
                 risk_pct = max(0.01, min(0.95, 1 - (signal_stop / signal_premium))) if signal_premium > 0 else 0.5
                 live_stop_loss = round(premium * (1 - risk_pct), 2)
 
                 contracts_qty = max(1, int(position_size / (premium * 100)))
                 cost = contracts_qty * premium * 100
+
+                # ===== MAX LOSS PER TRADE CAP =====
+                # Cap position size so max possible loss doesn't exceed threshold
+                max_loss_per_trade = float(bot_state['settings'].get('max_loss_per_trade', 500))
+                if cost > max_loss_per_trade and max_loss_per_trade > 0:
+                    contracts_qty = max(1, int(max_loss_per_trade / (premium * 100)))
+                    cost = contracts_qty * premium * 100
+                    print(f"🛡️ Position sized down for {signal.get('contract', sym)}: {contracts_qty} contracts (max loss cap ${max_loss_per_trade})")
 
                 pre_balance = _get_live_available_balance()
                 if cost > pre_balance:
