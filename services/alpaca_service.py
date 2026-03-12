@@ -310,6 +310,13 @@ def get_orders(status: str = 'all', limit: int = 50) -> List[Dict]:
     return [_format_order(o) for o in orders]
 
 
+def get_order_by_id(order_id: str) -> Dict:
+    """Fetch a single order by its ID. Returns formatted order dict."""
+    client = _get_client()
+    order = client.get_order_by_id(order_id)
+    return _format_order(order)
+
+
 def cancel_order(order_id: str) -> Dict:
     """Cancel a specific order by ID."""
     client = _get_client()

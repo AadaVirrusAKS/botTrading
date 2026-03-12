@@ -856,7 +856,7 @@
             <!-- Stats Cards -->
             <div class="card" style="margin: 0;">
                 <div class="card-body" style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
-                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
                         <div style="text-align: center;">
                             <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);" id="stat-positions">0</div>
                             <div style="font-size: 12px; color: var(--text-secondary);">Positions</div>
@@ -868,6 +868,10 @@
                         <div style="text-align: center;">
                             <div style="font-size: 24px; font-weight: 700; color: var(--accent-green);" id="stat-win-rate">0%</div>
                             <div style="font-size: 12px; color: var(--text-secondary);">Win Rate</div>
+                        </div>
+                        <div style="text-align: center; grid-column: span 2;">
+                            <div style="font-size: 24px; font-weight: 700;" id="stat-day-pnl">$0.00</div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">Today's P&L <span id="stat-day-pnl-realized" style="font-size: 10px; opacity: 0.7;"></span></div>
                         </div>
                         <div style="text-align: center;">
                             <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);" id="stat-last-scan">--</div>
@@ -1565,6 +1569,28 @@
             document.getElementById('stat-win-rate').textContent = `${winRate}%`;
         }
         
+        // Update Today's P&L display (equity-based, matches Alpaca's day_pnl)
+        function updateDayPnlDisplay(dayPnl, dayPnlPct, todayRealizedPnl) {
+            const el = document.getElementById('stat-day-pnl');
+            const realizedEl = document.getElementById('stat-day-pnl-realized');
+            if (!el) return;
+            
+            const pnl = Number(dayPnl || 0);
+            const pct = Number(dayPnlPct || 0);
+            const sign = pnl >= 0 ? '+' : '';
+            el.textContent = `${sign}${formatCurrency(pnl)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+            el.style.color = pnl >= 0 ? '#10b981' : '#ef4444';
+            
+            if (realizedEl && todayRealizedPnl !== undefined) {
+                const rPnl = Number(todayRealizedPnl || 0);
+                if (rPnl !== 0) {
+                    realizedEl.textContent = `| Closed: ${rPnl >= 0 ? '+' : ''}${formatCurrency(rPnl)}`;
+                } else {
+                    realizedEl.textContent = '';
+                }
+            }
+        }
+        
         // Start bot
         async function startBot() {
             if (accountMode === 'real') {
@@ -1894,6 +1920,9 @@
                         demoAccount = data.demo_account;
                         updateAccountDisplay(demoAccount);
                     }
+                    
+                    // Update Today's P&L from server (equity-based, matches Alpaca method)
+                    updateDayPnlDisplay(data.day_pnl, data.day_pnl_pct, data.today_realized_pnl);
                 }
             } catch (error) {
                 console.error('Status refresh error:', error);

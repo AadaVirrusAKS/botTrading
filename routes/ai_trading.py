@@ -45,6 +45,25 @@ ai_trading_bp = Blueprint("ai_trading", __name__)
 # Concurrent callers return cached signals instead of stacking up threads.
 _SCAN_IN_PROGRESS = threading.Lock()
 
+
+def _poll_alpaca_fill_price(order_id, max_retries=10, delay=0.5):
+    """Poll Alpaca for the filled_avg_price of an order. Returns float or None."""
+    try:
+        from services.alpaca_service import get_order_by_id
+        for _ in range(max_retries):
+            order = get_order_by_id(order_id)
+            fill_price = order.get('filled_avg_price')
+            if fill_price:
+                return float(fill_price)
+            status = order.get('status', '')
+            if status in ('canceled', 'expired', 'rejected', 'replaced'):
+                return None
+            time.sleep(delay)
+        return None
+    except Exception as e:
+        print(f"⚠️ Error polling Alpaca fill price for order {order_id}: {e}")
+        return None
+
 @ai_trading_bp.route('/api/bot/status')
 def bot_status():
     """Get bot status and account info"""
@@ -65,6 +84,8 @@ def bot_status():
             multiplier = 100 if is_option else 1
             side_mult = 1 if pos.get('side') == 'LONG' else -1
             total_pnl += (current - entry) * qty * multiplier * side_mult
+        # Day P&L for stale response
+        _stale_day_pnl = round(total_pnl, 2)  # Approximate from unrealized only
         response = jsonify({
             'success': True,
             'running': bot_state.get('running', False),
@@ -79,6 +100,9 @@ def bot_status():
             'daily_analysis': bot_state.get('daily_analysis'),
             'positions': positions,
             'trades': account.get('trades', []),
+            'day_pnl': _stale_day_pnl,
+            'day_pnl_pct': 0,
+            'today_realized_pnl': 0,
             'demo_account': {
                 **bot_state.get('demo_account', {}),
                 'positions': positions if account_mode == 'demo' else bot_state.get('demo_account', {}).get('positions', []),
@@ -166,7 +190,43 @@ def bot_status():
         multiplier = 100 if is_option else 1
         side_mult = 1 if pos.get('side') == 'LONG' else -1
         total_pnl += (current - entry) * qty * multiplier * side_mult
-    
+
+    # ---- DAY P&L: equity-based (matches Alpaca's day_pnl method) ----
+    # portfolio_value = cash + market_value_of_positions
+    cash_balance = state_copy['demo_account'].get('balance', 0) if state_copy['account_mode'] == 'demo' else 0
+    current_market_value = 0
+    for pos in positions:
+        is_option = pos.get('instrument_type') == 'option'
+        mult = 100 if is_option else 1
+        is_short = pos.get('side') == 'SHORT'
+        val = (pos.get('current_price', pos.get('entry_price', 0))) * pos.get('quantity', 0) * mult
+        current_market_value += -val if is_short else val
+    current_equity = cash_balance + current_market_value
+
+    # Snapshot day_start_equity once per trading day
+    today_str = datetime.now(ZoneInfo('America/Chicago')).strftime('%Y-%m-%d')
+    day_start_equity = bot_state.get('day_start_equity', current_equity)
+    day_start_date = bot_state.get('day_start_date', '')
+    if day_start_date != today_str:
+        # New day — snapshot current equity as start-of-day baseline
+        day_start_equity = current_equity
+        with BOT_STATE_LOCK:
+            load_bot_state()
+            bot_state['day_start_equity'] = day_start_equity
+            bot_state['day_start_date'] = today_str
+            save_bot_state()
+
+    day_pnl = round(current_equity - day_start_equity, 2)
+    day_pnl_pct = round((day_pnl / day_start_equity * 100), 2) if day_start_equity else 0
+
+    # Also compute today's realized P&L from closed trades (for cross-reference)
+    today_realized_pnl = 0.0
+    for t in state_copy['trades']:
+        ts = t.get('timestamp', '')
+        if ts.startswith(today_str) and t.get('pnl') is not None:
+            today_realized_pnl += t['pnl']
+    today_realized_pnl = round(today_realized_pnl, 2)
+
     response = jsonify({
         'success': True,
         'running': state_copy['running'],
@@ -181,6 +241,9 @@ def bot_status():
         'daily_analysis': state_copy.get('daily_analysis'),
         'positions': positions,
         'trades': state_copy['trades'],
+        'day_pnl': day_pnl,
+        'day_pnl_pct': day_pnl_pct,
+        'today_realized_pnl': today_realized_pnl,
         'demo_account': {
             **state_copy['demo_account'],
             'positions': positions if state_copy['account_mode'] == 'demo' else state_copy['demo_account']['positions'],
@@ -426,6 +489,8 @@ def bot_reset_demo():
         bot_state['signals'] = []
         bot_state['executed_trades'] = []
         bot_state['today_pnl'] = 0.0
+        bot_state['day_start_equity'] = 10000.0
+        bot_state['day_start_date'] = ''
         bot_state['running'] = False
         bot_state['auto_trade'] = False
         
@@ -1422,6 +1487,30 @@ def _bot_auto_cycle_inner():
                         if side == 'SHORT':
                             partial_pnl_pct = -partial_pnl_pct
                         
+                        # Execute partial close on Alpaca if this position has an Alpaca order
+                        alpaca_partial_id = None
+                        partial_exit_price = current_price
+                        if is_alpaca_execution_enabled() and pos.get('alpaca_order_id'):
+                            close_sym = pos.get('option_ticker') or pos.get('alpaca_symbol') or symbol
+                            alpaca_partial = execute_alpaca_exit(close_sym, qty=sell_qty)
+                            if alpaca_partial['success']:
+                                alpaca_partial_id = alpaca_partial.get('order', {}).get('id')
+                                # Sync partial exit price from Alpaca's actual fill
+                                fill_price = alpaca_partial.get('order', {}).get('filled_avg_price')
+                                if not fill_price and alpaca_partial_id:
+                                    fill_price = _poll_alpaca_fill_price(alpaca_partial_id)
+                                if fill_price:
+                                    old_exit = partial_exit_price
+                                    partial_exit_price = fill_price
+                                    if side == 'LONG':
+                                        partial_pnl = (partial_exit_price - entry_price) * sell_qty * multiplier
+                                    else:
+                                        partial_pnl = (entry_price - partial_exit_price) * sell_qty * multiplier
+                                    partial_pnl_pct = ((partial_exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                                    if side == 'SHORT':
+                                        partial_pnl_pct = -partial_pnl_pct
+                                    print(f"💰 ALPACA FILL SYNC (partial exit): {close_sym} {sell_qty} filled @ ${fill_price:.2f} (bot price was ${old_exit:.2f}, P&L adjusted: ${partial_pnl:.2f})")
+                        
                         # Log partial exit trade
                         partial_trade = {
                             'symbol': symbol,
@@ -1433,14 +1522,15 @@ def _bot_auto_cycle_inner():
                             'source': pos.get('source', 'bot'),
                             'quantity': sell_qty,
                             'entry_price': entry_price,
-                            'exit_price': current_price,
-                            'price': current_price,
+                            'exit_price': partial_exit_price,
+                            'price': partial_exit_price,
                             'pnl': partial_pnl,
                             'pnl_pct': partial_pnl_pct,
                             'reason': 'PARTIAL_TARGET_HIT',
                             'timestamp': datetime.now().isoformat(),
                             'auto_exit': True,
-                            'trade_type': pos.get('trade_type', 'swing')
+                            'trade_type': pos.get('trade_type', 'swing'),
+                            'alpaca_order_id': alpaca_partial_id
                         }
                         account['trades'].append(partial_trade)
                         
@@ -1463,7 +1553,7 @@ def _bot_auto_cycle_inner():
                         target = pos['target']
                         
                         display_name = pos.get('contract', symbol) if is_option else symbol
-                        print(f"🎯 PARTIAL EXIT: Sold {sell_qty} of {display_name} @ ${current_price:.2f} | P&L: ${partial_pnl:.2f} ({partial_pnl_pct:.1f}%) | Remaining: {remaining_qty}, new SL=breakeven, new Target=${target:.2f}")
+                        print(f"🎯 PARTIAL EXIT: Sold {sell_qty} of {display_name} @ ${partial_exit_price:.2f} | P&L: ${partial_pnl:.2f} ({partial_pnl_pct:.1f}%) | Remaining: {remaining_qty}, new SL=breakeven, new Target=${target:.2f}")
                         
                         exits_triggered.append({
                             'symbol': symbol,
@@ -1471,7 +1561,7 @@ def _bot_auto_cycle_inner():
                             'instrument_type': pos.get('instrument_type', 'stock'),
                             'reason': 'PARTIAL_TARGET_HIT',
                             'entry_price': entry_price,
-                            'exit_price': current_price,
+                            'exit_price': partial_exit_price,
                             'current_price': current_price,
                             'pnl': partial_pnl,
                             'pnl_pct': partial_pnl_pct,
@@ -1540,10 +1630,26 @@ def _bot_auto_cycle_inner():
                 # Close on Alpaca if this position has an Alpaca order
                 alpaca_close_order_id = None
                 if is_alpaca_execution_enabled() and pos.get('alpaca_order_id'):
-                    close_sym = pos.get('option_ticker') or symbol
+                    close_sym = pos.get('option_ticker') or pos.get('alpaca_symbol') or symbol
                     alpaca_close = execute_alpaca_exit(close_sym, qty=quantity)
                     if alpaca_close['success']:
                         alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
+                        # Sync exit price from Alpaca's actual fill
+                        fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
+                        if not fill_price and alpaca_close_order_id:
+                            fill_price = _poll_alpaca_fill_price(alpaca_close_order_id)
+                        if fill_price:
+                            old_exit = exit_price
+                            exit_price = fill_price
+                            # Recalculate P&L with actual fill
+                            if side == 'LONG':
+                                pnl = (exit_price - entry_price) * quantity * multiplier
+                            else:
+                                pnl = (entry_price - exit_price) * quantity * multiplier
+                            pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                            if side == 'SHORT':
+                                pnl_pct = -pnl_pct
+                            print(f"💰 ALPACA FILL SYNC (exit): {close_sym} filled @ ${fill_price:.2f} (bot price was ${old_exit:.2f}, diff: ${fill_price - old_exit:+.2f}, P&L adjusted: ${pnl:.2f})")
                 
                 # Log the exit trade with instrument info
                 exit_trade = {
@@ -2266,6 +2372,23 @@ def _bot_auto_cycle_inner():
                         if alpaca_result['success']:
                             alpaca_order_id = alpaca_result['order'].get('id')
                             position['alpaca_order_id'] = alpaca_order_id
+                            position['alpaca_symbol'] = signal['option_ticker']
+                            # Sync entry price from Alpaca's actual fill
+                            fill_price = alpaca_result['order'].get('filled_avg_price')
+                            if not fill_price and alpaca_order_id:
+                                fill_price = _poll_alpaca_fill_price(alpaca_order_id)
+                            if fill_price:
+                                old_premium = premium
+                                premium = fill_price
+                                position['entry_price'] = premium
+                                position['current_price'] = premium
+                                cost = premium * contracts_qty * 100
+                                # Recalculate stop based on actual fill
+                                if live_stop_loss > 0:
+                                    sl_pct = (old_premium - live_stop_loss) / old_premium if old_premium > 0 else 0.5
+                                    position['stop_loss'] = round(premium * (1 - sl_pct), 2)
+                                    live_stop_loss = position['stop_loss']
+                                print(f"💰 ALPACA FILL SYNC (entry): {signal.get('contract')} filled @ ${fill_price:.2f} (bot estimate was ${old_premium:.2f}, diff: ${fill_price - old_premium:+.2f})")
                         else:
                             print(f"⚠️ Alpaca option order failed for {signal.get('contract')}, tracked locally only: {alpaca_result['error']}")
                     
@@ -2378,6 +2501,16 @@ def _bot_auto_cycle_inner():
                         if alpaca_result['success']:
                             alpaca_order_id = alpaca_result['order'].get('id')
                             position['alpaca_order_id'] = alpaca_order_id
+                            # Sync entry price from Alpaca's actual fill
+                            fill_price = alpaca_result['order'].get('filled_avg_price')
+                            if not fill_price and alpaca_order_id:
+                                fill_price = _poll_alpaca_fill_price(alpaca_order_id)
+                            if fill_price:
+                                old_price = price
+                                price = fill_price
+                                position['entry_price'] = price
+                                position['current_price'] = price
+                                print(f"💰 ALPACA FILL SYNC (entry): {signal['symbol']} filled @ ${fill_price:.2f} (bot estimate was ${old_price:.2f}, diff: ${fill_price - old_price:+.2f})")
                         else:
                             print(f"⚠️ Alpaca order failed for {signal['symbol']}, position tracked locally only: {alpaca_result['error']}")
                     
@@ -2513,6 +2646,16 @@ def bot_trade():
                 if alpaca_result['success']:
                     alpaca_order_id = alpaca_result['order'].get('id')
                     position['alpaca_order_id'] = alpaca_order_id
+                    # Sync entry price from Alpaca's actual fill
+                    fill_price = alpaca_result['order'].get('filled_avg_price')
+                    if not fill_price and alpaca_order_id:
+                        fill_price = _poll_alpaca_fill_price(alpaca_order_id)
+                    if fill_price:
+                        old_price = price
+                        price = fill_price
+                        position['entry_price'] = price
+                        position['current_price'] = price
+                        print(f"💰 ALPACA FILL SYNC (entry): {symbol} filled @ ${fill_price:.2f} (bot estimate was ${old_price:.2f})")
 
             # Log trade
             trade = {
@@ -2563,6 +2706,15 @@ def bot_trade():
                     alpaca_close = execute_alpaca_exit(symbol)
                     if alpaca_close['success']:
                         alpaca_close_id = alpaca_close.get('order', {}).get('id')
+                        # Sync exit price from Alpaca's actual fill
+                        fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
+                        if not fill_price and alpaca_close_id:
+                            fill_price = _poll_alpaca_fill_price(alpaca_close_id)
+                        if fill_price:
+                            old_exit = price
+                            price = fill_price
+                            pnl = (price - long_position['entry_price']) * long_position['quantity']
+                            print(f"💰 ALPACA FILL SYNC (exit): {symbol} filled @ ${fill_price:.2f} (bot price was ${old_exit:.2f})")
                 
                 # Log trade with P&L
                 trade = {
@@ -2614,6 +2766,16 @@ def bot_trade():
                         if alpaca_result['success']:
                             alpaca_order_id = alpaca_result['order'].get('id')
                             position['alpaca_order_id'] = alpaca_order_id
+                            # Sync entry price from Alpaca's actual fill
+                            fill_price = alpaca_result['order'].get('filled_avg_price')
+                            if not fill_price and alpaca_order_id:
+                                fill_price = _poll_alpaca_fill_price(alpaca_order_id)
+                            if fill_price:
+                                old_price = price
+                                price = fill_price
+                                position['entry_price'] = price
+                                position['current_price'] = price
+                                print(f"💰 ALPACA FILL SYNC (entry): {symbol} SHORT filled @ ${fill_price:.2f} (bot estimate was ${old_price:.2f})")
                     
                     trade = {
                         'symbol': symbol,
@@ -2755,6 +2917,21 @@ def bot_trade_option():
             if alpaca_result['success']:
                 alpaca_order_id = alpaca_result['order'].get('id')
                 position['alpaca_order_id'] = alpaca_order_id
+                position['alpaca_symbol'] = alpaca_sym
+                # Sync entry price from Alpaca's actual fill
+                fill_price = alpaca_result['order'].get('filled_avg_price')
+                if not fill_price and alpaca_order_id:
+                    fill_price = _poll_alpaca_fill_price(alpaca_order_id)
+                if fill_price:
+                    old_premium = premium
+                    premium = fill_price
+                    position['entry_price'] = premium
+                    position['current_price'] = premium
+                    cost = premium * contracts * 100
+                    if stop_premium > 0:
+                        sl_pct = (old_premium - stop_premium) / old_premium if old_premium > 0 else 0.5
+                        position['stop_loss'] = round(premium * (1 - sl_pct), 2)
+                    print(f"💰 ALPACA FILL SYNC (entry): {contract} filled @ ${fill_price:.2f} (bot estimate was ${old_premium:.2f})")
 
         account['positions'].append(position)
 
@@ -2861,10 +3038,25 @@ def bot_close_position():
         # Close on Alpaca if this position has an Alpaca order
         alpaca_close_id = None
         if is_alpaca_execution_enabled() and target_pos.get('alpaca_order_id'):
-            close_sym = target_pos.get('option_ticker') or target_pos.get('contract') or symbol
+            close_sym = target_pos.get('option_ticker') or target_pos.get('alpaca_symbol') or target_pos.get('contract') or symbol
             alpaca_close = execute_alpaca_exit(close_sym, qty=target_pos['quantity'])
             if alpaca_close['success']:
                 alpaca_close_id = alpaca_close.get('order', {}).get('id')
+                # Sync exit price from Alpaca's actual fill
+                fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
+                if not fill_price and alpaca_close_id:
+                    fill_price = _poll_alpaca_fill_price(alpaca_close_id)
+                if fill_price:
+                    old_price = price
+                    price = fill_price
+                    # Recalculate P&L with actual fill
+                    if is_option:
+                        pnl = (price - target_pos['entry_price']) * target_pos['quantity'] * 100
+                    elif target_pos['side'] == 'LONG':
+                        pnl = (price - target_pos['entry_price']) * target_pos['quantity']
+                    else:
+                        pnl = (target_pos['entry_price'] - price) * target_pos['quantity']
+                    print(f"💰 ALPACA FILL SYNC (exit): {close_sym} filled @ ${fill_price:.2f} (bot price was ${old_price:.2f})")
         
         trade = {
             'symbol': symbol,

@@ -560,13 +560,65 @@ async function closeAllPositions() {
 // =============================
 async function refreshOrders(status) {
     status = status || 'all';
+    const limit = status === 'closed' ? 500 : 50;
     try {
-        const res = await fetch('/api/alpaca/orders?status=' + status + '&limit=50');
+        const res = await fetch('/api/alpaca/orders?status=' + status + '&limit=' + limit);
         const data = await res.json();
         if (!data.success) return;
         renderOrders(data.data);
         document.getElementById('orders-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     } catch(e) { console.error('Orders refresh error:', e); }
+}
+
+function computeOrderPnL(orders) {
+    // Pair filled BUY/SELL orders per symbol using FIFO matching
+    const filled = orders
+        .filter(o => o.status === 'filled' && o.filled_avg_price)
+        .slice()
+        .sort((a, b) => new Date(a.filled_at || a.submitted_at) - new Date(b.filled_at || b.submitted_at));
+
+    const symbolLots = {}; // { symbol: [{qty, price, side}] }
+    const pnlMap = {};     // { orderId: pnl }
+
+    filled.forEach(order => {
+        const sym = order.symbol;
+        if (!symbolLots[sym]) symbolLots[sym] = [];
+        const lots = symbolLots[sym];
+        let remaining = order.filled_qty || order.qty;
+        const price = order.filled_avg_price;
+        const side = order.side; // 'buy' or 'sell'
+        let pnl = 0;
+        let isClosing = false;
+
+        // Options contracts: 100x multiplier (OCC symbols are >10 chars)
+        const multiplier = sym.length > 10 ? 100 : 1;
+
+        // Match against opposite-side lots (FIFO)
+        while (remaining > 0 && lots.length > 0 && lots[0].side !== side) {
+            isClosing = true;
+            const lot = lots[0];
+            const matchQty = Math.min(remaining, lot.qty);
+            if (lot.side === 'buy') {
+                // Was long, now selling → profit = (sell - buy) * qty * multiplier
+                pnl += (price - lot.price) * matchQty * multiplier;
+            } else {
+                // Was short, now covering → profit = (short_sell - buy_back) * qty * multiplier
+                pnl += (lot.price - price) * matchQty * multiplier;
+            }
+            lot.qty -= matchQty;
+            remaining -= matchQty;
+            if (lot.qty <= 0) lots.shift();
+        }
+
+        // Remaining qty is a new opening lot
+        if (remaining > 0) {
+            lots.push({qty: remaining, price: price, side: side});
+        }
+        if (isClosing) {
+            pnlMap[order.id] = Math.round(pnl * 100) / 100;
+        }
+    });
+    return pnlMap;
 }
 
 function renderOrders(orders) {
@@ -575,13 +627,26 @@ function renderOrders(orders) {
         container.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>No orders found</p></div>';
         return;
     }
-    let html = '<table class="data-table"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th><th>Filled</th><th>Price</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    const pnlMap = computeOrderPnL(orders);
+    let html = '<table class="data-table"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th><th>Filled</th><th>Price</th><th>P&L</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    let totalPnl = 0;
+    let closingCount = 0;
     orders.forEach(o => {
         const sideClass = o.side === 'buy' ? 'badge-buy' : 'badge-sell';
         const statusClass = 'badge-' + (o.status === 'filled' ? 'filled' : o.status === 'new' || o.status === 'accepted' || o.status === 'partially_filled' ? 'open' : 'cancelled');
         const time = o.submitted_at ? new Date(o.submitted_at).toLocaleString() : '-';
         const price = o.filled_avg_price ? '$' + Number(o.filled_avg_price).toFixed(2) : (o.limit_price ? '$' + Number(o.limit_price).toFixed(2) : 'MKT');
         const canCancel = ['new', 'accepted', 'partially_filled', 'pending_new'].includes(o.status);
+        // P&L column — only shown on closing trades
+        let pnlHtml = '-';
+        if (pnlMap.hasOwnProperty(o.id)) {
+            const pnl = pnlMap[o.id];
+            totalPnl += pnl;
+            closingCount++;
+            const sign = pnl >= 0 ? '+' : '';
+            const color = pnl >= 0 ? '#10b981' : '#ef4444';
+            pnlHtml = '<span style="color:' + color + '; font-weight:600;">' + sign + '$' + pnl.toFixed(2) + '</span>';
+        }
         html += '<tr>';
         html += '<td style="font-size:12px;">' + time + '</td>';
         html += '<td><strong>' + o.symbol + '</strong></td>';
@@ -590,10 +655,20 @@ function renderOrders(orders) {
         html += '<td>' + o.qty + '</td>';
         html += '<td>' + o.filled_qty + '</td>';
         html += '<td>' + price + '</td>';
+        html += '<td>' + pnlHtml + '</td>';
         html += '<td><span class="badge ' + statusClass + '">' + o.status + '</span></td>';
         html += '<td>' + (canCancel ? '<button class="btn btn-secondary" style="padding:4px 10px; font-size:11px;" onclick="cancelOrder(\'' + o.id + '\')">Cancel</button>' : '-') + '</td>';
         html += '</tr>';
     });
+    // Total P&L summary row
+    if (closingCount > 0) {
+        const totalSign = totalPnl >= 0 ? '+' : '';
+        const totalColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
+        html += '<tr style="background:#1a1a2e; border-top:2px solid #333;">';
+        html += '<td colspan="7" style="text-align:right; font-weight:700;">Total Realized P&L (' + closingCount + ' trades):</td>';
+        html += '<td><span style="color:' + totalColor + '; font-weight:700; font-size:14px;">' + totalSign + '$' + totalPnl.toFixed(2) + '</span></td>';
+        html += '<td colspan="2"></td></tr>';
+    }
     html += '</tbody></table>';
     container.innerHTML = html;
 }
