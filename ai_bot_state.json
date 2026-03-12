@@ -46,7 +46,7 @@
       "iv": 68.5,
       "open_interest": 4899,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T16:35:15.415056"
+      "live_price_update": "2026-03-12T17:38:20.887763"
     },
     {
       "symbol": "SOFI",
@@ -73,7 +73,7 @@
       "iv": 72.3,
       "open_interest": 59936,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T16:35:15.415056"
+      "live_price_update": "2026-03-12T17:38:20.887763"
     },
     {
       "symbol": "AMD",
@@ -100,7 +100,7 @@
       "iv": 52.0,
       "open_interest": 21437,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T16:35:15.415056"
+      "live_price_update": "2026-03-12T17:38:20.887763"
     },
     {
       "symbol": "PLTR",
@@ -127,7 +127,7 @@
       "iv": 51.5,
       "open_interest": 11194,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T16:35:15.415056"
+      "live_price_update": "2026-03-12T17:38:20.887763"
     }
   ],
   "demo_account": {
@@ -14417,7 +14417,7 @@
         "timestamp": "2026-03-12T11:46:17.922064",
         "auto_exit": true,
         "trade_type": "swing",
-        "alpaca_order_id": null
+        "alpaca_order_id": "500f0b4d-412a-4a30-b66a-586f2abca5d0"
       },
       {
         "symbol": "CRM",
@@ -14457,7 +14457,7 @@
         "timestamp": "2026-03-12T11:53:15.289362",
         "auto_exit": true,
         "trade_type": "swing",
-        "alpaca_order_id": null
+        "alpaca_order_id": "27acde8b-b3d1-4b7d-9a7c-d1c5d8439d75"
       },
       {
         "symbol": "ORCL",
