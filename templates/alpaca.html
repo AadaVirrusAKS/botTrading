@@ -558,12 +558,26 @@ async function closeAllPositions() {
 // =============================
 // ORDERS
 // =============================
+let _botPnlMap = {};   // {alpaca_order_id: pnl} from AI Bot
+
+async function fetchBotPnlMap() {
+    try {
+        const res = await fetch('/api/alpaca/bot-pnl-map');
+        const data = await res.json();
+        if (data.success) _botPnlMap = data.data || {};
+    } catch(e) { console.error('Bot PnL map fetch error:', e); }
+}
+
 async function refreshOrders(status) {
     status = status || 'all';
     const limit = status === 'closed' ? 500 : 50;
     try {
-        const res = await fetch('/api/alpaca/orders?status=' + status + '&limit=' + limit);
-        const data = await res.json();
+        // Fetch bot P&L map and orders in parallel
+        const [_, ordersRes] = await Promise.all([
+            fetchBotPnlMap(),
+            fetch('/api/alpaca/orders?status=' + status + '&limit=' + limit)
+        ]);
+        const data = await ordersRes.json();
         if (!data.success) return;
         renderOrders(data.data);
         document.getElementById('orders-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -627,7 +641,13 @@ function renderOrders(orders) {
         container.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>No orders found</p></div>';
         return;
     }
-    const pnlMap = computeOrderPnL(orders);
+    // Use bot P&L map (authoritative). Fall back to FIFO for non-bot orders.
+    const fifoPnl = computeOrderPnL(orders);
+    const pnlMap = {};
+    Object.keys(fifoPnl).forEach(id => { pnlMap[id] = fifoPnl[id]; });
+    // Override with bot P&L where available (bot is source of truth)
+    Object.keys(_botPnlMap).forEach(id => { pnlMap[id] = _botPnlMap[id]; });
+
     let html = '<table class="data-table"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th><th>Filled</th><th>Price</th><th>P&L</th><th>Status</th><th>Action</th></tr></thead><tbody>';
     let totalPnl = 0;
     let closingCount = 0;
@@ -637,7 +657,7 @@ function renderOrders(orders) {
         const time = o.submitted_at ? new Date(o.submitted_at).toLocaleString() : '-';
         const price = o.filled_avg_price ? '$' + Number(o.filled_avg_price).toFixed(2) : (o.limit_price ? '$' + Number(o.limit_price).toFixed(2) : 'MKT');
         const canCancel = ['new', 'accepted', 'partially_filled', 'pending_new'].includes(o.status);
-        // P&L column — only shown on closing trades
+        // P&L column — bot P&L preferred, FIFO fallback
         let pnlHtml = '-';
         if (pnlMap.hasOwnProperty(o.id)) {
             const pnl = pnlMap[o.id];

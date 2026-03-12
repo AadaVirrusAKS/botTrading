@@ -46,7 +46,7 @@
       "iv": 68.5,
       "open_interest": 4899,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T17:38:20.890464"
+      "live_price_update": "2026-03-12T17:52:17.517969"
     },
     {
       "symbol": "SOFI",
@@ -73,7 +73,7 @@
       "iv": 72.3,
       "open_interest": 59936,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T17:38:20.890464"
+      "live_price_update": "2026-03-12T17:52:17.517969"
     },
     {
       "symbol": "AMD",
@@ -100,7 +100,7 @@
       "iv": 52.0,
       "open_interest": 21437,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T17:38:20.890464"
+      "live_price_update": "2026-03-12T17:52:17.517969"
     },
     {
       "symbol": "PLTR",
@@ -127,7 +127,7 @@
       "iv": 51.5,
       "open_interest": 11194,
       "scan_type": "intraday",
-      "live_price_update": "2026-03-12T17:38:20.890464"
+      "live_price_update": "2026-03-12T17:52:17.517969"
     }
   ],
   "demo_account": {

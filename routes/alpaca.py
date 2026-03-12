@@ -1,6 +1,8 @@
 """
 Alpaca Paper Trading Routes - API endpoints for Alpaca integration.
 """
+import json
+import os
 from flask import Blueprint, jsonify, request
 from services.alpaca_service import (
     ALPACA_AVAILABLE,
@@ -190,3 +192,30 @@ def alpaca_cancel_all():
         return jsonify({'success': True, 'data': result})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================
+# BOT P&L MAP
+# =============================
+@alpaca_bp.route('/api/alpaca/bot-pnl-map')
+def alpaca_bot_pnl_map():
+    """Return {alpaca_order_id: pnl} from bot trades so Alpaca page shows bot P&L."""
+    try:
+        state_file = 'ai_bot_state.json'
+        if not os.path.exists(state_file):
+            return jsonify({'success': True, 'data': {}})
+
+        with open(state_file, 'r') as f:
+            state = json.load(f)
+
+        pnl_map = {}
+        acct = state.get('demo_account', {})
+        for trade in acct.get('trades', []):
+            order_id = trade.get('alpaca_order_id')
+            pnl = trade.get('pnl')
+            if order_id and pnl is not None:
+                pnl_map[order_id] = round(pnl, 2)
+
+        return jsonify({'success': True, 'data': pnl_map})
+    except Exception as e:
+        return jsonify({'success': False, 'data': {}, 'error': str(e)})
