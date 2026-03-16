@@ -65,7 +65,7 @@ _chain_cache_ttl = 45      # seconds — option chains cached for 45s (was 180s;
 _chain_cache_lock = threading.Lock()
 
 _options_dates_cache = {}  # {symbol: {'dates': list, 'ts': datetime}}
-_options_dates_ttl = 600   # seconds — expiry dates change at most once a day (10 min)
+_options_dates_ttl = 3600  # seconds — expiry dates rarely change intraday (1 hour)
 _options_dates_lock = threading.Lock()
 
 _ticker_info_cache = {}    # {symbol: {'info': dict, 'ts': datetime}}
@@ -529,6 +529,132 @@ def fetch_quote_api_batch(symbols, timeout=8):
     return out
 
 
+# --- Yahoo v7 Options API fallback (bypasses yfinance rate limits) ---
+# Uses a fresh session with cookie+crumb to access options data when yfinance is 429'd.
+_v7_session = None
+_v7_crumb = None
+_v7_session_ts = 0.0
+_v7_session_lock = threading.Lock()
+_V7_SESSION_TTL = 900  # Re-authenticate every 15 min
+
+
+def _get_v7_session():
+    """Get or create an authenticated Yahoo Finance session for v7 API calls."""
+    global _v7_session, _v7_crumb, _v7_session_ts
+    now = time.time()
+    with _v7_session_lock:
+        if _v7_session and _v7_crumb and (now - _v7_session_ts) < _V7_SESSION_TTL:
+            return _v7_session, _v7_crumb
+    # Create fresh session outside the lock (network calls)
+    import requests as _req
+    s = _req.Session()
+    s.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    try:
+        s.get('https://fc.yahoo.com', timeout=8)
+        r = s.get('https://query2.finance.yahoo.com/v1/test/getcrumb', timeout=8)
+        crumb = r.text.strip() if r.status_code == 200 else None
+        if crumb and 'Too Many' not in crumb:
+            with _v7_session_lock:
+                _v7_session = s
+                _v7_crumb = crumb
+                _v7_session_ts = time.time()
+            return s, crumb
+    except Exception:
+        pass
+    return None, None
+
+
+def _fetch_option_dates_v7(symbol):
+    """Fetch option expiration dates via v7 API with cookie+crumb. Returns list or None."""
+    s, crumb = _get_v7_session()
+    if not s or not crumb:
+        return None
+    try:
+        url = f'https://query2.finance.yahoo.com/v7/finance/options/{symbol}?crumb={crumb}'
+        r = s.get(url, timeout=10)
+        if r.status_code != 200:
+            if r.status_code == 429:
+                # Session might be rate-limited too; invalidate it
+                with _v7_session_lock:
+                    global _v7_session_ts
+                    _v7_session_ts = 0
+            return None
+        data = r.json()
+        result = data.get('optionChain', {}).get('result', [])
+        if not result:
+            return None
+        epochs = result[0].get('expirationDates', [])
+        if not epochs:
+            return None
+        import calendar as _cal
+        dates = [datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d') for ts in epochs]
+        # Store epoch->date mapping so chain requests use exact Yahoo epochs
+        _v7_epoch_map = getattr(_fetch_option_dates_v7, '_epoch_map', {})
+        for ts, d in zip(epochs, dates):
+            _v7_epoch_map[(symbol, d)] = ts
+        _fetch_option_dates_v7._epoch_map = _v7_epoch_map
+        _log_fetch_event('option-dates-v7', symbol,
+            f"[Options] Got {len(dates)} dates for {symbol} via v7 API", cooldown=60)
+        return dates
+    except Exception:
+        return None
+
+
+def _fetch_option_chain_v7(symbol, expiry):
+    """Fetch option chain via v7 API with cookie+crumb. Returns (calls_df, puts_df) or None."""
+    s, crumb = _get_v7_session()
+    if not s or not crumb:
+        return None
+    try:
+        # Use exact epoch from Yahoo if we have it, else compute UTC midnight
+        epoch_map = getattr(_fetch_option_dates_v7, '_epoch_map', {})
+        exp_ts = epoch_map.get((symbol, expiry))
+        if exp_ts is None:
+            import calendar as _cal
+            exp_ts = int(_cal.timegm(datetime.strptime(expiry, '%Y-%m-%d').timetuple()))
+        url = f'https://query2.finance.yahoo.com/v7/finance/options/{symbol}?crumb={crumb}&date={exp_ts}'
+        r = s.get(url, timeout=10)
+        if r.status_code != 200:
+            if r.status_code == 429:
+                with _v7_session_lock:
+                    global _v7_session_ts
+                    _v7_session_ts = 0
+            return None
+        data = r.json()
+        result = data.get('optionChain', {}).get('result', [])
+        if not result:
+            return None
+        options = result[0].get('options', [])
+        if not options:
+            return None
+
+        def _parse(contracts):
+            rows = []
+            for c in contracts:
+                rows.append({
+                    'contractSymbol': c.get('contractSymbol', ''),
+                    'strike': c.get('strike', 0),
+                    'lastPrice': c.get('lastPrice', 0),
+                    'bid': c.get('bid', 0),
+                    'ask': c.get('ask', 0),
+                    'volume': c.get('volume', 0),
+                    'openInterest': c.get('openInterest', 0),
+                    'impliedVolatility': c.get('impliedVolatility', 0),
+                    'inTheMoney': c.get('inTheMoney', False),
+                })
+            return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+        calls_df = _parse(options[0].get('calls', []))
+        puts_df = _parse(options[0].get('puts', []))
+        _log_fetch_event('option-chain-v7', f"{symbol}:{expiry}",
+            f"[Options] Got chain for {symbol} {expiry} via v7 API (calls={len(calls_df)}, puts={len(puts_df)})", cooldown=60)
+        return (calls_df, puts_df)
+    except Exception:
+        return None
+
+
 def _fetch_history_v8_api(symbol, period='3mo', interval='1d'):
     """Fallback: fetch historical OHLCV data via Yahoo v8 chart API when yfinance is rate-limited.
     Returns a DataFrame compatible with yfinance output, or None."""
@@ -655,8 +781,32 @@ def prewarm_history_cache(symbols, period='5d', interval='5m'):
                 break
             time.sleep(0.5)
 
+    # Phase 2: backfill any symbols that yf.download missed using v8 API
+    # This ensures ALL symbols have cached history before the scanner runs,
+    # so scan_intraday_option() never makes yfinance history calls (which compete
+    # with option API calls for rate-limit budget).
+    still_uncached = []
+    with _history_cache_lock:
+        for sym in uncached:
+            cache_key = (sym, period, interval)
+            if cache_key not in _history_cache or (now - _history_cache[cache_key]['ts']).total_seconds() >= _history_cache_ttl:
+                still_uncached.append(sym)
+
+    if still_uncached:
+        v8_filled = 0
+        for sym in still_uncached:
+            df = _fetch_history_v8_api(sym, period=period, interval=interval)
+            if df is not None and not df.empty:
+                with _history_cache_lock:
+                    _history_cache[(sym, period, interval)] = {'data': df, 'ts': datetime.now()}
+                v8_filled += 1
+                warmed += 1
+            time.sleep(0.15)  # Brief pause between v8 calls
+        if v8_filled > 0:
+            print(f"[PreWarm] ✅ Backfilled {v8_filled}/{len(still_uncached)} symbols via v8 API")
+
     if warmed > 0:
-        print(f"[PreWarm] ✅ Pre-warmed {warmed}/{len(uncached)} symbols ({period}/{interval}) in batch download")
+        print(f"[PreWarm] ✅ Pre-warmed {warmed}/{len(uncached)} symbols ({period}/{interval}) total")
     return warmed
 
 
@@ -717,6 +867,7 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
     # Final fallback: v8 API
     df = _fetch_history_v8_api(symbol, period=period, interval=interval)
     if df is not None and not df.empty:
+        _mark_global_rate_limit_success()  # v8 success = Yahoo partially working; unblock option chain calls
         with _history_cache_lock:
             _history_cache[cache_key] = {'data': df, 'ts': now}
         return df
@@ -733,12 +884,14 @@ def cached_get_option_dates(symbol):
             if (now - entry['ts']).total_seconds() < _options_dates_ttl:
                 return entry['dates']
     
-    # Respect global rate limit — serve stale cache if available
+    # When globally rate-limited, serve stale cache but still attempt the call
+    # (option endpoints are separate from history; prewarm v8 handles history so
+    # option calls are the only yfinance traffic during scans)
     if _is_globally_rate_limited():
         with _options_dates_lock:
             if symbol in _options_dates_cache:
                 return _options_dates_cache[symbol]['dates']
-        return []
+        # Fall through to try yfinance anyway — option calls are lightweight
     
     # Throttle: wait for a token
     if not _throttle_acquire(timeout=10):
@@ -757,14 +910,21 @@ def cached_get_option_dates(symbol):
     except Exception as e:
         if _is_rate_limit_error(e):
             _mark_rate_limited(symbol)
-            _mark_global_rate_limit()
         else:
             if not _is_expected_no_data_error(e):
                 _log_fetch_event('option-dates-error', symbol, f"[Cache] Error fetching option dates for {symbol}: {e}", cooldown=180)
-        # On error, serve stale cache if we have any
+
+    # --- v7 API fallback when yfinance fails ---
+    v7_dates = _fetch_option_dates_v7(symbol)
+    if v7_dates:
         with _options_dates_lock:
-            if symbol in _options_dates_cache:
-                return _options_dates_cache[symbol]['dates']
+            _options_dates_cache[symbol] = {'dates': v7_dates, 'ts': now}
+        return v7_dates
+
+    # Serve stale cache if we have any
+    with _options_dates_lock:
+        if symbol in _options_dates_cache:
+            return _options_dates_cache[symbol]['dates']
     return []
 
 
@@ -787,12 +947,12 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
                 if (now - entry['ts']).total_seconds() < _FORCE_LIVE_MIN_TTL:
                     return entry['chain']
 
-    # Respect global rate limit — serve stale cache if available
+    # When globally rate-limited, serve stale cache but still attempt the call
     if _is_globally_rate_limited():
         with _chain_cache_lock:
             if cache_key in _chain_cache:
                 return _chain_cache[cache_key]['chain']
-        return None
+        # Fall through to try yfinance anyway
     
     # Throttle: wait for a token
     if not _throttle_acquire(timeout=10):
@@ -811,14 +971,24 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
     except Exception as e:
         if _is_rate_limit_error(e):
             _mark_rate_limited(symbol)
-            _mark_global_rate_limit()
         else:
             if not _is_expected_no_data_error(e):
                 _log_fetch_event('option-chain-error', f"{symbol}:{expiry}", f"[Cache] Error fetching option chain for {symbol} {expiry}: {e}", cooldown=180)
-        # On any error, serve stale cache if we have it
+
+    # --- v7 API fallback when yfinance fails ---
+    v7_result = _fetch_option_chain_v7(symbol, expiry)
+    if v7_result:
+        from collections import namedtuple
+        Chain = namedtuple('Chain', ['calls', 'puts'])
+        chain = Chain(calls=v7_result[0], puts=v7_result[1])
         with _chain_cache_lock:
-            if cache_key in _chain_cache:
-                return _chain_cache[cache_key]['chain']
+            _chain_cache[cache_key] = {'chain': chain, 'ts': now}
+        return chain
+
+    # Serve stale cache if we have it
+    with _chain_cache_lock:
+        if cache_key in _chain_cache:
+            return _chain_cache[cache_key]['chain']
     return None
 
 

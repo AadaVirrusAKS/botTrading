@@ -3602,13 +3602,13 @@ def scan_intraday_stock(symbol):
         return None
 
 
-def run_intraday_scan_batched(symbols, scan_fn, max_workers=5, batch_size=6, batch_delay=0.6, fallback_symbols=None):
+def run_intraday_scan_batched(symbols, scan_fn, max_workers=3, batch_size=4, batch_delay=1.0, fallback_symbols=None):
     """Run intraday scans in small batches to reduce yfinance 429 rate limits.
     
-    Phase 1: Pre-warm — single yf.download() batch loads 5d/5m history for all
-             symbols into cache. This replaces N individual API calls with 1.
-    Phase 2: Scan — scan_fn() for each symbol hits the warm cache (no API call
-             for history). Only option dates/chains need individual API calls.
+    Phase 1: Pre-warm — batch loads 5d/5m history for all symbols into cache
+             (yf.download + v8 API backfill). Eliminates history API calls during scan.
+    Phase 2: Scan — scan_fn() for each symbol hits the warm cache for history.
+             Only option dates/chains need individual API calls.
     
     Returns a plain list of results (no metadata).
     """
