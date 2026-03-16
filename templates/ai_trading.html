@@ -1055,6 +1055,13 @@
                                 <option value="3">3% Trail</option>
                             </select>
                         </div>
+                        <div class="control-item">
+                            <label>Max Loss / Trade ($)</label>
+                            <input type="number" id="max-loss-per-trade" value="500" min="50" max="5000" step="50" onchange="saveSettingsToServer()">
+                            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+                                Caps dollar loss per trade. Reduces contract qty to fit budget.
+                            </div>
+                        </div>
                         <div class="control-item" style="grid-column: span 2;">
                             <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                                 <input type="checkbox" id="auto-trade" style="width: 20px; height: 20px; accent-color: #10b981;" onchange="saveAutoTradeSetting(this.checked)">
@@ -1630,7 +1637,8 @@
                 position_size: parseFloat(document.getElementById('position-size').value),
                 stop_loss: parseFloat(document.getElementById('stop-loss').value),
                 take_profit: parseFloat(document.getElementById('take-profit').value),
-                trailing_stop: document.getElementById('trailing-stop').value
+                trailing_stop: document.getElementById('trailing-stop').value,
+                max_loss_per_trade: parseFloat(document.getElementById('max-loss-per-trade').value)
             };
             
             console.log('🤖 Bot settings:', settings);
@@ -1824,7 +1832,7 @@
             statusRefreshCount += 1;
             const periodicForceLive = (statusRefreshCount % 2 === 0); // ~every 10s at 5s polling
             const useForceLive = forceLive || periodicForceLive;
-            const response = await resilientFetch(`/api/bot/status?_ts=${Date.now()}${useForceLive ? '&force_live=1' : ''}`, { cache: 'no-store' }, { timeoutMs: 15000, retries: 1, label: 'refreshStatus' });
+            const response = await resilientFetch(`/api/bot/status?_ts=${Date.now()}${useForceLive ? '&force_live=1' : ''}`, { cache: 'no-store' }, { timeoutMs: 25000, retries: 1, label: 'refreshStatus' });
                 const data = await response.json();
                 
                 if (data.success) {
@@ -2822,7 +2830,8 @@
                     position_size: parseFloat(document.getElementById('position-size').value),
                     stop_loss: parseFloat(document.getElementById('stop-loss').value),
                     take_profit: parseFloat(document.getElementById('take-profit').value),
-                    trailing_stop: document.getElementById('trailing-stop').value
+                    trailing_stop: document.getElementById('trailing-stop').value,
+                    max_loss_per_trade: parseFloat(document.getElementById('max-loss-per-trade').value)
                 };
                 
                 const response = await fetch('/api/bot/update_settings', {
@@ -3118,6 +3127,11 @@
                         // Trailing stop
                         if (s.trailing_stop) {
                             document.getElementById('trailing-stop').value = s.trailing_stop;
+                        }
+
+                        // Max loss per trade
+                        if (s.max_loss_per_trade) {
+                            document.getElementById('max-loss-per-trade').value = s.max_loss_per_trade;
                         }
                     }
                     

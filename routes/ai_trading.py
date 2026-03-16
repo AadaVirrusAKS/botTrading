@@ -155,7 +155,7 @@ def bot_status():
     signals = state_copy.get('signals', [])
     if force_live:
         # Run live price fetch in a thread with a timeout so the HTTP response
-        # is never blocked for more than ~12s (frontend timeout is 15s).
+        # is never blocked for more than ~20s (frontend timeout is 25s).
         import concurrent.futures
         _fl_positions = [None]
         _fl_signals = [None]
@@ -168,11 +168,11 @@ def bot_status():
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(_do_force_live)
         try:
-            future.result(timeout=12)
+            future.result(timeout=20)
             positions = _fl_positions[0] if _fl_positions[0] is not None else positions
             signals = _fl_signals[0] if _fl_signals[0] is not None else signals
         except concurrent.futures.TimeoutError:
-            print("⚠️ force_live price refresh timed out after 12s — returning cached prices")
+            print("⚠️ force_live price refresh timed out after 20s — returning cached prices")
         finally:
             executor.shutdown(wait=False)
 
@@ -385,7 +385,7 @@ def bot_update_settings():
         # Update individual settings if provided
         settings_fields = ['watchlist', 'scan_interval', 'min_confidence', 'max_positions',
               'max_daily_trades', 'max_per_symbol_daily', 'reentry_cooldown_minutes', 'min_option_dte_days', 'position_size', 'stop_loss', 'take_profit', 'trailing_stop', 'instrument_type',
-                          'partial_profit_taking', 'close_0dte_before_expiry']
+                          'partial_profit_taking', 'close_0dte_before_expiry', 'max_loss_per_trade']
         
         # Track if routing-critical settings changed
         routing_changed = False

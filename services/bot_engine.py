@@ -391,6 +391,8 @@ def load_bot_state():
         bot_state['settings']['max_per_symbol_daily'] = 6
     if 'reentry_cooldown_minutes' not in bot_state['settings']:
         bot_state['settings']['reentry_cooldown_minutes'] = 10
+    if 'max_loss_per_trade' not in bot_state['settings']:
+        bot_state['settings']['max_loss_per_trade'] = 500
     # Migrate: backfill 'source' field on existing positions
     _needs_save = False
     for acct_key in ('demo_account', 'real_account'):

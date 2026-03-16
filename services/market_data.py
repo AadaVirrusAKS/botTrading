@@ -61,7 +61,7 @@ _global_rate_limit_consecutive = 0  # consecutive 429s — drives progressive ba
 _global_rate_limit_max_cooldown = 300  # max backoff cap (5 min)
 
 _chain_cache = {}          # {(symbol, expiry): {'chain': OptionChain, 'ts': datetime}}
-_chain_cache_ttl = 180     # seconds — option chains cached for 3 min
+_chain_cache_ttl = 45      # seconds — option chains cached for 45s (was 180s; shorter for live premium monitoring)
 _chain_cache_lock = threading.Lock()
 
 _options_dates_cache = {}  # {symbol: {'dates': list, 'ts': datetime}}
@@ -778,6 +778,13 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
             if cache_key in _chain_cache:
                 entry = _chain_cache[cache_key]
                 if (now - entry['ts']).total_seconds() < _chain_cache_ttl:
+                    return entry['chain']
+    else:
+        # force_live: reuse very recent data to avoid redundant fetches
+        with _chain_cache_lock:
+            if cache_key in _chain_cache:
+                entry = _chain_cache[cache_key]
+                if (now - entry['ts']).total_seconds() < _FORCE_LIVE_MIN_TTL:
                     return entry['chain']
 
     # Respect global rate limit — serve stale cache if available
