@@ -27,7 +27,7 @@ def ai_analyze_stock():
         symbol = data.get('symbol', '').strip()
         period = data.get('period', '6mo')
         horizon = data.get('horizon', 5)
-        allow_fallback = bool(data.get('allow_fallback', False))
+        allow_fallback = bool(data.get('allow_fallback', True))
         force_live = bool(data.get('force_live', True))
 
         if not symbol:
@@ -38,14 +38,11 @@ def ai_analyze_stock():
         if not resolved:
             return jsonify({'success': False, 'error': f'Could not resolve symbol: {symbol}'}), 400
 
-        # Live-first mode (default): let analysis engine fetch live data directly.
-        # Cache-prefetch mode remains available when force_live=False.
-        if force_live:
-            df = None
-            info = None
-        else:
-            df = cached_get_history(resolved, period=period, interval='1d')
-            info = cached_get_ticker_info(resolved)
+        # Always use the cached/rate-limited fetcher to avoid hammering Yahoo.
+        # The cached fetcher respects throttle tokens and returns recent data
+        # even when rate-limited, while raw yf.Ticker() would throw immediately.
+        df = cached_get_history(resolved, period=period, interval='1d')
+        info = cached_get_ticker_info(resolved)
 
         result = run_ai_analysis(resolved, period=period, prediction_horizon=horizon, df=df, info=info)
         if not result or not isinstance(result, dict) or result.get('error'):

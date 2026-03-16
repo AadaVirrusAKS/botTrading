@@ -14,6 +14,7 @@ Features:
 Uses only numpy, pandas, and scipy (no heavy ML frameworks required).
 """
 
+import os
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -1159,8 +1160,24 @@ def run_ai_analysis(symbol, period='6mo', prediction_horizon=5, df=None, info=No
     """
     try:
         if df is None:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period)
+            try:
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period=period)
+            except Exception as fetch_err:
+                if 'no such table' in str(fetch_err).lower():
+                    # Corrupted yfinance cache — nuke and retry once
+                    import glob
+                    cache_dir = os.path.join(os.getcwd(), ".yfinance_cache")
+                    for db_file in glob.glob(os.path.join(cache_dir, "*.db*")):
+                        try:
+                            os.remove(db_file)
+                        except OSError:
+                            pass
+                    print(f"🔄 Cleared corrupted yfinance cache, retrying {symbol}")
+                    ticker = yf.Ticker(symbol)
+                    df = ticker.history(period=period)
+                else:
+                    raise
 
         if df is None or df.empty or len(df) < 20:
             return {'success': False, 'error': f'Insufficient data for {symbol}'}

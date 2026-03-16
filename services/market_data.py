@@ -21,6 +21,37 @@ logging.getLogger("peewee").setLevel(logging.CRITICAL)
 # Use project-local yfinance cache
 YF_CACHE_DIR = os.path.join(os.getcwd(), ".yfinance_cache")
 os.makedirs(YF_CACHE_DIR, exist_ok=True)
+
+def _nuke_yf_cache():
+    """Delete corrupted yfinance SQLite cache files and recreate the directory."""
+    import glob
+    for db_file in glob.glob(os.path.join(YF_CACHE_DIR, "*.db*")):
+        try:
+            os.remove(db_file)
+        except OSError:
+            pass
+    print("🔄 Cleared corrupted yfinance cache")
+
+def _validate_yf_cache():
+    """Check that yfinance SQLite databases have required tables; nuke if corrupt."""
+    import sqlite3
+    for db_name in ("tkr-tz.db", "cookies.db"):
+        db_path = os.path.join(YF_CACHE_DIR, db_name)
+        if not os.path.exists(db_path):
+            continue
+        try:
+            conn = sqlite3.connect(db_path)
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            conn.close()
+            if not tables:
+                _nuke_yf_cache()
+                return
+        except Exception:
+            _nuke_yf_cache()
+            return
+
+_validate_yf_cache()
+
 try:
     import yfinance.cache as _yf_cache_mod
     _yf_cache_mod.set_cache_location(YF_CACHE_DIR)

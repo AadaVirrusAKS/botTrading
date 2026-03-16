@@ -48,7 +48,7 @@
       "open_interest": 22547,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-16T16:37:13.962975"
+      "live_price_update": "2026-03-16T17:07:05.953337"
     },
     {
       "symbol": "NVDA",
@@ -76,7 +76,7 @@
       "open_interest": 87670,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-16T16:37:13.962975"
+      "live_price_update": "2026-03-16T17:07:05.953337"
     },
     {
       "symbol": "TSLA",
@@ -104,7 +104,7 @@
       "open_interest": 5668,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-16T16:37:13.962975"
+      "live_price_update": "2026-03-16T17:07:05.953337"
     },
     {
       "symbol": "AVGO",
@@ -132,7 +132,7 @@
       "open_interest": 3285,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-16T16:37:13.962975"
+      "live_price_update": "2026-03-16T17:07:05.953337"
     },
     {
       "symbol": "SLV",
@@ -160,7 +160,7 @@
       "open_interest": 3227,
       "scan_type": "intraday",
       "_below_threshold": true,
-      "live_price_update": "2026-03-16T16:37:13.962975"
+      "live_price_update": "2026-03-16T17:07:05.953337"
     }
   ],
   "demo_account": {
@@ -190,11 +190,11 @@
         "_cached_atr": 0.2775,
         "alpaca_order_id": "18d94406-8a8b-4e2d-9664-d4d3a944497b",
         "alpaca_symbol": "MRK260320C00115000",
-        "last_price_update": "2026-03-16T16:37:13.962012",
+        "last_price_update": "2026-03-16T17:07:05.952157",
         "current_bid": 1.83,
         "current_ask": 2.07,
         "underlying_price": 115.43,
-        "last_checked": "2026-03-16T16:37:13.962012"
+        "last_checked": "2026-03-16T17:07:05.952157"
       },
       {
         "symbol": "UNH",
@@ -219,11 +219,11 @@
         "_cached_atr": 0.45299999999999996,
         "alpaca_order_id": "7a3379d7-0153-4d55-9233-aa7d288a792d",
         "alpaca_symbol": "UNH260320C00290000",
-        "last_price_update": "2026-03-16T16:37:13.962012",
+        "last_price_update": "2026-03-16T17:07:05.952157",
         "current_bid": 2.48,
         "current_ask": 2.65,
         "underlying_price": 285.49,
-        "last_checked": "2026-03-16T16:37:13.962012"
+        "last_checked": "2026-03-16T17:07:05.952157"
       },
       {
         "symbol": "AMD",
@@ -248,11 +248,11 @@
         "_cached_atr": 0.66,
         "alpaca_order_id": "1f6a98db-492e-4373-9880-6a3f15a429f2",
         "alpaca_symbol": "AMD260320C00200000",
-        "last_price_update": "2026-03-16T16:37:13.962012",
+        "last_price_update": "2026-03-16T17:07:05.952157",
         "current_bid": 3.45,
         "current_ask": 3.55,
         "underlying_price": 196.58,
-        "last_checked": "2026-03-16T16:37:13.962012"
+        "last_checked": "2026-03-16T17:07:05.952157"
       }
     ],
     "trades": [

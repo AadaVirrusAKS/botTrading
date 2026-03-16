@@ -992,7 +992,7 @@
 
             const period = document.getElementById('ai-period').value;
             const horizon = parseInt(document.getElementById('ai-horizon').value);
-            const allowFallback = document.getElementById('ai-allow-fallback')?.checked === true;
+            const allowFallback = document.getElementById('ai-allow-fallback')?.checked !== false;
 
             document.getElementById('ai-results').classList.add('hidden');
             document.getElementById('ai-loading').classList.add('active');

@@ -2,6 +2,8 @@
 Crypto Routes - Cryptocurrency data, movers, search, quote.
 """
 from flask import Blueprint, jsonify, request
+import json
+import os
 import time
 import threading
 from datetime import datetime
@@ -17,6 +19,50 @@ from services.market_data import (
 )
 
 crypto_bp = Blueprint("crypto", __name__)
+
+# ---------------------------------------------------------------------------
+# Crypto disk-cache (stale-while-revalidate)
+# ---------------------------------------------------------------------------
+_CRYPTO_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.dashboard_cache')
+_CRYPTO_CACHE_FILE = os.path.join(_CRYPTO_CACHE_DIR, 'crypto_cache.json')
+_crypto_mem_cache = {}        # symbol → quote dict
+_crypto_mem_ts = 0.0          # epoch when mem cache was populated
+_CRYPTO_MEM_TTL = 300         # 5 min fresh
+_CRYPTO_DISK_ACCEPT = 3600    # 1 hr stale-but-acceptable from disk
+_crypto_refreshing = False
+
+
+def _load_crypto_disk_cache():
+    """Load crypto cache from disk on startup."""
+    global _crypto_mem_cache, _crypto_mem_ts
+    try:
+        if os.path.exists(_CRYPTO_CACHE_FILE):
+            with open(_CRYPTO_CACHE_FILE, 'r') as f:
+                payload = json.load(f)
+            saved_ts = payload.get('ts', 0)
+            if time.time() - saved_ts < _CRYPTO_DISK_ACCEPT:
+                _crypto_mem_cache = payload.get('data', {})
+                _crypto_mem_ts = saved_ts
+                print(f"📀 Crypto cache loaded from disk: {len(_crypto_mem_cache)} symbols (age {int(time.time()-saved_ts)}s)")
+    except Exception as e:
+        print(f"📀 Crypto disk cache load error: {e}")
+
+
+def _save_crypto_disk_cache(data_dict):
+    """Persist crypto quotes to disk."""
+    try:
+        os.makedirs(_CRYPTO_CACHE_DIR, exist_ok=True)
+        payload = {'ts': time.time(), 'data': data_dict}
+        tmp = _CRYPTO_CACHE_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(payload, f)
+        os.replace(tmp, _CRYPTO_CACHE_FILE)
+    except Exception as e:
+        print(f"📀 Crypto disk cache save error: {e}")
+
+
+# Load on import
+_load_crypto_disk_cache()
 
 # ============================================================================
 # CRYPTO API ENDPOINTS
@@ -104,80 +150,122 @@ def _get_cached_info_only(symbol):
 
 
 def _direct_crypto_download(symbols):
-    """Fallback: fetch crypto quotes via direct yf.download, bypassing throttle/rate-limit guards."""
-    try:
-        data = yf.download(
-            symbols, period='5d', interval='1d',
-            group_by='ticker', threads=True, progress=False, timeout=60
-        )
-        if data is None or data.empty:
-            return {}
+    """Fallback: fetch crypto quotes one at a time via Ticker.history() (v8 API).
 
-        results = {}
-        fetch_time = datetime.now()
+    yf.download() uses a different Yahoo endpoint that gets rate-limited much
+    more aggressively.  Ticker.history() uses the v8 price API which usually
+    keeps working even when the bulk endpoint is blocked.
+    """
+    results = {}
+    fetch_time = datetime.now()
+    BATCH = 10
 
-        if len(symbols) == 1:
-            sym = symbols[0]
-            close_vals = data['Close'].dropna() if 'Close' in data.columns else None
-            if close_vals is not None and len(close_vals) >= 2:
-                cur = float(close_vals.iloc[-1])
-                prev = float(close_vals.iloc[-2])
+    for i in range(0, len(symbols), BATCH):
+        batch = symbols[i:i+BATCH]
+        if i > 0:
+            time.sleep(0.5)
+
+        for sym in batch:
+            try:
+                t = yf.Ticker(sym)
+                hist = t.history(period='5d', interval='1d')
+                if hist is None or hist.empty or len(hist) < 2:
+                    continue
+                cv = hist['Close'].dropna()
+                if len(cv) < 2:
+                    continue
+                cur = float(cv.iloc[-1])
+                prev = float(cv.iloc[-2])
+                if cur <= 0:
+                    continue
                 change = cur - prev
+                vol = int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0
+                hi = round(float(hist['High'].iloc[-1]), 2) if 'High' in hist.columns else 0
+                lo = round(float(hist['Low'].iloc[-1]), 2) if 'Low' in hist.columns else 0
+
                 q = {
                     'symbol': sym, 'price': round(cur, 2),
                     'change': round(change, 2),
                     'changePct': round((change / prev * 100) if prev else 0, 2),
-                    'volume': int(data['Volume'].iloc[-1]) if 'Volume' in data.columns else 0,
-                    'high': round(float(data['High'].iloc[-1]), 2) if 'High' in data.columns else 0,
-                    'low': round(float(data['Low'].iloc[-1]), 2) if 'Low' in data.columns else 0,
+                    'volume': vol, 'high': hi, 'low': lo,
                 }
                 results[sym] = q
                 quote_cache[sym] = (q, fetch_time)
-        else:
-            avail = list(data.columns.get_level_values(0).unique()) if hasattr(data.columns, 'get_level_values') else []
-            for sym in symbols:
-                try:
-                    if sym not in avail:
-                        continue
-                    sd = data[sym]
-                    cv = sd['Close'].dropna() if 'Close' in sd.columns else None
-                    if cv is None or len(cv) < 2:
-                        continue
-                    cur = float(cv.iloc[-1])
-                    prev = float(cv.iloc[-2])
-                    if cur <= 0:
-                        continue
-                    change = cur - prev
-                    q = {
-                        'symbol': sym, 'price': round(cur, 2),
-                        'change': round(change, 2),
-                        'changePct': round((change / prev * 100) if prev else 0, 2),
-                        'volume': int(sd['Volume'].iloc[-1]) if 'Volume' in sd.columns else 0,
-                        'high': round(float(sd['High'].iloc[-1]), 2) if 'High' in sd.columns else 0,
-                        'low': round(float(sd['Low'].iloc[-1]), 2) if 'Low' in sd.columns else 0,
-                    }
-                    results[sym] = q
-                    quote_cache[sym] = (q, fetch_time)
-                except Exception:
-                    continue
-        print(f"🪙 Crypto fallback fetch: got {len(results)}/{len(symbols)} symbols")
-        return results
+            except Exception:
+                continue
+
+    print(f"🪙 Crypto v8 fetch: got {len(results)}/{len(symbols)} symbols")
+    return results
+
+
+def _refresh_crypto_background(symbols):
+    """Background thread: fetch fresh crypto data and update caches."""
+    global _crypto_mem_cache, _crypto_mem_ts, _crypto_refreshing
+    try:
+        # Try shared batch fetcher first
+        quotes_map = _fetch_all_quotes_batch(symbols)
+
+        # Fallback: direct batched download
+        if not quotes_map:
+            quotes_map = _direct_crypto_download(symbols)
+
+        if quotes_map:
+            _crypto_mem_cache = quotes_map
+            _crypto_mem_ts = time.time()
+            _save_crypto_disk_cache(quotes_map)
+            print(f"🪙 Crypto background refresh: {len(quotes_map)} symbols cached")
     except Exception as e:
-        print(f"🪙 Crypto fallback fetch error: {e}")
-        return {}
+        print(f"🪙 Crypto background refresh error: {e}")
+    finally:
+        _crypto_refreshing = False
 
 
 def _get_crypto_data_batch(symbols):
-    """Get crypto quote rows via single batch quote call plus cached-only metadata.
-    Falls back to direct yf.download if the shared fetcher returns empty (rate-limited)."""
+    """Get crypto quote rows with stale-while-revalidate caching.
+
+    1) If mem cache is fresh (<5 min) → return immediately.
+    2) If mem cache is stale but within disk-accept window → return stale,
+       kick off background refresh.
+    3) If nothing cached → blocking fetch (small batches).
+    """
+    global _crypto_mem_cache, _crypto_mem_ts, _crypto_refreshing
+
+    now = time.time()
+    age = now - _crypto_mem_ts if _crypto_mem_ts else float('inf')
+
+    # --- Serve from mem cache if fresh ---
+    if _crypto_mem_cache and age < _CRYPTO_MEM_TTL:
+        return _build_crypto_list(symbols, _crypto_mem_cache)
+
+    # --- Stale-while-revalidate: return stale, refresh in background ---
+    if _crypto_mem_cache and age < _CRYPTO_DISK_ACCEPT:
+        if not _crypto_refreshing:
+            _crypto_refreshing = True
+            t = threading.Thread(target=_refresh_crypto_background, args=(symbols,), daemon=True)
+            t.start()
+        return _build_crypto_list(symbols, _crypto_mem_cache)
+
+    # --- Cold start: blocking fetch ---
     quotes_map = _fetch_all_quotes_batch(symbols)
 
-    # Fallback: if shared fetcher returned nothing, try direct download
     if not quotes_map:
         quotes_map = _direct_crypto_download(symbols)
 
-    cryptos = []
+    if quotes_map:
+        _crypto_mem_cache = quotes_map
+        _crypto_mem_ts = time.time()
+        _save_crypto_disk_cache(quotes_map)
+    elif _crypto_mem_cache:
+        # All fetches failed but we have very old mem cache — still serve it
+        print("🪙 Crypto: all fetches failed, serving very stale cache")
+        quotes_map = _crypto_mem_cache
 
+    return _build_crypto_list(symbols, quotes_map)
+
+
+def _build_crypto_list(symbols, quotes_map):
+    """Convert quotes_map into the list-of-dicts format the endpoints expect."""
+    cryptos = []
     for symbol in symbols:
         quote = quotes_map.get(symbol)
         if not quote:
@@ -197,7 +285,6 @@ def _get_crypto_data_batch(symbols):
             'high_24h': float(quote.get('high', 0) or (info.get('dayHigh', 0) if isinstance(info, dict) else 0) or 0),
             'low_24h': float(quote.get('low', 0) or (info.get('dayLow', 0) if isinstance(info, dict) else 0) or 0),
         })
-
     return cryptos
 
 def get_crypto_data(symbol):
