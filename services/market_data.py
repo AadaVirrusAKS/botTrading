@@ -1071,5 +1071,36 @@ def _fetch_all_quotes_batch(symbols):
             if sym in quote_cache:
                 results[sym] = quote_cache[sym][0]
     
+    # 5. API fallback for symbols still missing (bypasses yfinance rate limiter)
+    still_missing = [s for s in unique_symbols if s not in results]
+    if still_missing:
+        _log_fetch_event('batch-api-fallback', ','.join(still_missing[:5]),
+                         f"Trying API fallback for {len(still_missing)} missing symbols", cooldown=60)
+        api_prices = fetch_quote_api_batch(still_missing)
+        api_time = datetime.now()
+        for sym, price in api_prices.items():
+            if price and price > 0:
+                quote = {
+                    'symbol': sym,
+                    'price': round(price, 2),
+                    'change': 0,
+                    'changePct': 0,
+                    'volume': 0,
+                    'high': 0,
+                    'low': 0,
+                    'open': 0,
+                }
+                # Try to compute change from stale cache
+                if sym in quote_cache:
+                    old_quote, _ = quote_cache[sym]
+                    old_price = old_quote.get('price', 0)
+                    if old_price and old_price > 0:
+                        quote['change'] = round(price - old_price, 2)
+                        quote['changePct'] = round((price - old_price) / old_price * 100, 2)
+                results[sym] = quote
+                quote_cache[sym] = (quote, api_time)
+        if api_prices:
+            print(f"[BatchQuotes] ✅ API fallback recovered {len(api_prices)}/{len(still_missing)} symbols")
+
     return results
 

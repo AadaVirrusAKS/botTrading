@@ -260,6 +260,41 @@ def calculate_market_breadth():
             time.sleep(0.5)
 
         if all_changes.empty:
+            # Fallback: use v8 API for a representative sample using parallel requests
+            print("📊 Market breadth: yf.download failed, trying v8 API fallback...")
+            import requests as req_lib
+            from concurrent.futures import ThreadPoolExecutor
+            sample_tickers = tickers[:300]  # Representative S&P 500 subset
+
+            _session = req_lib.Session()
+            _session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            })
+
+            def _fetch_change(sym):
+                """Fetch price change via v8 API using meta fields."""
+                try:
+                    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                    resp = _session.get(url, params={'range': '1d', 'interval': '1d'}, timeout=8)
+                    if resp.status_code != 200:
+                        return None
+                    meta = (resp.json().get('chart', {}).get('result') or [{}])[0].get('meta', {})
+                    price = meta.get('regularMarketPrice')
+                    prev = meta.get('chartPreviousClose') or meta.get('previousClose')
+                    if price and prev and prev > 0:
+                        return (price / prev) - 1
+                except Exception:
+                    pass
+                return None
+
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                results = list(pool.map(_fetch_change, sample_tickers))
+            changes_list = [r for r in results if r is not None]
+            print(f"📊 Market breadth: v8 API got {len(changes_list)}/{len(sample_tickers)} stocks")
+            if changes_list:
+                all_changes = pd.Series(changes_list)
+
+        if all_changes.empty:
             return None
 
         advancing = int((all_changes > 0).sum())
@@ -293,6 +328,17 @@ def calculate_market_breadth():
     except Exception as e:
         print(f"Market breadth calculation error: {e}")
         return None
+
+
+# Pre-fetch market breadth on startup so it's ready before the first dashboard request
+def _preload_market_breadth():
+    """Delay slightly to let the server finish binding, then calculate breadth."""
+    import time
+    time.sleep(10)  # Let server start up first
+    print("📊 Pre-loading market breadth data (1000+ stocks)...")
+    calculate_market_breadth()
+
+threading.Thread(target=_preload_market_breadth, daemon=True).start()
 
 
 # Batch data cache with TTL
@@ -478,10 +524,26 @@ def dashboard_batch():
                     cached_data = _batch_cache['data'].copy()
                     cached_data['cached'] = True
                     cached_data['cache_age_seconds'] = int(age)
+                    # Always inject latest breadth data into cached response
+                    # (breadth thread may have finished after batch was cached)
+                    with _market_breadth_lock:
+                        if (_market_breadth_cache['data'] is not None and
+                            _market_breadth_cache['timestamp'] is not None):
+                            breadth_age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
+                            if breadth_age < _market_breadth_cache.get('cache_ttl', 600):
+                                cached_data['market_pulse'] = _market_breadth_cache['data']
                     return jsonify({'success': True, **cached_data})
         
         # Fetch fresh data
         data = _get_batch_dashboard_data()
+        
+        # Always inject latest breadth data if available
+        with _market_breadth_lock:
+            if (_market_breadth_cache['data'] is not None and
+                _market_breadth_cache['timestamp'] is not None):
+                breadth_age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
+                if breadth_age < _market_breadth_cache.get('cache_ttl', 600):
+                    data['market_pulse'] = _market_breadth_cache['data']
         
         # Only cache if we actually got meaningful data (indices or sectors present)
         symbols_fetched = data.get('symbols_fetched', 0)

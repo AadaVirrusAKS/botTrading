@@ -45,6 +45,18 @@ def handle_exception(e):
     return jsonify({'success': False, 'error': 'An unexpected error occurred'}), 500
 
 # =============================
+# PREVENT BROWSER CACHING ON API RESPONSES
+# =============================
+@app.after_request
+def add_no_cache_headers(response):
+    """Add Cache-Control headers to all /api/ responses to prevent stale browser cache."""
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
+# =============================
 # REGISTER ALL BLUEPRINTS
 # =============================
 from routes import register_blueprints

@@ -154,9 +154,27 @@ def bot_status():
     force_live = request.args.get('force_live', '0').lower() in ('1', 'true', 'yes')
     signals = state_copy.get('signals', [])
     if force_live:
-        clear_rate_limit_blocks()
-        positions = update_positions_with_live_prices(positions, force_live=True)
-        signals = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
+        # Run live price fetch in a thread with a timeout so the HTTP response
+        # is never blocked for more than ~12s (frontend timeout is 15s).
+        import concurrent.futures
+        _fl_positions = [None]
+        _fl_signals = [None]
+
+        def _do_force_live():
+            clear_rate_limit_blocks()
+            _fl_positions[0] = update_positions_with_live_prices(positions, force_live=True)
+            _fl_signals[0] = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(_do_force_live)
+        try:
+            future.result(timeout=12)
+            positions = _fl_positions[0] if _fl_positions[0] is not None else positions
+            signals = _fl_signals[0] if _fl_signals[0] is not None else signals
+        except concurrent.futures.TimeoutError:
+            print("⚠️ force_live price refresh timed out after 12s — returning cached prices")
+        finally:
+            executor.shutdown(wait=False)
 
         # Persist refreshed prices in a single lock acquisition
         with BOT_STATE_LOCK:
@@ -663,8 +681,8 @@ def bot_scan():
         min_conf = bot_state['settings'].get('min_confidence', 75)
         
         for r in sorted(results, key=lambda x: x['score'], reverse=True)[:10]:
-            # Score range -1 to 20; 15+ maps to 95%+ confidence
-            confidence = min(98, max(50, int(45 + r['score'] * 3.5)))
+            # Score range 7-20 (scanner rejects <7); score 9+ maps to ~91% confidence
+            confidence = min(98, max(50, int(55 + r['score'] * 4)))
             option_signal = {
                 'symbol': r['symbol'],
                 'action': 'BUY',
@@ -1676,13 +1694,7 @@ def _bot_auto_cycle_inner():
                 emoji = emoji_map.get(exit_reason, '🛑')
                 print(f"{emoji} AUTO-EXIT: {display_name} - {exit_reason} | Entry: ${entry_price:.2f} → Exit: ${exit_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:.1f}%)")
         
-        # Save state if any price/SL/target updates were made
-        # Only persist when something actually changed to avoid unnecessary disk I/O
-        if (dynamic_any_updated or _any_price_updated) and not positions_to_remove:
-            with BOT_STATE_LOCK:
-                save_bot_state()
-        
-        # Remove closed positions and recalculate balance
+        # Remove closed positions first
         if positions_to_remove:
             with BOT_STATE_LOCK:
                 for pos in positions_to_remove:
@@ -1690,6 +1702,12 @@ def _bot_auto_cycle_inner():
                         account['positions'].remove(pos)
                 # Recalculate balance from trade history (authoritative)
                 account['balance'] = recalculate_balance(account)
+                save_bot_state()
+        
+        # Save state if any price/SL/target updates were made (even if exits occurred)
+        # This ensures current_price values are persisted so the UI shows fresh prices
+        elif dynamic_any_updated or _any_price_updated:
+            with BOT_STATE_LOCK:
                 save_bot_state()
     
     # =========================================================================
@@ -1809,8 +1827,8 @@ def _bot_auto_cycle_inner():
 
             option_candidates = []
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                # Score range -1 to 20; 15+ maps to 95%+ confidence
-                confidence = min(98, max(50, int(45 + r['score'] * 3.5)))
+                # Score range 7-20 (scanner rejects <7); score 9+ maps to ~91% confidence
+                confidence = min(98, max(50, int(55 + r['score'] * 4)))
                 option_signal = {
                     'symbol': r['symbol'],
                     'action': 'BUY',
@@ -1927,22 +1945,26 @@ def _bot_auto_cycle_inner():
 
         with BOT_STATE_LOCK:
             load_bot_state()
+            bot_state['last_scan'] = datetime.now().isoformat()
             if signals:
                 bot_state['signals'] = signals
-                bot_state['last_scan'] = datetime.now().isoformat()
-                save_bot_state()
             else:
                 # Preserve previous signals when scan finds nothing (e.g. rate-limited)
                 signals = bot_state.get('signals', [])
                 if signals:
                     print("🤖 Scan returned 0 results; keeping previous cached signals")
+            save_bot_state()
     else:
         # Use cached signals when rate limited
         signals = bot_state.get('signals', [])
         current_instrument = bot_state.get('settings', {}).get('instrument_type', 'stocks')
         if current_instrument == 'options':
             signals = [s for s in signals if s.get('instrument_type') == 'option']
-            if not signals:
+            # If ALL cached signals are below-threshold fallbacks, they're stale/useless
+            # for auto-trade. Clear last_scan so next cycle runs a fresh full scan instead
+            # of perpetually looping on display-only fallbacks.
+            all_below = signals and all(s.get('_below_threshold') for s in signals)
+            if not signals or all_below:
                 min_conf_skip = bot_state['settings'].get('min_confidence', 75)
                 fallback = build_live_option_fallback_signals(
                     ['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'TSLA'],
@@ -1953,6 +1975,12 @@ def _bot_auto_cycle_inner():
                         lf['_below_threshold'] = True
                     signals = fallback
                     skip_message = (skip_message + f' | showing live option fallback (below {min_conf_skip}% threshold, display only)') if skip_message else f'showing live option fallback (below {min_conf_skip}% threshold, display only)'
+                # Force a fresh scan next cycle since cached signals are useless
+                if all_below:
+                    with BOT_STATE_LOCK:
+                        load_bot_state()
+                        bot_state['last_scan'] = None
+                        save_bot_state()
         elif current_instrument == 'stocks':
             signals = [s for s in signals if s.get('instrument_type') != 'option']
         print(f"🤖 {skip_message} - using {len(signals)} cached signals")
@@ -1980,6 +2008,7 @@ def _bot_auto_cycle_inner():
         with BOT_STATE_LOCK:
             load_bot_state()
             bot_state['signals'] = signals
+            bot_state['last_scan'] = datetime.now().isoformat()
             save_bot_state()
     
     # Auto-execute trades if enabled

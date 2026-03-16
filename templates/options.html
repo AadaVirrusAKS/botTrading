@@ -854,7 +854,9 @@
                 container.innerHTML = '<div class="loading"><div class="spinner"></div><div style="font-size: 12px;">Finding best picks...</div></div>';
                 
                 console.log('Fetching top 10 system picks from /api/options/analysis');
-                const response = await fetch(`/api/options/analysis?expiry=${currentExpiryFilter}`);
+                const response = await fetch(`/api/options/analysis?expiry=${currentExpiryFilter}&_ts=${Date.now()}`, {
+                    cache: 'no-store'
+                });
                 console.log('Response received:', response.status, response.statusText);
                 
                 const data = await response.json();
@@ -1018,7 +1020,9 @@
         // Load Put/Call Ratio data
         async function loadPCRAnalysis() {
             try {
-                const response = await fetch('/api/options/pcr');
+                const response = await fetch(`/api/options/pcr?_ts=${Date.now()}`, {
+                    cache: 'no-store'
+                });
                 const data = await response.json();
                 
                 const container = document.getElementById('pcrAnalysis');

@@ -103,7 +103,9 @@ class TradingDashboard {
             console.log('🚀 Fetching all dashboard data in single batch request...');
             const startTime = performance.now();
             
-            const response = await resilientFetch('/api/dashboard/batch', {}, { timeoutMs: 30000, retries: 2, label: 'dashboardBatch' });
+            const response = await resilientFetch(`/api/dashboard/batch?_ts=${Date.now()}`, {
+                cache: 'no-store'
+            }, { timeoutMs: 30000, retries: 2, label: 'dashboardBatch' });
             const data = await response.json();
             
             const elapsed = (performance.now() - startTime).toFixed(0);
@@ -377,10 +379,12 @@ class TradingDashboard {
         }
     }
 
-    async loadScanner(scannerType) {
+    async loadScanner(scannerType, callback) {
         try {
             this.showLoading('scanner-results');
-            const response = await resilientFetch(`/api/scanner/${scannerType}`, {}, { timeoutMs: 60000, retries: 2, label: `scanner-${scannerType}` });
+            const response = await resilientFetch(`/api/scanner/${scannerType}?_ts=${Date.now()}`, {
+                cache: 'no-store'
+            }, { timeoutMs: 60000, retries: 2, label: `scanner-${scannerType}` });
             const data = await response.json();
             
             if (data.success) {
@@ -402,10 +406,14 @@ class TradingDashboard {
                     // Auto-retry after 3 seconds
                     setTimeout(() => {
                         console.log(`🔄 Retrying ${scannerType} scanner...`);
-                        this.loadScanner(scannerType);
+                        this.loadScanner(scannerType, callback);
                     }, 3000);
                 } else {
                     this.renderScannerResults(data, scannerType);
+                    if (typeof callback === 'function') {
+                        const results = data.picks ? [].concat(...Object.values(data.picks)) : (data.stocks || []);
+                        callback(results);
+                    }
                 }
             }
         } catch (error) {
@@ -447,7 +455,9 @@ class TradingDashboard {
         }
 
         try {
-            const response = await resilientFetch('/api/scanner/volume-spike', {}, { timeoutMs: 60000, retries: 2, label: 'volumeSpike' });
+            const response = await resilientFetch(`/api/scanner/volume-spike?_ts=${Date.now()}`, {
+                cache: 'no-store'
+            }, { timeoutMs: 60000, retries: 2, label: 'volumeSpike' });
             const data = await response.json();
             
             if (data.success && data.stocks && data.stocks.length > 0) {
