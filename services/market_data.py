@@ -146,11 +146,13 @@ def _mark_global_rate_limit():
 
 
 def _mark_global_rate_limit_success():
-    """Reset consecutive 429 counter after a successful Yahoo API call."""
-    global _global_rate_limit_consecutive
+    """Reset consecutive 429 counter AND lift global block after a successful Yahoo API call."""
+    global _global_rate_limit_consecutive, _global_rate_limit_until
     with _global_rate_limit_lock:
         if _global_rate_limit_consecutive > 0:
             _global_rate_limit_consecutive = 0
+        if _global_rate_limit_until > 0:
+            _global_rate_limit_until = 0.0
 
 
 def _is_rate_limited(symbol):
@@ -679,6 +681,7 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
         # Try v8 API fallback (different rate-limit pool)
         df = _fetch_history_v8_api(symbol, period=period, interval=interval)
         if df is not None and not df.empty:
+            _mark_global_rate_limit_success()  # v8 success = Yahoo partially working
             with _history_cache_lock:
                 _history_cache[cache_key] = {'data': df, 'ts': now}
             return df

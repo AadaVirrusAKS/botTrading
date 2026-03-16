@@ -1431,15 +1431,18 @@ def _bot_auto_cycle_inner():
                     print(f"🛡️ MAX LOSS GUARD: {display_name} down {option_loss_pct*100:.1f}% (limit: {max_option_loss_pct*100:.0f}%) — force closing")
             
             # ===== MAX DOLLAR LOSS PER TRADE GUARD =====
-            # Hard cap: close any position whose unrealized loss exceeds max_loss_per_trade dollars
+            # Safety net for gap-throughs: triggers at 1.5x the configured max_loss_per_trade.
+            # The primary stop loss (set during position sizing) already limits risk to
+            # max_loss_per_trade. This guard only fires if price gaps past the stop.
             if not exit_reason and entry_price > 0:
                 max_loss_dollars = float(bot_state['settings'].get('max_loss_per_trade', 500))
+                gap_buffer = 1.5  # Allow 50% buffer over planned max loss before hard exit
                 if max_loss_dollars > 0:
                     if side == 'LONG':
                         unrealized_loss = (entry_price - current_price) * quantity * multiplier
                     else:
                         unrealized_loss = (current_price - entry_price) * quantity * multiplier
-                    if unrealized_loss >= max_loss_dollars:
+                    if unrealized_loss >= max_loss_dollars * gap_buffer:
                         exit_reason = 'MAX_LOSS_GUARD'
                         exit_price = current_price
                         display_name = pos.get('contract', symbol)
@@ -2004,11 +2007,13 @@ def _bot_auto_cycle_inner():
 
     # Keep bot_status/live pane aligned with what auto_cycle is actively using,
     # especially in rate-limited skip-scan paths where we build fallback signals.
+    # NOTE: Do NOT update last_scan here — updating it resets the 90s rate-limit
+    # countdown on every background-engine call (every 10s), which permanently
+    # blocks fresh full scans from running.
     if skip_scan:
         with BOT_STATE_LOCK:
             load_bot_state()
             bot_state['signals'] = signals
-            bot_state['last_scan'] = datetime.now().isoformat()
             save_bot_state()
     
     # Auto-execute trades if enabled
@@ -2300,31 +2305,27 @@ def _bot_auto_cycle_inner():
                 contracts_qty = max(1, int(position_size / (premium * 100)))
                 cost = contracts_qty * premium * 100
 
-                # 2. Derive stop loss from max_loss_per_trade (tighter stop, not fewer contracts)
+                # 2. Respect scanner's stop loss level, reduce qty to fit max_loss_per_trade
+                # The scanner's 50% stop is calibrated for options — don't tighten it.
+                # Instead, reduce contract count so total risk at that stop fits the budget.
                 max_loss_per_trade = float(bot_state['settings'].get('max_loss_per_trade', 500))
                 signal_stop = float(signal.get('stop_loss', premium * 0.5) or (premium * 0.5))
                 risk_pct_signal = max(0.01, min(0.95, 1 - (signal_stop / signal_premium))) if signal_premium > 0 else 0.5
                 signal_based_stop = round(premium * (1 - risk_pct_signal), 2)
 
+                # Use the scanner's stop loss as the primary stop
+                live_stop_loss = signal_based_stop
+
                 if max_loss_per_trade > 0 and contracts_qty > 0:
-                    # Max $ we can lose per contract to stay within max_loss_per_trade
-                    max_risk_per_contract = max_loss_per_trade / contracts_qty / 100  # in $ premium terms
-                    # Tighter stop derived from risk budget
-                    risk_based_stop = round(premium - max_risk_per_contract, 2)
-                    # Use the TIGHTER (higher) stop: risk-budget vs signal-based
-                    live_stop_loss = max(risk_based_stop, signal_based_stop)
-                    # Floor: stop can't be above 85% of entry (minimum 15% room)
-                    min_stop_floor = round(premium * 0.15, 2)
-                    if (premium - live_stop_loss) < min_stop_floor:
-                        live_stop_loss = round(premium - min_stop_floor, 2)
-                        # Recalc contracts if floor forces wider risk
-                        actual_risk = (premium - live_stop_loss) * 100
-                        if actual_risk > 0:
-                            contracts_qty = max(1, int(max_loss_per_trade / actual_risk))
+                    # Risk per contract at the scanner's stop level
+                    risk_per_contract = (premium - live_stop_loss) * 100
+                    if risk_per_contract > 0:
+                        # Reduce contracts to fit within max_loss_per_trade budget
+                        max_contracts_by_risk = max(1, int(max_loss_per_trade / risk_per_contract))
+                        if max_contracts_by_risk < contracts_qty:
+                            contracts_qty = max_contracts_by_risk
                             cost = contracts_qty * premium * 100
-                    print(f"📊 {signal.get('contract', sym)}: {contracts_qty}x @ ${premium:.2f}, stop ${live_stop_loss:.2f} (max loss ${max_loss_per_trade})")
-                else:
-                    live_stop_loss = signal_based_stop
+                    print(f"📊 {signal.get('contract', sym)}: {contracts_qty}x @ ${premium:.2f}, stop ${live_stop_loss:.2f} (risk/contract ${risk_per_contract:.2f}, max loss ${max_loss_per_trade})")
 
                 pre_balance = _get_live_available_balance()
                 if cost > pre_balance:
@@ -3618,6 +3619,11 @@ def run_intraday_scan_batched(symbols, scan_fn, max_workers=5, batch_size=6, bat
     # Phase 1: Pre-warm history cache with a single batch download
     # This prevents N individual cached_get_history() calls from each hitting Yahoo
     prewarm_history_cache(filtered_symbols, period='5d', interval='5m')
+
+    # Clear global rate limit after prewarm — prewarm uses yf.download() which may
+    # 429 even when individual ticker.options calls would succeed. Without this,
+    # prewarm failures block ALL option chain lookups for the entire scan cycle.
+    clear_rate_limit_blocks()
 
     results = []
     for i in range(0, len(filtered_symbols), batch_size):
