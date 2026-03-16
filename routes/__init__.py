@@ -17,6 +17,7 @@ def register_blueprints(app):
     from routes.cache_admin import cache_bp
     from routes.pages import pages_bp
     from routes.alpaca import alpaca_bp
+    from routes.daily_agent import daily_agent_bp
 
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(scanners_bp)
@@ -31,5 +32,6 @@ def register_blueprints(app):
     app.register_blueprint(cache_bp)
     app.register_blueprint(pages_bp)
     app.register_blueprint(alpaca_bp)
+    app.register_blueprint(daily_agent_bp)
 
-    print("  ✅ Registered 13 route blueprints")
+    print("  ✅ Registered 14 route blueprints")

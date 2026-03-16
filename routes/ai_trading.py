@@ -681,8 +681,33 @@ def bot_scan():
         min_conf = bot_state['settings'].get('min_confidence', 75)
         
         for r in sorted(results, key=lambda x: x['score'], reverse=True)[:10]:
-            # Score range 7-20 (scanner rejects <7); score 9+ maps to ~91% confidence
-            confidence = min(98, max(50, int(55 + r['score'] * 4)))
+            # FIX 5: Better confidence formula — score 7=58%, 10=70%, 13=82%, 15=90%, 18+=95%
+            # Penalize low volume ratio, reward high OI and volume confirmation
+            base_conf = int(30 + r['score'] * 4)
+            vol_ratio = r.get('volume_ratio', 0)
+            oi = r.get('open_interest', 0)
+            rsi_val = r.get('rsi', 50)
+            direction = r.get('direction', 'BULLISH')
+            # Volume confirmation bonus/penalty
+            if vol_ratio >= 1.5:
+                base_conf += 5
+            elif vol_ratio < 0.5:
+                base_conf -= 10
+            # OI liquidity bonus
+            if oi >= 5000:
+                base_conf += 3
+            elif oi < 500:
+                base_conf -= 5
+            # RSI divergence penalty: buying calls when overbought or puts when oversold
+            if direction == 'BULLISH' and rsi_val > 70:
+                base_conf -= 8
+            elif direction == 'BEARISH' and rsi_val < 30:
+                base_conf -= 8
+            confidence = min(95, max(40, base_conf))
+            
+            # FIX 3: Skip signals with very low volume ratio (no volume confirmation)
+            if vol_ratio < 0.3:
+                continue
             option_signal = {
                 'symbol': r['symbol'],
                 'action': 'BUY',
@@ -1413,6 +1438,25 @@ def _bot_auto_cycle_inner():
             exit_reason = None
             exit_price = current_price
             
+            # ===== FIX 2: SIGNAL REVERSAL DETECTION =====
+            # If the scanner's latest signals flip direction against an open position, close it early
+            # rather than waiting for stop loss to be hit (prevents riding losing trades down)
+            if not exit_reason and not _in_grace_period and is_option and signals:
+                pos_opt_type = pos.get('option_type', '').lower()
+                for sig in signals:
+                    if sig.get('symbol') == symbol:
+                        sig_direction = sig.get('direction', '').upper()
+                        if pos_opt_type == 'call' and sig_direction == 'BEARISH':
+                            exit_reason = 'SIGNAL_REVERSAL'
+                            exit_price = current_price
+                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding CALL but scanner now BEARISH (score={sig.get('score', 0)})")
+                            break
+                        elif pos_opt_type == 'put' and sig_direction == 'BULLISH':
+                            exit_reason = 'SIGNAL_REVERSAL'
+                            exit_price = current_price
+                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding PUT but scanner now BULLISH (score={sig.get('score', 0)})")
+                            break
+            
             # Track whether stop was trailed into profit (for exit reason labeling)
             _stop_is_trailing = (stop_loss > entry_price) if side == 'LONG' else (0 < stop_loss < entry_price)
             
@@ -1693,7 +1737,7 @@ def _bot_auto_cycle_inner():
                     'quantity': quantity
                 })
                 
-                emoji_map = {'TARGET_HIT': '🎯', 'TRAILING_STOP': '📈', 'MAX_LOSS_GUARD': '🛡️', 'END_OF_DAY': '⏰', 'EXPIRY_PROTECTION': '⏰'}
+                emoji_map = {'TARGET_HIT': '🎯', 'TRAILING_STOP': '📈', 'MAX_LOSS_GUARD': '🛡️', 'END_OF_DAY': '⏰', 'EXPIRY_PROTECTION': '⏰', 'SIGNAL_REVERSAL': '🔄'}
                 emoji = emoji_map.get(exit_reason, '🛑')
                 print(f"{emoji} AUTO-EXIT: {display_name} - {exit_reason} | Entry: ${entry_price:.2f} → Exit: ${exit_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:.1f}%)")
         
@@ -1830,8 +1874,33 @@ def _bot_auto_cycle_inner():
 
             option_candidates = []
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                # Score range 7-20 (scanner rejects <7); score 9+ maps to ~91% confidence
-                confidence = min(98, max(50, int(55 + r['score'] * 4)))
+                # FIX 5: Better confidence formula — score 7=58%, 10=70%, 13=82%, 15=90%, 18+=95%
+                # Penalize low volume ratio, reward high OI and volume confirmation
+                base_conf = int(30 + r['score'] * 4)
+                vol_ratio = r.get('volume_ratio', 0)
+                oi = r.get('open_interest', 0)
+                rsi_val = r.get('rsi', 50)
+                direction = r.get('direction', 'BULLISH')
+                # Volume confirmation bonus/penalty
+                if vol_ratio >= 1.5:
+                    base_conf += 5
+                elif vol_ratio < 0.5:
+                    base_conf -= 10
+                # OI liquidity bonus
+                if oi >= 5000:
+                    base_conf += 3
+                elif oi < 500:
+                    base_conf -= 5
+                # RSI divergence penalty: buying calls when overbought or puts when oversold
+                if direction == 'BULLISH' and rsi_val > 70:
+                    base_conf -= 8
+                elif direction == 'BEARISH' and rsi_val < 30:
+                    base_conf -= 8
+                confidence = min(95, max(40, base_conf))
+                
+                # FIX 3: Skip signals with very low volume ratio (no volume confirmation)
+                if vol_ratio < 0.3:
+                    continue
                 option_signal = {
                     'symbol': r['symbol'],
                     'action': 'BUY',
@@ -2137,23 +2206,25 @@ def _bot_auto_cycle_inner():
         _market_regime = 'neutral'  # default: allow all
         if bot_state['settings'].get('market_regime_filter', True):
             try:
-                spy_hist = cached_get_history('SPY', period='5d', interval='1d')
+                spy_hist = cached_get_history('SPY', period='1mo', interval='1d')
                 if spy_hist is not None and len(spy_hist) >= 3:
                     spy_close = spy_hist['Close'].dropna()
                     if len(spy_close) >= 3:
                         spy_sma3 = spy_close.rolling(3).mean().iloc[-1]
+                        # FIX 4: Use dual SMA (3-day + 10-day) for more stable regime detection
+                        spy_sma10 = spy_close.rolling(min(10, len(spy_close))).mean().iloc[-1]
                         spy_latest = float(spy_close.iloc[-1])
                         spy_prev = float(spy_close.iloc[-2])
-                        # Bearish: price below 3-day SMA AND last close was down
-                        if spy_latest < spy_sma3 and spy_latest < spy_prev:
+                        # Bearish: price below BOTH 3-day and 10-day SMA AND last close was down
+                        if spy_latest < spy_sma3 and spy_latest < spy_sma10 and spy_latest < spy_prev:
                             _market_regime = 'bearish'
-                            print(f"🐻 Market regime: BEARISH (SPY ${spy_latest:.2f} < SMA3 ${spy_sma3:.2f}) — CALL entries will be blocked")
-                        # Bullish: price above 3-day SMA AND last close was up
-                        elif spy_latest > spy_sma3 and spy_latest > spy_prev:
+                            print(f"🐻 Market regime: BEARISH (SPY ${spy_latest:.2f} < SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f}) — CALL entries will be blocked")
+                        # Bullish: price above BOTH 3-day and 10-day SMA AND last close was up
+                        elif spy_latest > spy_sma3 and spy_latest > spy_sma10 and spy_latest > spy_prev:
                             _market_regime = 'bullish'
-                            print(f"🐂 Market regime: BULLISH (SPY ${spy_latest:.2f} > SMA3 ${spy_sma3:.2f}) — PUT entries will be blocked")
+                            print(f"🐂 Market regime: BULLISH (SPY ${spy_latest:.2f} > SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f}) — PUT entries will be blocked")
                         else:
-                            print(f"⚖️ Market regime: NEUTRAL (SPY ${spy_latest:.2f}, SMA3 ${spy_sma3:.2f})")
+                            print(f"⚖️ Market regime: NEUTRAL (SPY ${spy_latest:.2f}, SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f})")
             except Exception as e:
                 print(f"⚠️ Market regime check failed: {e} — allowing all directions")
 
@@ -2184,6 +2255,21 @@ def _bot_auto_cycle_inner():
             if is_option_signal:
                 if signal.get('contract', '') in current_contracts:
                     skipped_reasons.append(f"{signal.get('contract')}: Already have this option position")
+                    continue
+                # FIX 1: Directional conflict detection — don't enter PUT when holding CALL on same underlying (or vice versa)
+                new_opt_type = signal.get('option_type', '').lower()
+                for existing_pos in account.get('positions', []):
+                    if existing_pos.get('symbol') == signal['symbol'] and existing_pos.get('instrument_type') == 'option':
+                        existing_opt_type = existing_pos.get('option_type', '').lower()
+                        if (existing_opt_type == 'call' and new_opt_type == 'put') or \
+                           (existing_opt_type == 'put' and new_opt_type == 'call'):
+                            skipped_reasons.append(f"{signal['symbol']}: Directional conflict — have {existing_opt_type.upper()} but signal is {new_opt_type.upper()}")
+                            break
+                else:
+                    # No conflict found, proceed to next checks (else on for-loop)
+                    pass
+                # If the for-loop broke (conflict found), skip this signal
+                if any(f"{signal['symbol']}: Directional conflict" in r for r in skipped_reasons[-1:]):
                     continue
             else:
                 intended_side = 'LONG' if signal.get('action') == 'BUY' else 'SHORT'

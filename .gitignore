@@ -27,6 +27,7 @@ alpaca_config.json
 *.csv
 *.xlsx
 .yfinance_cache/
+.dashboard_cache/
 *.db
 *.db-shm
 *.db-wal

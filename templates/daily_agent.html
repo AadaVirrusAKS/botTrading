@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Analysis Agent - US Market Pulse</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .agent-header { background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%); border-radius: 12px; padding: 24px; margin-bottom: 20px; color: #fff; }
+        .agent-header h1 { margin: 0 0 8px 0; font-size: 24px; }
+        .agent-header .subtitle { color: #94a3b8; font-size: 14px; }
+        .run-btn { background: linear-gradient(135deg, #00b4d8, #0077b6); color: #fff; border: none; padding: 10px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .run-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(0,180,216,0.4); }
+        .run-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .run-btn.loading::after { content: ' ⏳'; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+        @media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+        .card { background: #1a1a2e; border: 1px solid #333; border-radius: 10px; padding: 20px; }
+        .card h3 { margin: 0 0 12px 0; font-size: 16px; color: #e2e8f0; display: flex; align-items: center; gap: 8px; }
+        .stat-value { font-size: 28px; font-weight: 700; margin: 4px 0; }
+        .stat-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-green { color: #22c55e; }
+        .stat-red { color: #ef4444; }
+        .stat-yellow { color: #eab308; }
+        .stat-blue { color: #3b82f6; }
+        .suggestion-list { list-style: none; padding: 0; margin: 0; }
+        .suggestion-item { background: #0f172a; border-left: 4px solid #333; border-radius: 6px; padding: 14px 16px; margin-bottom: 10px; }
+        .suggestion-item.critical { border-left-color: #ef4444; }
+        .suggestion-item.high { border-left-color: #f97316; }
+        .suggestion-item.medium { border-left-color: #eab308; }
+        .suggestion-item.low { border-left-color: #3b82f6; }
+        .suggestion-item.info { border-left-color: #22c55e; }
+        .suggestion-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        .severity-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
+        .severity-badge.critical { background: #dc262620; color: #ef4444; }
+        .severity-badge.high { background: #ea580c20; color: #f97316; }
+        .severity-badge.medium { background: #ca8a0420; color: #eab308; }
+        .severity-badge.low { background: #2563eb20; color: #3b82f6; }
+        .severity-badge.info { background: #16a34a20; color: #22c55e; }
+        .suggestion-title { font-weight: 600; color: #e2e8f0; font-size: 14px; }
+        .suggestion-detail { color: #94a3b8; font-size: 13px; line-height: 1.5; }
+        .suggestion-category { font-size: 11px; color: #64748b; margin-left: auto; }
+        .conflict-row { display: flex; align-items: center; gap: 12px; background: #0f172a; padding: 10px 14px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid #ef4444; }
+        .conflict-sym { font-weight: 700; color: #ef4444; min-width: 60px; }
+        .position-row { display: flex; align-items: center; gap: 12px; background: #0f172a; padding: 10px 14px; border-radius: 6px; margin-bottom: 8px; }
+        .position-row.critical { border-left: 3px solid #ef4444; }
+        .position-row.warning { border-left: 3px solid #eab308; }
+        .position-row.healthy { border-left: 3px solid #22c55e; }
+        .pos-sym { font-weight: 600; min-width: 120px; color: #e2e8f0; }
+        .pos-pnl { min-width: 80px; text-align: right; font-weight: 600; }
+        .pos-issues { color: #94a3b8; font-size: 12px; }
+        .history-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid #1e293b; font-size: 13px; }
+        .history-date { min-width: 90px; color: #94a3b8; }
+        .history-pnl { min-width: 80px; font-weight: 600; text-align: right; }
+        .history-bar { flex: 1; height: 8px; border-radius: 4px; background: #1e293b; position: relative; overflow: hidden; }
+        .history-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+        .history-bar-fill.green { background: #22c55e; }
+        .history-bar-fill.red { background: #ef4444; }
+        .history-meta { color: #64748b; font-size: 12px; min-width: 120px; text-align: right; }
+        .date-picker { background: #0f172a; border: 1px solid #333; color: #e2e8f0; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+        .empty-state { text-align: center; color: #64748b; padding: 40px; font-size: 14px; }
+        .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #ffffff40; border-top-color: #00b4d8; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .nav-back { color: #94a3b8; text-decoration: none; font-size: 14px; margin-bottom: 16px; display: inline-block; }
+        .nav-back:hover { color: #e2e8f0; }
+    </style>
+</head>
+<body>
+    <div class="container" style="max-width: 1100px; margin: 0 auto; padding: 20px;">
+        <a href="/ai-trading" class="nav-back">← Back to AI Trading</a>
+
+        <div class="agent-header">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div>
+                    <h1>📊 Daily Analysis Agent</h1>
+                    <div class="subtitle">Automated performance analysis, conflict detection & improvement suggestions</div>
+                </div>
+                <div style="display:flex; gap:10px; align-items:center;">
+                    <input type="date" id="analysisDate" class="date-picker">
+                    <button id="runBtn" class="run-btn" onclick="runAnalysis()">Run Analysis</button>
+                </div>
+            </div>
+            <div id="statusLine" style="margin-top:10px; font-size:13px; color:#64748b;"></div>
+        </div>
+
+        <!-- Account Summary -->
+        <div class="grid-3" id="summaryCards">
+            <div class="card">
+                <div class="stat-label">Account Balance</div>
+                <div class="stat-value stat-blue" id="balance">—</div>
+                <div class="stat-label" id="totalReturn"></div>
+            </div>
+            <div class="card">
+                <div class="stat-label">Today's P&L</div>
+                <div class="stat-value" id="todayPnl">—</div>
+                <div class="stat-label" id="winRate"></div>
+            </div>
+            <div class="card">
+                <div class="stat-label">Unrealized P&L</div>
+                <div class="stat-value" id="unrealizedPnl">—</div>
+                <div class="stat-label" id="positionCount"></div>
+            </div>
+        </div>
+
+        <!-- Suggestions -->
+        <div class="card" style="margin-bottom:20px;">
+            <h3>💡 Improvement Suggestions</h3>
+            <ul class="suggestion-list" id="suggestionList">
+                <li class="empty-state">Run analysis to see suggestions</li>
+            </ul>
+        </div>
+
+        <div class="grid-2">
+            <!-- Signal Conflicts -->
+            <div class="card">
+                <h3>⚠️ Signal Conflicts <span id="conflictCount" style="font-size:13px; color:#64748b;"></span></h3>
+                <div id="conflictList">
+                    <div class="empty-state">No conflicts detected</div>
+                </div>
+            </div>
+
+            <!-- Position Health -->
+            <div class="card">
+                <h3>🏥 Position Health <span id="healthSummary" style="font-size:13px; color:#64748b;"></span></h3>
+                <div id="positionHealthList">
+                    <div class="empty-state">No open positions</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <!-- Performance Breakdown -->
+            <div class="card">
+                <h3>📈 Performance Breakdown</h3>
+                <div id="perfBreakdown">
+                    <div class="empty-state">Run analysis to see breakdown</div>
+                </div>
+            </div>
+
+            <!-- Exit Reasons -->
+            <div class="card">
+                <h3>🚪 Exit Reasons</h3>
+                <div id="exitReasons">
+                    <div class="empty-state">No exits today</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 7-Day History -->
+        <div class="card" style="margin-top:20px;">
+            <h3>📅 7-Day History</h3>
+            <div id="historyList">
+                <div class="empty-state">Run analysis to see history</div>
+            </div>
+        </div>
+
+        <!-- Analysis Reports -->
+        <div class="card" style="margin-top:20px;">
+            <h3>📁 Saved Reports</h3>
+            <div id="reportsList">
+                <div class="empty-state">No reports yet</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Set default date
+        document.getElementById('analysisDate').value = new Date().toISOString().split('T')[0];
+
+        // Load latest report on page load
+        loadLatestReport();
+        loadReportsList();
+
+        async function runAnalysis() {
+            const btn = document.getElementById('runBtn');
+            const date = document.getElementById('analysisDate').value;
+            btn.disabled = true;
+            btn.classList.add('loading');
+            btn.textContent = 'Analyzing...';
+            document.getElementById('statusLine').innerHTML = '<span class="spinner"></span> Running analysis for ' + date + '...';
+
+            try {
+                const resp = await fetch('/api/agent/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({date: date})
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    renderReport(data);
+                    document.getElementById('statusLine').textContent = '✅ Analysis complete — ' + data.generated_at;
+                    loadReportsList();
+                } else {
+                    document.getElementById('statusLine').textContent = '❌ Error: ' + (data.error || 'Unknown');
+                }
+            } catch(e) {
+                document.getElementById('statusLine').textContent = '❌ Request failed: ' + e.message;
+            }
+            btn.disabled = false;
+            btn.classList.remove('loading');
+            btn.textContent = 'Run Analysis';
+        }
+
+        async function loadLatestReport() {
+            try {
+                const resp = await fetch('/api/agent/latest');
+                const data = await resp.json();
+                if (data.success) {
+                    renderReport(data);
+                    document.getElementById('statusLine').textContent = 'Showing report from ' + data.generated_at;
+                }
+            } catch(e) {}
+        }
+
+        async function loadReportsList() {
+            try {
+                const resp = await fetch('/api/agent/reports');
+                const data = await resp.json();
+                if (data.success && data.reports.length > 0) {
+                    const el = document.getElementById('reportsList');
+                    el.innerHTML = data.reports.map(r =>
+                        `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid #1e293b;">
+                            <span style="color:#e2e8f0;">${r.date}</span>
+                            <button onclick="loadReport('${r.date}')" style="background:#1e293b; color:#94a3b8; border:1px solid #333; padding:4px 12px; border-radius:4px; cursor:pointer; font-size:12px;">View</button>
+                        </div>`
+                    ).join('');
+                }
+            } catch(e) {}
+        }
+
+        async function loadReport(date) {
+            try {
+                const resp = await fetch('/api/agent/report/' + date);
+                const data = await resp.json();
+                if (data.success !== false) {
+                    renderReport(data);
+                    document.getElementById('statusLine').textContent = 'Showing report from ' + (data.generated_at || date);
+                    document.getElementById('analysisDate').value = date;
+                }
+            } catch(e) {}
+        }
+
+        function renderReport(data) {
+            // Account
+            const acct = data.account || {};
+            document.getElementById('balance').textContent = '$' + (acct.balance || 0).toLocaleString(undefined, {minimumFractionDigits:2,maximumFractionDigits:2});
+            document.getElementById('totalReturn').textContent = (acct.total_return_pct || 0).toFixed(1) + '% total return';
+
+            // PnL
+            const pnl = data.pnl || {};
+            const pnlVal = pnl.total_pnl || 0;
+            const pnlEl = document.getElementById('todayPnl');
+            pnlEl.textContent = (pnlVal >= 0 ? '+' : '') + '$' + pnlVal.toFixed(2);
+            pnlEl.className = 'stat-value ' + (pnlVal >= 0 ? 'stat-green' : 'stat-red');
+            document.getElementById('winRate').textContent = (pnl.win_rate || 0) + '% win rate | ' + (pnl.wins||0) + 'W / ' + (pnl.losses||0) + 'L';
+
+            // Unrealized
+            const health = data.position_health || {};
+            const unreal = health.total_unrealized || 0;
+            const unrealEl = document.getElementById('unrealizedPnl');
+            unrealEl.textContent = (unreal >= 0 ? '+' : '') + '$' + unreal.toFixed(2);
+            unrealEl.className = 'stat-value ' + (unreal >= 0 ? 'stat-green' : 'stat-red');
+            document.getElementById('positionCount').textContent = (acct.open_positions || 0) + ' open positions';
+
+            // Suggestions
+            const suggestions = data.suggestions || [];
+            const sugList = document.getElementById('suggestionList');
+            if (suggestions.length === 0) {
+                sugList.innerHTML = '<li class="empty-state">No issues detected ✅</li>';
+            } else {
+                sugList.innerHTML = suggestions.map(s => {
+                    const sev = (s.severity || 'info').toLowerCase();
+                    const icon = {critical:'🔴',high:'🟠',medium:'🟡',low:'🔵',info:'✅'}[sev] || '⚪';
+                    return `<li class="suggestion-item ${sev}">
+                        <div class="suggestion-header">
+                            <span class="severity-badge ${sev}">${s.severity}</span>
+                            <span class="suggestion-title">${icon} ${s.title || ''}</span>
+                            <span class="suggestion-category">${s.category || ''}</span>
+                        </div>
+                        <div class="suggestion-detail">${s.detail || ''}</div>
+                    </li>`;
+                }).join('');
+            }
+
+            // Conflicts
+            const conflicts = (data.signal_conflicts || {}).conflicts || [];
+            document.getElementById('conflictCount').textContent = conflicts.length > 0 ? `(${conflicts.length})` : '';
+            const conflictEl = document.getElementById('conflictList');
+            if (conflicts.length === 0) {
+                conflictEl.innerHTML = '<div class="empty-state">No conflicts ✅</div>';
+            } else {
+                conflictEl.innerHTML = conflicts.map(c =>
+                    `<div class="conflict-row">
+                        <span class="conflict-sym">${c.symbol}</span>
+                        <span style="color:#94a3b8; font-size:13px;">${c.position} vs ${c.signal_direction}</span>
+                        <span style="color:#e2e8f0; font-size:12px;">${c.suggestion}</span>
+                    </div>`
+                ).join('');
+            }
+
+            // Position Health
+            const positions = (data.position_health || {}).positions || [];
+            const hSum = document.getElementById('healthSummary');
+            hSum.textContent = positions.length > 0 ?
+                `${health.healthy_count||0} healthy, ${health.warning_count||0} warn, ${health.critical_count||0} critical` : '';
+            const posEl = document.getElementById('positionHealthList');
+            if (positions.length === 0) {
+                posEl.innerHTML = '<div class="empty-state">No open positions</div>';
+            } else {
+                posEl.innerHTML = positions.map(p => {
+                    const cls = (p.status || 'healthy').toLowerCase();
+                    const pnlColor = p.pnl >= 0 ? 'stat-green' : 'stat-red';
+                    return `<div class="position-row ${cls}">
+                        <span class="pos-sym">${p.contract || p.symbol}</span>
+                        <span class="pos-pnl ${pnlColor}">$${(p.pnl||0).toFixed(2)} (${(p.pnl_pct||0).toFixed(1)}%)</span>
+                        <span class="pos-issues">${(p.issues||[]).join('; ') || 'OK'}</span>
+                    </div>`;
+                }).join('');
+            }
+
+            // Performance Breakdown
+            const perfEl = document.getElementById('perfBreakdown');
+            if ((pnl.total_exits || 0) > 0 || (pnl.total_entries || 0) > 0) {
+                perfEl.innerHTML = `
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px;">
+                        <div><span style="color:#94a3b8;">Entries:</span> <strong>${pnl.total_entries||0}</strong></div>
+                        <div><span style="color:#94a3b8;">Exits:</span> <strong>${pnl.total_exits||0}</strong></div>
+                        <div><span style="color:#94a3b8;">Avg Win:</span> <strong class="stat-green">$${(pnl.avg_win||0).toFixed(2)}</strong></div>
+                        <div><span style="color:#94a3b8;">Avg Loss:</span> <strong class="stat-red">$${(pnl.avg_loss||0).toFixed(2)}</strong></div>
+                        <div><span style="color:#94a3b8;">R:R Ratio:</span> <strong>${(pnl.risk_reward||0).toFixed(2)}</strong></div>
+                        <div><span style="color:#94a3b8;">Largest Win:</span> <strong class="stat-green">$${(pnl.largest_win||0).toFixed(2)}</strong></div>
+                        <div><span style="color:#94a3b8;">Largest Loss:</span> <strong class="stat-red">$${(pnl.largest_loss||0).toFixed(2)}</strong></div>
+                        <div><span style="color:#94a3b8;">Stock PnL:</span> <strong>$${(pnl.stock_pnl||0).toFixed(2)}</strong></div>
+                        <div><span style="color:#94a3b8;">Option PnL:</span> <strong>$${(pnl.option_pnl||0).toFixed(2)}</strong></div>
+                    </div>`;
+            } else {
+                perfEl.innerHTML = '<div class="empty-state">No trades today</div>';
+            }
+
+            // Exit Reasons
+            const reasons = pnl.exit_reasons || {};
+            const reasonEl = document.getElementById('exitReasons');
+            const reasonKeys = Object.keys(reasons);
+            if (reasonKeys.length === 0) {
+                reasonEl.innerHTML = '<div class="empty-state">No exits today</div>';
+            } else {
+                reasonEl.innerHTML = reasonKeys.map(k => {
+                    const r = reasons[k];
+                    const pnlColor = r.pnl >= 0 ? 'stat-green' : 'stat-red';
+                    return `<div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #1e293b; font-size:13px;">
+                        <span style="color:#e2e8f0;">${k}</span>
+                        <span>${r.count}x</span>
+                        <span class="${pnlColor}">$${r.pnl.toFixed(2)}</span>
+                    </div>`;
+                }).join('');
+            }
+
+            // 7-Day History
+            const history = data.history || [];
+            const histEl = document.getElementById('historyList');
+            if (history.length === 0) {
+                histEl.innerHTML = '<div class="empty-state">No history</div>';
+            } else {
+                const maxPnl = Math.max(...history.map(h => Math.abs(h.pnl || 0)), 1);
+                histEl.innerHTML = history.map(h => {
+                    const pnlColor = h.pnl >= 0 ? 'stat-green' : 'stat-red';
+                    const barColor = h.pnl >= 0 ? 'green' : 'red';
+                    const barWidth = Math.min(100, Math.abs(h.pnl || 0) / maxPnl * 100);
+                    return `<div class="history-row">
+                        <span class="history-date">${h.date}</span>
+                        <span class="history-pnl ${pnlColor}">${h.pnl >= 0 ? '+':''}$${(h.pnl||0).toFixed(2)}</span>
+                        <div class="history-bar"><div class="history-bar-fill ${barColor}" style="width:${barWidth}%"></div></div>
+                        <span class="history-meta">${h.exits} exits | ${h.win_rate}% WR</span>
+                    </div>`;
+                }).join('');
+            }
+        }
+    </script>
+</body>
+</html>

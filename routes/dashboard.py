@@ -3,6 +3,7 @@ Dashboard Routes - Market overview, sectors, movers, dashboard batch API.
 """
 from flask import Blueprint, render_template, jsonify, request
 import json
+import os
 import time
 import threading
 from datetime import datetime
@@ -30,6 +31,39 @@ from services.market_helpers import (
 dashboard_bp = Blueprint("dashboard", __name__)
 
 # ============================================================================
+# DISK CACHE - Persist dashboard caches across server restarts
+# ============================================================================
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.dashboard_cache')
+_BATCH_CACHE_FILE = os.path.join(_CACHE_DIR, 'batch_cache.json')
+_BREADTH_CACHE_FILE = os.path.join(_CACHE_DIR, 'breadth_cache.json')
+
+def _save_cache_to_disk(filepath, data, timestamp):
+    """Persist a cache dict + timestamp to disk as JSON."""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        payload = {'data': data, 'timestamp': timestamp.isoformat()}
+        with open(filepath, 'w') as f:
+            json.dump(payload, f, default=str)
+    except Exception as e:
+        print(f"Cache save error ({filepath}): {e}")
+
+def _load_cache_from_disk(filepath, max_age_seconds):
+    """Load cache from disk if it exists and hasn't expired."""
+    try:
+        if not os.path.exists(filepath):
+            return None, None
+        with open(filepath) as f:
+            payload = json.load(f)
+        ts = datetime.fromisoformat(payload['timestamp'])
+        age = (datetime.now() - ts).total_seconds()
+        if age > max_age_seconds:
+            return None, None
+        return payload['data'], ts
+    except Exception as e:
+        print(f"Cache load error ({filepath}): {e}")
+        return None, None
+
+# ============================================================================
 # API ENDPOINTS
 # ============================================================================
 
@@ -44,9 +78,17 @@ dashboard_bp = Blueprint("dashboard", __name__)
 _market_breadth_cache = {
     'data': None,
     'timestamp': None,
-    'cache_ttl': 600,       # Market breadth data cached for 10 min (1163+ symbols, expensive)
+    'cache_ttl': 900,       # Market breadth data cached for 15 min (1600+ symbols, expensive)
+    'refreshing': False,    # True while a background refresh is in progress
 }
 _market_breadth_lock = threading.Lock()
+
+# Restore breadth cache from disk on import (accept up to 1 hour old for quick startup)
+_disk_breadth, _disk_breadth_ts = _load_cache_from_disk(_BREADTH_CACHE_FILE, 3600)
+if _disk_breadth is not None:
+    _market_breadth_cache['data'] = _disk_breadth
+    _market_breadth_cache['timestamp'] = _disk_breadth_ts
+    print(f"📊 Restored market breadth cache from disk (age: {(datetime.now() - _disk_breadth_ts).total_seconds():.0f}s)")
 
 # S&P 500 constituents (as of early 2026) - Yahoo Finance format (dots → dashes)
 _SP500 = [
@@ -188,13 +230,93 @@ _ADDITIONAL = [
     'MARA','RIOT','CLSK','HUT','BITF','IREN','APLD',
     'AFRM','UPST','HIMS','RXRX','RCAT','LUNR','SOUN','BBAI','AI','GLBE','PATH',
     'CELH','DUOL','CAVA','BIRK',
-    'SPY','QQQ','IWM','DIA','VTI','VOO'
+    'SPY','QQQ','IWM','DIA','VTI','VOO',
+]
+
+# Extra US-listed stocks to fill out the universe to 1500+
+_EXTRA_US = [
+    # Russell 2000 / broader market names not already in S&P lists
+    'ABNB','ACHR','ADMA','AGTI','AHR','ALSN','AMRX','ANSS','APP','ARCC',
+    'ARES','ARMK','ASND','ATMU','AZEK',
+    'BALL','BECN','BFST','BLDR','BMA','BMR','BPMC','BRBR','BSM','BURL',
+    'CADE','CACC','CAMT','CBRL','CCOI','CDAY','CEIX','CGNX','CHEF','CIEN',
+    'CIFR','CLS','CLVT','CMBM','CNNE','CNXC','COHR','COMP','COUR','CPNG',
+    'CPRX','CRGY','CRNX','CRSP','CSWI','CYBR',
+    'DAR','DBX','DBRG','DCOM','DCPH','DFH','DIOD','DMRC','DNA','DNB',
+    'DOCS','DOLE','DORM','DSGX','DV','DVAX',
+    'EAT','EEFT','EFSC','ELAN','ELF','ENFN','ENOV','ENVX','ESGR','ESRT',
+    'ESTA','ESTC','EVCM','EVGO','EXAI','EXLS',
+    'FBK','FCEL','FCPT','FG','FIGS','FLNC','FLUT','FLYW','FOUR','FRBK',
+    'FRSH','FRVT','FTAI','FTRE','FUBO',
+    'GATO','GBCI','GCMG','GCT','GEO','GFL','GKOS','GMS','GO','GOOS',
+    'GRAB','GRFS','GRIN','GTLS','GTLB','GYRE',
+    'HBI','HEES','HELE','HGV','HHH','HII','HLLY','HLVX','HMC','HNST',
+    'HOUS','HRMY','HUBG','HUBS',
+    'IBN','ICL','IESC','IIPR','INFA','INSP','INST','INTA','IRTC','ITCI',
+    'JAMF','JANX','JBSS','JNPR','JOBY',
+    'KARO','KD','KLIC','KOS','KTOS','KVYO',
+    'LANC','LBRDK','LESL','LFST','LGF-A','LHCG','LICY','LMND','LNW','LPRO',
+    'LSCC','LSPD','LTCH','LUMN','LYEL','LYFT',
+    'MANU','MAPS','MATV','MBLY','MC','MCFT','MCW','MDXG','ME','MGNI',
+    'MIRM','MKTW','MLCO','MMYT','MODV','MOMO','MPLN','MREO','MRTN','MRUS',
+    'MSTR','MTCH','MTDR','MTTR','MVST',
+    'NAT','NBHC','NCMI','NERV','NETI','NEXT','NGVT','NNOX','NOVA',
+    'NTRA','NUVL','NWL','NXRT','NYCB',
+    'OFIX','OLK','OLPX','OPEN','OPCH','ORA','ORIC','OWL',
+    'PARR','PAX','PAYC','PCTY','PCVX','PDCO','PDFS','PEGA','Penn','PGNY',
+    'PINC','PLAY','PLMR','PLUS','PLTK','PLYA','PNFP','PRCT','PRFT','PRGS',
+    'PRKS','PRMW','PROF','PRPL','PSFE','PUBM','PYCR',
+    'QTWO','QUBT','RAMP','RCEL','RCUS','RDW','REAL','REAX','RELY','RENT',
+    'RERE','REVG','RIOT','RIVN','RKLY','RMBS','RNG','RNGR','ROIC','ROOT',
+    'RPM','RPAY','RPRX','RRR','RRX','RSKD','RVMD','RVNC','RXO','RYAM',
+    'SAGE','SAIA','SANA','SAR','SB','SCCO','SDGR','SEMR','SES','SHAK',
+    'SHLS','SIGA','SIG','SIRI','SIX','SKIL','SKX','SLNO','SLB','SMMT',
+    'SNCR','SNDR','SOLO','SONO','SQSP','SRAD','SRC','SRPT','SSRM','STNE',
+    'SUI','SUPN','SWTX','SYMX',
+    'TDW','TECK','TENB','TEN','TFII','TGTX','THS','TKC','TMCI',
+    'TMHC','TOI','TOST','TPL','TRIP','TRUE','TRUP','TTEK','TTGT','TWLO',
+    'TWST','TXG',
+    'UAA','UDMY','URBN','USFD',
+    'VCEL','VFC','VIR','VITL','VLDR','VNDA','VNET','VNO','VNOM','VTEX',
+    'VYNT','W','WDFC','WEN','WFRD','WGS','WHD','WISH','WKHS',
+    'WOLF','WOR','WSM','WULF',
+    'XENE','XM','XP','XPRO','YELP','YOU','YQ','YSG',
+    'ZD','ZEN','ZENV','ZG','ZLAB','ZM','ZUO',
+    # More Russell 2000 / Nasdaq-listed fillers to reach 1500+
+    'AAON','ABCL','ACAD','ACHC','ACRE','ADPT','ADUS','AIRS','AKA','AKRO',
+    'ALEC','ALNY','ALRM','AMPH','ANIK','AORT','APLT','ARLP','ARQT','ARVN',
+    'ATAT','AUPH','AVDX','AVPT','AXSM','AZTA',
+    'BAND','BBIO','BCOV','BDTX','BGCP','BGNE','BHG','BKSY','BLI','BMEA',
+    'BNGO','BONE','BOWL','BRCC','BTU','BTAI','BYSI',
+    'CARG','CARS','CCRN','CCSI','CLBT','CLNE','CLPT','CMPO','CNSP','COLB',
+    'COOP','CORT','COUR','CPSI','CRVL','CTMX','CTOS','CUBI','CVGW',
+    'DAWN','DAVA','DCGO','DH','DIN','DXPE','DYNE',
+    'EGHT','ELAN','ELME','ENTA','EOLS','ERJ','EVLV','EXTR',
+    'FATE','FCFS','FDMT','FLGT','FLWS','FMBI','FORR','FOXF','FROG',
+    'GBTG','GCO','GEVO','GFAI','GH','GIII','GLNG','GPP','GVA',
+    'HAFC','HCC','HLX','HMST','HOWL','HTLD','HYLN',
+    'ICAD','IMCR','IMVT','INBX','INDI','INMD','IOVA','IOVA',
+    'JANX','JWN','KALA','KRUS','KURA',
+    'LAZR','LEGN','LIVN','LNTH','LPRO','LRN','LXRX',
+    'MAXN','MCBS','MDB','MEDP','MGRC','MIGI','MLNK','MQ','MTSI',
+    'NAAS','NBIX','NCNO','NKTR','NKLA','NMRA','NPAB','NR','NTNX','NUS',
+    'OABI','OBNK','OCUL','OLLI','OMGA','OPRX','OPT','OSIS',
+    'PAYO','PCOR','PD','PHAT','PIPR','PLAB','PLRX','PNT','PPC',
+    'PRTA','PTON','PZZA',
+    'QLYS','QSR','RBBN','RCMT','RDFN','REPX','RGNX','RIOT',
+    'SATS','SCPL','SCSC','SDRL','SFBS','SGFY','SHO','SLAB','SLVM',
+    'SMTC','SNCY','SPOK','SPWR','SPXC','SSYS','STRL','SWBI',
+    'TBI','TBBK','TCBK','TILE','TMDX','TMST','TNXP','TPC','TPTX','TREX',
+    'TRMK','TVTX','UCBI','UFPT','UGI','UNFI','UVE','UVV',
+    'VBTX','VCNX','VERV','VGSH','VHI','VIRT','VSCO','VTS',
+    'WAFD','WARM','WGO','WINA','WSR','WTFC',
+    'XPER','YELP','YEXT',
 ]
 
 
 def _get_broad_market_tickers():
     """Get comprehensive US market ticker list (1500+ stocks) - hardcoded for reliability"""
-    dashboard_symbols = _SP500 + _SP400 + _SP600 + _ADDITIONAL
+    dashboard_symbols = _SP500 + _SP400 + _SP600 + _ADDITIONAL + _EXTRA_US
     # Deduplicate while preserving order
     seen = set()
     merged_symbols = []
@@ -232,7 +354,7 @@ def calculate_market_breadth():
             chunk = tickers[i:i + chunk_size]
             for attempt in range(max_retries + 1):
                 try:
-                    data = yf.download(chunk, period='2d', threads=True, progress=False, timeout=60)
+                    data = yf.download(chunk, period='2d', auto_adjust=True, threads=True, progress=False, timeout=60)
                     if data.empty:
                         if attempt < max_retries:
                             import time
@@ -260,11 +382,10 @@ def calculate_market_breadth():
             time.sleep(0.5)
 
         if all_changes.empty:
-            # Fallback: use v8 API for a representative sample using parallel requests
-            print("📊 Market breadth: yf.download failed, trying v8 API fallback...")
+            # Fallback: use v8 API for ALL tickers using parallel requests
+            print(f"📊 Market breadth: yf.download failed, trying v8 API fallback for {len(tickers)} stocks...")
             import requests as req_lib
             from concurrent.futures import ThreadPoolExecutor
-            sample_tickers = tickers[:300]  # Representative S&P 500 subset
 
             _session = req_lib.Session()
             _session.headers.update({
@@ -287,10 +408,10 @@ def calculate_market_breadth():
                     pass
                 return None
 
-            with ThreadPoolExecutor(max_workers=10) as pool:
-                results = list(pool.map(_fetch_change, sample_tickers))
+            with ThreadPoolExecutor(max_workers=20) as pool:
+                results = list(pool.map(_fetch_change, tickers))
             changes_list = [r for r in results if r is not None]
-            print(f"📊 Market breadth: v8 API got {len(changes_list)}/{len(sample_tickers)} stocks")
+            print(f"📊 Market breadth: v8 API got {len(changes_list)}/{len(tickers)} stocks")
             if changes_list:
                 all_changes = pd.Series(changes_list)
 
@@ -316,10 +437,11 @@ def calculate_market_breadth():
             'source': f'US Market ({total} stocks)'
         }
 
-        # Cache the result
+        # Cache the result in memory and on disk
         with _market_breadth_lock:
             _market_breadth_cache['data'] = result
             _market_breadth_cache['timestamp'] = now
+        _save_cache_to_disk(_BREADTH_CACHE_FILE, result, now)
 
         print(f"📊 Market Breadth: {advancing} advancing, {declining} declining "
               f"out of {total} stocks (A/D ratio: {ad_ratio})")
@@ -330,15 +452,44 @@ def calculate_market_breadth():
         return None
 
 
-# Pre-fetch market breadth on startup so it's ready before the first dashboard request
-def _preload_market_breadth():
-    """Delay slightly to let the server finish binding, then calculate breadth."""
+# Pre-warm dashboard caches on startup in background
+def _preload_dashboard_caches():
+    """Delay slightly to let the server finish binding, then warm both caches."""
     import time
-    time.sleep(10)  # Let server start up first
-    print("📊 Pre-loading market breadth data (1000+ stocks)...")
-    calculate_market_breadth()
+    time.sleep(5)  # Let server start up first
 
-threading.Thread(target=_preload_market_breadth, daemon=True).start()
+    # 1. Pre-warm the batch cache if disk cache was stale/missing
+    with _batch_cache_lock:
+        batch_valid = (_batch_cache['data'] is not None and
+                       _batch_cache['timestamp'] is not None and
+                       _batch_cache['data'].get('symbols_fetched', 0) > 0)
+    if not batch_valid:
+        print("📊 Pre-warming dashboard batch cache...")
+        try:
+            data = _get_batch_dashboard_data()
+            if data.get('symbols_fetched', 0) > 0:
+                now = datetime.now()
+                with _batch_cache_lock:
+                    _batch_cache['data'] = data
+                    _batch_cache['timestamp'] = now
+                _save_cache_to_disk(_BATCH_CACHE_FILE, data, now)
+                print(f"📊 Batch cache warmed: {data.get('symbols_fetched', 0)} symbols")
+        except Exception as e:
+            print(f"⚠️ Batch cache pre-warm failed: {e}")
+    else:
+        print("📊 Batch cache already warm from disk")
+
+    # 2. Pre-warm market breadth if disk cache was stale/missing
+    with _market_breadth_lock:
+        breadth_valid = (_market_breadth_cache['data'] is not None and
+                         _market_breadth_cache['timestamp'] is not None)
+    if not breadth_valid:
+        print("📊 Pre-loading market breadth data (1000+ stocks)...")
+        calculate_market_breadth()
+    else:
+        print("📊 Market breadth cache already warm from disk")
+
+threading.Thread(target=_preload_dashboard_caches, daemon=True).start()
 
 
 # Batch data cache with TTL
@@ -348,6 +499,15 @@ _batch_cache = {
     'cache_ttl': 300  # seconds (5 min) - reduced API calls significantly
 }
 _batch_cache_lock = threading.Lock()
+
+# Restore batch cache from disk on import (accept up to 1 hour for quick startup)
+_disk_batch, _disk_batch_ts = _load_cache_from_disk(_BATCH_CACHE_FILE, 3600)
+if _disk_batch is not None and _disk_batch.get('symbols_fetched', 0) > 0:
+    _batch_cache['data'] = _disk_batch
+    _batch_cache['timestamp'] = _disk_batch_ts
+    print(f"📊 Restored dashboard batch cache from disk (age: {(datetime.now() - _disk_batch_ts).total_seconds():.0f}s, symbols: {_disk_batch.get('symbols_fetched', 0)})")
+elif _disk_batch is not None:
+    print(f"📊 Skipped stale batch cache from disk (symbols_fetched=0)")
 
 # _fetch_all_quotes_batch is imported from services.market_data
 
@@ -448,16 +608,35 @@ def _get_batch_dashboard_data():
         except Exception as e:
             print(f"Extended hours fetch error: {e}")
     
-    # Calculate market pulse from comprehensive US market breadth (1800+ stocks)
-    # Use cached breadth if available; otherwise use fast watchlist fallback
-    # and trigger heavy breadth calculation in the background
+    # Calculate market pulse from comprehensive US market breadth (1600+ stocks)
+    # Serve stale breadth data while refreshing in background — never fall back to
+    # the tiny watchlist unless we have zero breadth data at all.
     market_pulse = None
+    breadth_stale = False
     with _market_breadth_lock:
         if (_market_breadth_cache['data'] is not None and
             _market_breadth_cache['timestamp'] is not None):
             age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
-            if age < _market_breadth_cache.get('cache_ttl', 600):
+            if age < _market_breadth_cache.get('cache_ttl', 900):
                 market_pulse = _market_breadth_cache['data']
+            else:
+                # Stale but still usable — serve it and refresh in background
+                market_pulse = _market_breadth_cache['data'].copy()
+                market_pulse['source'] = market_pulse.get('source', '') + ' (refreshing...)'
+                breadth_stale = True
+
+    if breadth_stale:
+        # Refresh in background only if not already refreshing
+        with _market_breadth_lock:
+            if not _market_breadth_cache.get('refreshing'):
+                _market_breadth_cache['refreshing'] = True
+                def _bg_refresh():
+                    try:
+                        calculate_market_breadth()
+                    finally:
+                        with _market_breadth_lock:
+                            _market_breadth_cache['refreshing'] = False
+                threading.Thread(target=_bg_refresh, daemon=True).start()
 
     if market_pulse is None:
         # Use fast fallback from already-fetched watchlist data
@@ -481,8 +660,17 @@ def _get_batch_dashboard_data():
             'breadth_pct': round((advancing / max(len(all_quotes), 1)) * 100, 1),
             'source': 'dashboard watchlist (fallback)'
         }
-        # Kick off heavy breadth calculation in background so next request has it
-        threading.Thread(target=calculate_market_breadth, daemon=True).start()
+        # Kick off heavy breadth calculation in background (only if not already running)
+        with _market_breadth_lock:
+            if not _market_breadth_cache.get('refreshing'):
+                _market_breadth_cache['refreshing'] = True
+                def _bg_refresh_first():
+                    try:
+                        calculate_market_breadth()
+                    finally:
+                        with _market_breadth_lock:
+                            _market_breadth_cache['refreshing'] = False
+                threading.Thread(target=_bg_refresh_first, daemon=True).start()
     
     return {
         'timestamp': datetime.now().isoformat(),
@@ -515,8 +703,22 @@ def dashboard_batch():
         - extended_hours: Pre-market/after-hours movers (when applicable)
     """
     try:
+        # Helper: inject latest breadth data into a response dict
+        def _inject_breadth(resp):
+            with _market_breadth_lock:
+                if (_market_breadth_cache['data'] is not None and
+                    _market_breadth_cache['timestamp'] is not None):
+                    breadth_age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
+                    if breadth_age < _market_breadth_cache.get('cache_ttl', 900):
+                        resp['market_pulse'] = _market_breadth_cache['data']
+                    elif _market_breadth_cache['data'].get('total', 0) > 100:
+                        # Stale breadth still better than nothing
+                        stale = _market_breadth_cache['data'].copy()
+                        stale['source'] = stale.get('source', '') + ' (stale)'
+                        resp['market_pulse'] = stale
+
+        stale_batch = None  # Keep a reference to expired-but-good cache data
         with _batch_cache_lock:
-            # Check cache — only serve if data is non-empty
             if _batch_cache['data'] is not None and _batch_cache['timestamp'] is not None:
                 age = (datetime.now() - _batch_cache['timestamp']).total_seconds()
                 has_data = _batch_cache['data'].get('symbols_fetched', 0) > 0
@@ -524,39 +726,33 @@ def dashboard_batch():
                     cached_data = _batch_cache['data'].copy()
                     cached_data['cached'] = True
                     cached_data['cache_age_seconds'] = int(age)
-                    # Always inject latest breadth data into cached response
-                    # (breadth thread may have finished after batch was cached)
-                    with _market_breadth_lock:
-                        if (_market_breadth_cache['data'] is not None and
-                            _market_breadth_cache['timestamp'] is not None):
-                            breadth_age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
-                            if breadth_age < _market_breadth_cache.get('cache_ttl', 600):
-                                cached_data['market_pulse'] = _market_breadth_cache['data']
+                    _inject_breadth(cached_data)
                     return jsonify({'success': True, **cached_data})
+                elif has_data:
+                    # Expired but has good data — keep as fallback
+                    stale_batch = _batch_cache['data']
         
         # Fetch fresh data
         data = _get_batch_dashboard_data()
+        _inject_breadth(data)
         
-        # Always inject latest breadth data if available
-        with _market_breadth_lock:
-            if (_market_breadth_cache['data'] is not None and
-                _market_breadth_cache['timestamp'] is not None):
-                breadth_age = (datetime.now() - _market_breadth_cache['timestamp']).total_seconds()
-                if breadth_age < _market_breadth_cache.get('cache_ttl', 600):
-                    data['market_pulse'] = _market_breadth_cache['data']
-        
-        # Only cache if we actually got meaningful data (indices or sectors present)
+        # Only cache if we actually got meaningful data
         symbols_fetched = data.get('symbols_fetched', 0)
         if symbols_fetched > 0:
+            now = datetime.now()
             with _batch_cache_lock:
                 _batch_cache['data'] = data
-                _batch_cache['timestamp'] = datetime.now()
+                _batch_cache['timestamp'] = now
+            _save_cache_to_disk(_BATCH_CACHE_FILE, data, now)
+        elif stale_batch is not None:
+            # Fresh fetch failed (rate-limited) — serve stale good data instead of empty
+            print(f"⚠️ Batch fetch returned 0 symbols — serving stale cache ({stale_batch.get('symbols_fetched', 0)} symbols)")
+            data = stale_batch.copy()
+            data['cached'] = True
+            data['stale'] = True
+            _inject_breadth(data)
         else:
-            # Don't cache empty results — clear any stale empty cache
-            print(f"⚠️ Batch dashboard returned 0 symbols — skipping cache to allow retry")
-            with _batch_cache_lock:
-                _batch_cache['data'] = None
-                _batch_cache['timestamp'] = None
+            print(f"⚠️ Batch dashboard returned 0 symbols — no stale fallback available")
         
         return jsonify({'success': True, **data})
     

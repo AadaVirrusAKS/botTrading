@@ -88,6 +88,10 @@ def ai_analysis_page():
     """AI Stock Analysis - Candlestick pattern recognition & price prediction"""
     return render_template('ai_analysis.html')
 
+@pages_bp.route('/daily-agent')
+def daily_agent_page():
+    """Daily Analysis Agent - Automated bot performance analysis & suggestions"""
+    return render_template('daily_agent.html')
 
 
 @pages_bp.route('/api/symbol/suggest')

@@ -79,9 +79,9 @@ _fetch_log_lock = threading.Lock()
 # GLOBAL TOKEN-BUCKET THROTTLE
 # =============================
 # Limits total Yahoo API requests across ALL callers to avoid 429s.
-_throttle_tokens = 5.0           # current tokens (starts full)
-_throttle_max_tokens = 5.0       # max burst
-_throttle_refill_rate = 2.0      # tokens per second (2 req/s sustained)
+_throttle_tokens = 8.0           # current tokens (starts full)
+_throttle_max_tokens = 8.0       # max burst
+_throttle_refill_rate = 3.0      # tokens per second (3 req/s sustained)
 _throttle_last_refill = time.time()
 _throttle_lock = threading.Lock()
 
@@ -1140,6 +1140,7 @@ def _fetch_all_quotes_batch(symbols):
     
     # 2. If globally rate-limited, serve stale cache entries
     if _is_globally_rate_limited():
+        print(f"[BatchQuotes] ⚠️ Globally rate-limited — serving stale cache for {len(uncached)} symbols")
         for sym in uncached:
             if sym in quote_cache:
                 cached_data, _ = quote_cache[sym]
@@ -1147,7 +1148,8 @@ def _fetch_all_quotes_batch(symbols):
         return results
     
     # 3. Throttle: one token for the batch download
-    if not _throttle_acquire(timeout=15):
+    if not _throttle_acquire(timeout=30):
+        print(f"[BatchQuotes] ⚠️ Throttle timeout (30s) — serving stale cache for {len(uncached)} symbols")
         for sym in uncached:
             if sym in quote_cache:
                 results[sym] = quote_cache[sym][0]
@@ -1159,14 +1161,15 @@ def _fetch_all_quotes_batch(symbols):
             uncached,
             period='5d',
             interval='1d',
-            prepost=True,
             group_by='ticker',
+            auto_adjust=True,
             threads=True,
             progress=False,
             timeout=60
         )
         
         if data is None or data.empty:
+            print(f"[BatchQuotes] ⚠️ yf.download returned empty for {len(uncached)} symbols")
             # Serve stale cache as fallback
             for sym in uncached:
                 if sym in quote_cache:
@@ -1179,7 +1182,29 @@ def _fetch_all_quotes_batch(symbols):
             # Single symbol -> flat columns (Close, Open, etc.)
             sym = uncached[0]
             try:
-                if 'Close' in data.columns and len(data) >= 2:
+                # Handle both MultiIndex and flat columns
+                if isinstance(data.columns, pd.MultiIndex):
+                    # Single ticker with MultiIndex: try data[sym] or data['Close'][sym]
+                    try:
+                        sym_close = data[sym]['Close'].dropna() if sym in data.columns.get_level_values(0) else data['Close'].dropna()
+                    except (KeyError, TypeError):
+                        sym_close = data['Close'].dropna() if 'Close' in data.columns.get_level_values(0) else pd.Series(dtype=float)
+                    if len(sym_close) >= 2:
+                        current_price = float(sym_close.iloc[-1])
+                        prev_close = float(sym_close.iloc[-2])
+                        change = current_price - prev_close
+                        change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                        vol_col = data[sym]['Volume'] if sym in data.columns.get_level_values(0) else data.get('Volume', pd.Series([0]))
+                        quote = {
+                            'symbol': sym,
+                            'price': round(current_price, 2),
+                            'change': round(change, 2),
+                            'changePct': round(change_pct, 2),
+                            'volume': int(vol_col.iloc[-1]) if len(vol_col) > 0 else 0,
+                        }
+                        results[sym] = quote
+                        quote_cache[sym] = (quote, fetch_time)
+                elif 'Close' in data.columns and len(data) >= 2:
                     close_vals = data['Close'].dropna()
                     if len(close_vals) >= 2:
                         current_price = float(close_vals.iloc[-1])
@@ -1201,11 +1226,23 @@ def _fetch_all_quotes_batch(symbols):
             except Exception:
                 pass
         else:
-            # Multiple symbols -> MultiIndex columns (symbol, field)
+            # Multiple symbols -> MultiIndex columns
+            # yfinance may return (Ticker, Price) or (Price, Ticker) depending on group_by
             avail_symbols = []
+            field_first = False  # True if columns are (Price, Ticker) instead of (Ticker, Price)
             if hasattr(data.columns, 'get_level_values'):
                 try:
-                    avail_symbols = list(data.columns.get_level_values(0).unique())
+                    level0 = list(data.columns.get_level_values(0).unique())
+                    level1 = list(data.columns.get_level_values(1).unique())
+                    # Detect layout: if level 0 has field names like 'Close', it's (Price, Ticker)
+                    price_fields = {'Close', 'Open', 'High', 'Low', 'Volume'}
+                    if set(level0) & price_fields:
+                        # Format: (Price, Ticker) — field-first
+                        field_first = True
+                        avail_symbols = level1
+                    else:
+                        # Format: (Ticker, Price) — ticker-first (group_by='ticker')
+                        avail_symbols = level0
                 except Exception:
                     avail_symbols = []
             
@@ -1213,10 +1250,25 @@ def _fetch_all_quotes_batch(symbols):
                 try:
                     if sym not in avail_symbols:
                         continue
-                    sym_data = data[sym]
-                    if sym_data is None or sym_data.empty:
-                        continue
-                    close_vals = sym_data['Close'].dropna() if 'Close' in sym_data.columns else pd.Series(dtype=float)
+                    
+                    if field_first:
+                        # Access as data['Close'][sym], etc.
+                        close_vals = data['Close'][sym].dropna() if 'Close' in data.columns.get_level_values(0) else pd.Series(dtype=float)
+                        vol_vals = data['Volume'][sym] if 'Volume' in data.columns.get_level_values(0) else pd.Series([0])
+                        high_vals = data['High'][sym] if 'High' in data.columns.get_level_values(0) else pd.Series([0])
+                        low_vals = data['Low'][sym] if 'Low' in data.columns.get_level_values(0) else pd.Series([0])
+                        open_vals = data['Open'][sym] if 'Open' in data.columns.get_level_values(0) else pd.Series([0])
+                    else:
+                        # Access as data[sym]['Close'], etc.
+                        sym_data = data[sym]
+                        if sym_data is None or sym_data.empty:
+                            continue
+                        close_vals = sym_data['Close'].dropna() if 'Close' in sym_data.columns else pd.Series(dtype=float)
+                        vol_vals = sym_data['Volume'] if 'Volume' in sym_data.columns else pd.Series([0])
+                        high_vals = sym_data['High'] if 'High' in sym_data.columns else pd.Series([0])
+                        low_vals = sym_data['Low'] if 'Low' in sym_data.columns else pd.Series([0])
+                        open_vals = sym_data['Open'] if 'Open' in sym_data.columns else pd.Series([0])
+                    
                     if len(close_vals) < 2:
                         continue
                     current_price = float(close_vals.iloc[-1])
@@ -1230,10 +1282,10 @@ def _fetch_all_quotes_batch(symbols):
                         'price': round(current_price, 2),
                         'change': round(change, 2),
                         'changePct': round(change_pct, 2),
-                        'volume': int(sym_data['Volume'].iloc[-1]) if 'Volume' in sym_data.columns else 0,
-                        'high': round(float(sym_data['High'].iloc[-1]), 2) if 'High' in sym_data.columns else 0,
-                        'low': round(float(sym_data['Low'].iloc[-1]), 2) if 'Low' in sym_data.columns else 0,
-                        'open': round(float(sym_data['Open'].iloc[-1]), 2) if 'Open' in sym_data.columns else 0,
+                        'volume': int(vol_vals.iloc[-1]) if len(vol_vals) > 0 else 0,
+                        'high': round(float(high_vals.iloc[-1]), 2) if len(high_vals) > 0 else 0,
+                        'low': round(float(low_vals.iloc[-1]), 2) if len(low_vals) > 0 else 0,
+                        'open': round(float(open_vals.iloc[-1]), 2) if len(open_vals) > 0 else 0,
                     }
                     results[sym] = quote
                     quote_cache[sym] = (quote, fetch_time)
