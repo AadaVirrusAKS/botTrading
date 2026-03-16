@@ -1,7 +1,7 @@
 {
   "success": true,
-  "generated_at": "2026-03-16T16:35:59.091795",
-  "analysis_date": "2026-03-16",
+  "generated_at": "2026-03-16T16:35:40.438521",
+  "analysis_date": "2026-03-11",
   "account": {
     "balance": 40601.14,
     "initial_balance": 10000.0,
@@ -9,63 +9,65 @@
     "open_positions": 3
   },
   "pnl": {
-    "date": "2026-03-16",
-    "total_entries": 19,
+    "date": "2026-03-11",
+    "total_entries": 16,
     "total_exits": 16,
-    "wins": 8,
-    "losses": 8,
+    "wins": 14,
+    "losses": 2,
     "breakeven": 0,
-    "win_rate": 50.0,
-    "total_pnl": 1408.0,
-    "avg_win": 765.38,
-    "avg_loss": -589.38,
-    "risk_reward": 1.3,
-    "stock_exits": 0,
-    "option_exits": 16,
-    "stock_pnl": 0,
-    "option_pnl": 1408.0,
+    "win_rate": 87.5,
+    "total_pnl": 3500.8,
+    "avg_win": 256.0,
+    "avg_loss": -41.6,
+    "risk_reward": 6.15,
+    "stock_exits": 1,
+    "option_exits": 15,
+    "stock_pnl": -82.2,
+    "option_pnl": 3583.0,
     "exit_reasons": {
-      "MAX_LOSS_GUARD": {
-        "count": 3,
-        "pnl": -2290.0
-      },
       "STOP_LOSS": {
-        "count": 5,
-        "pnl": -2425.0
-      },
-      "UNKNOWN": {
-        "count": 6,
-        "pnl": 5855.0
+        "count": 1,
+        "pnl": -82.2
       },
       "TRAILING_STOP": {
-        "count": 2,
-        "pnl": 268.0
+        "count": 15,
+        "pnl": 3583.0
       }
     },
-    "largest_win": 1395.0,
-    "largest_loss": -1180.0
+    "largest_win": 1963.0,
+    "largest_loss": -82.2
   },
   "rapid_reentries": {
-    "total_rapid_reentries": 0,
-    "by_symbol": {},
-    "events": []
+    "total_rapid_reentries": 1,
+    "by_symbol": {
+      "UNH": 1
+    },
+    "events": [
+      {
+        "symbol": "UNH",
+        "from_action": "BUY",
+        "to_action": "BUY",
+        "seconds": 79,
+        "time": "09:48:36"
+      }
+    ]
   },
   "overtrading": {
-    "total_entries_today": 19,
-    "unique_symbols": 13,
+    "total_entries_today": 16,
+    "unique_symbols": 8,
     "entries_per_symbol": {
-      "AVGO": 3,
-      "COIN": 2,
+      "AMD": 4,
+      "COIN": 3,
+      "ORCL": 3,
       "UNH": 2,
-      "AMD": 2,
-      "AMZN": 2,
-      "WFC": 1,
-      "NFLX": 1,
-      "JPM": 1,
-      "CRM": 1,
-      "PLTR": 1
+      "SLV": 1,
+      "SOFI": 1,
+      "PLTR": 1,
+      "ADBE": 1
     },
-    "overtraded_symbols": {}
+    "overtraded_symbols": {
+      "AMD": 4
+    }
   },
   "signal_conflicts": {
     "conflicts": [
@@ -185,11 +187,13 @@
     },
     {
       "priority": 4,
-      "severity": "MEDIUM",
-      "category": "Risk Management",
-      "title": "Stop losses outnumber targets (5 SL vs 0 targets)",
-      "detail": "Stop loss exits cost $2425.00 today. Consider: (1) widen stops with ATR-based trailing, (2) add grace period, (3) increase min_confidence to avoid marginal setups.",
-      "action": "review_strategy"
+      "severity": "HIGH",
+      "category": "Overtrading",
+      "title": "AMD: 4 entries today (excessive)",
+      "detail": "Reduce max_per_symbol_daily (currently 4) or increase cooldown to prevent repeated losses on the same symbol.",
+      "action": "adjust_setting",
+      "setting": "max_per_symbol_daily",
+      "recommended_value": 3
     },
     {
       "priority": 5,

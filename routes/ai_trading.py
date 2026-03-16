@@ -705,8 +705,9 @@ def bot_scan():
                 base_conf -= 8
             confidence = min(95, max(40, base_conf))
             
-            # FIX 3: Skip signals with very low volume ratio (no volume confirmation)
-            if vol_ratio < 0.3:
+            # FIX 3: Skip options with no liquidity (OI < 100 AND stock vol dead)
+            # Stock vol_ratio drops to 0 after hours — for options, OI matters more
+            if vol_ratio < 0.3 and oi < 100:
                 continue
             option_signal = {
                 'symbol': r['symbol'],
@@ -715,7 +716,12 @@ def bot_scan():
                 'entry': r['premium'],
                 'stop_loss': r['stop_premium'],
                 'target': r['target_1_premium'],
+                'target_2': r.get('target_2_premium'),
                 'reason': ', '.join(r['signals'][:4]),
+                'score': r['score'],
+                'direction': r['direction'],
+                'rsi': r['rsi'],
+                'volume_ratio': r['volume_ratio'],
                 'instrument_type': 'option',
                 'option_type': r['option_type'],
                 'contract': r['contract'],
@@ -725,6 +731,8 @@ def bot_scan():
                 'dte': r['dte'],
                 'premium': r['premium'],
                 'stock_price': r['price'],
+                'iv': r.get('iv', 0),
+                'open_interest': r.get('open_interest', 0),
                 'scan_type': 'intraday'
             }
             option_candidates.append(option_signal)
@@ -767,7 +775,20 @@ def bot_scan():
                 results = cached_stocks
         
         for r in sorted(results, key=lambda x: x['score'], reverse=True)[:10]:
-            confidence = min(100, max(50, int(40 + r['score'] * 4)))
+            # FIX 5: Better confidence — same modifier logic as options
+            base_conf = int(30 + r['score'] * 4)
+            vol_ratio = r.get('volume_ratio', 0)
+            rsi_val = r.get('rsi', 50)
+            direction = r.get('direction', 'BULLISH')
+            if vol_ratio >= 1.5:
+                base_conf += 5
+            elif vol_ratio < 0.5:
+                base_conf -= 10
+            if direction == 'BULLISH' and rsi_val > 70:
+                base_conf -= 8
+            elif direction == 'BEARISH' and rsi_val < 30:
+                base_conf -= 8
+            confidence = min(95, max(40, base_conf))
             if confidence >= bot_state['settings'].get('min_confidence', 75):
                 signals.append({
                     'symbol': r['symbol'],
@@ -866,7 +887,7 @@ def load_local_fallback_signals(is_intraday_mode: bool, instrument_type: str, mi
                     data = json.load(f) or {}
                 rows = data.get('results', [])[:20]
                 for row in rows:
-                    confidence = min(95, max(55, int(45 + float(row.get('score', 0)) * 4)))
+                    confidence = min(95, max(40, int(30 + float(row.get('score', 0)) * 4)))
                     if confidence < min_confidence:
                         continue
                     direction = row.get('direction', 'BULLISH')
@@ -899,7 +920,7 @@ def load_local_fallback_signals(is_intraday_mode: bool, instrument_type: str, mi
                 rows = (data.get('stocks', []) + data.get('etfs', []))[:20]
                 for row in rows:
                     score = float(row.get('score', 0) or 0)
-                    confidence = min(95, max(50, int(40 + score * 6)))
+                    confidence = min(95, max(40, int(30 + score * 4)))
                     if confidence < min_confidence:
                         continue
                     md = row.get('data') or {}
@@ -1898,8 +1919,9 @@ def _bot_auto_cycle_inner():
                     base_conf -= 8
                 confidence = min(95, max(40, base_conf))
                 
-                # FIX 3: Skip signals with very low volume ratio (no volume confirmation)
-                if vol_ratio < 0.3:
+                # FIX 3: Skip options with no liquidity (OI < 100 AND stock vol dead)
+                # Stock vol_ratio drops to 0 after hours — for options, OI matters more
+                if vol_ratio < 0.3 and oi < 100:
                     continue
                 option_signal = {
                     'symbol': r['symbol'],
@@ -1962,7 +1984,20 @@ def _bot_auto_cycle_inner():
                 fallback_symbols=['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'TSLA']
             )
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                confidence = min(100, max(50, int(40 + r['score'] * 4)))
+                # FIX 5: Better confidence — same modifier logic as options
+                base_conf = int(30 + r['score'] * 4)
+                vol_ratio = r.get('volume_ratio', 0)
+                rsi_val = r.get('rsi', 50)
+                direction = r.get('direction', 'BULLISH')
+                if vol_ratio >= 1.5:
+                    base_conf += 5
+                elif vol_ratio < 0.5:
+                    base_conf -= 10
+                if direction == 'BULLISH' and rsi_val > 70:
+                    base_conf -= 8
+                elif direction == 'BEARISH' and rsi_val < 30:
+                    base_conf -= 8
+                confidence = min(95, max(40, base_conf))
                 if confidence >= min_confidence:
                     signals.append({
                         'symbol': r['symbol'],
