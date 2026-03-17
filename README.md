@@ -1,0 +1,2 @@
+# botTrading
+AI BOT Trading
