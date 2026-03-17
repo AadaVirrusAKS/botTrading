@@ -66,7 +66,8 @@ def alpaca_connect():
 def alpaca_disconnect():
     """Remove saved Alpaca credentials."""
     import os
-    config_file = 'alpaca_config.json'
+    from config import DATA_DIR
+    config_file = os.path.join(DATA_DIR, 'alpaca_config.json')
     if os.path.exists(config_file):
         os.remove(config_file)
     reset_client()
@@ -201,7 +202,8 @@ def alpaca_cancel_all():
 def alpaca_bot_pnl_map():
     """Return {alpaca_order_id: pnl} from bot trades so Alpaca page shows bot P&L."""
     try:
-        state_file = 'ai_bot_state.json'
+        from config import DATA_DIR
+        state_file = os.path.join(DATA_DIR, 'ai_bot_state.json')
         if not os.path.exists(state_file):
             return jsonify({'success': True, 'data': {}})
 

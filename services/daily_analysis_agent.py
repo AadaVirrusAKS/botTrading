@@ -21,8 +21,9 @@ from datetime import datetime, timedelta
 from collections import Counter
 from zoneinfo import ZoneInfo
 
-REPORT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'daily_analysis_reports')
-BOT_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'ai_bot_state.json')
+from config import DATA_DIR
+REPORT_DIR = os.path.join(DATA_DIR, 'daily_analysis_reports')
+BOT_STATE_FILE = os.path.join(DATA_DIR, 'ai_bot_state.json')
 
 _agent_lock = threading.Lock()
 

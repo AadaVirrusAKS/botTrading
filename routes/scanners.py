@@ -23,9 +23,9 @@ from services.market_data import (
 from services.symbols import is_valid_symbol_cached, filter_valid_symbols, KNOWN_DELISTED
 
 # Import scanner modules
-from unified_trading_system import UnifiedTradingSystem
-from short_squeeze_scanner import ShortSqueezeScanner
-from beaten_down_quality_scanner import BeatenDownQualityScanner
+from scanners.unified_trading_system import UnifiedTradingSystem
+from scanners.short_squeeze_scanner import ShortSqueezeScanner
+from scanners.beaten_down_quality_scanner import BeatenDownQualityScanner
 
 try:
     from weekly_screener_top100 import WeeklyStockScreener

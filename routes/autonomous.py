@@ -9,10 +9,11 @@ from datetime import datetime
 
 from services.utils import clean_nan_values
 from services.market_data import autonomous_trader_state
+from config import DATA_DIR
 
 # Import Autonomous Trading Agent
 try:
-    from autonomous_deepseek_trader import AutonomousTrader, DeepSeekAnalyzer, RiskManager
+    from trading.autonomous_deepseek_trader import AutonomousTrader, DeepSeekAnalyzer, RiskManager
     AUTONOMOUS_AVAILABLE = True
 except ImportError:
     AUTONOMOUS_AVAILABLE = False
@@ -29,7 +30,7 @@ def autonomous_status():
     alpaca_key_set = bool(os.environ.get('ALPACA_API_KEY'))
     
     # Load state from file if exists
-    state_file = 'autonomous_trader_state.json'
+    state_file = os.path.join(DATA_DIR, 'autonomous_trader_state.json')
     positions = {}
     if os.path.exists(state_file):
         try:
@@ -41,7 +42,7 @@ def autonomous_status():
     
     # Load trade log
     trade_log = []
-    log_file = 'autonomous_trade_log.json'
+    log_file = os.path.join(DATA_DIR, 'autonomous_trade_log.json')
     if os.path.exists(log_file):
         try:
             with open(log_file, 'r') as f:
@@ -221,7 +222,7 @@ def autonomous_positions():
     """Get current autonomous trading positions"""
     import os
     
-    state_file = 'autonomous_trader_state.json'
+    state_file = os.path.join(DATA_DIR, 'autonomous_trader_state.json')
     positions = {}
     
     if os.path.exists(state_file):
@@ -247,7 +248,7 @@ def autonomous_trades():
     """Get trade history"""
     import os
     
-    log_file = 'autonomous_trade_log.json'
+    log_file = os.path.join(DATA_DIR, 'autonomous_trade_log.json')
     trades = []
     
     if os.path.exists(log_file):

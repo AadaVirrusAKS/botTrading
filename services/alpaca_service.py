@@ -38,7 +38,8 @@ except ImportError:
 # =============================
 # CONFIGURATION
 # =============================
-CONFIG_FILE = 'alpaca_config.json'
+from config import DATA_DIR
+CONFIG_FILE = os.path.join(DATA_DIR, 'alpaca_config.json')
 CONFIG_LOCK = threading.Lock()
 
 

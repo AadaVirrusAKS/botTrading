@@ -19,18 +19,23 @@ env/
 *.swp
 *.swo
 
-# Trading app specific
+# Trading app - data/state files
+data/
 .browser_launched
-active_positions.json
-top_picks.json
-alpaca_config.json
-*.csv
-*.xlsx
 .yfinance_cache/
 .dashboard_cache/
 *.db
 *.db-shm
 *.db-wal
+
+# Test/Cache
+.pytest_cache/
+tests/
+
+# Backup files
+*.bak
+*.bak_*
+*.bak[0-9]*
 
 # OS
 .DS_Store

@@ -22,7 +22,7 @@ ai_analysis_bp = Blueprint("ai_analysis", __name__)
 def ai_analyze_stock():
     """Run full AI analysis on a stock symbol."""
     try:
-        from ai_stock_analysis import run_ai_analysis
+        from scanners.ai_stock_analysis import run_ai_analysis
         data = request.get_json() or {}
         symbol = data.get('symbol', '').strip()
         period = data.get('period', '6mo')
@@ -91,8 +91,10 @@ def build_ai_analysis_fallback(symbol: str, period: str = '6mo', horizon: int = 
     base_price = 100.0
     company_name = symbol
     try:
-        if os.path.exists('top_picks.json'):
-            with open('top_picks.json', 'r') as f:
+        from config import DATA_DIR
+        _top_picks_path = os.path.join(DATA_DIR, 'top_picks.json')
+        if os.path.exists(_top_picks_path):
+            with open(_top_picks_path, 'r') as f:
                 tp = json.load(f) or {}
             for row in (tp.get('stocks', []) + tp.get('etfs', []) + tp.get('options', [])):
                 if str(row.get('ticker', '')).upper() == symbol:
@@ -211,7 +213,7 @@ def build_ai_analysis_fallback(symbol: str, period: str = '6mo', horizon: int = 
 def ai_heatmap():
     """Run heatmap analysis across multiple stocks."""
     try:
-        from ai_stock_analysis import run_heatmap_analysis
+        from scanners.ai_stock_analysis import run_heatmap_analysis
         data = request.get_json() or {}
         symbols = data.get('symbols', None)
 
@@ -228,7 +230,7 @@ def ai_heatmap():
 def ai_patterns_only():
     """Get just candlestick patterns for a symbol (lightweight endpoint)."""
     try:
-        from ai_stock_analysis import CandlestickPatternEngine
+        from scanners.ai_stock_analysis import CandlestickPatternEngine
         data = request.get_json()
         symbol = data.get('symbol', '').strip().upper()
         lookback = data.get('lookback', 50)
@@ -262,7 +264,7 @@ def ai_patterns_only():
 def ai_predict_only():
     """Get just price predictions for a symbol (lightweight endpoint)."""
     try:
-        from ai_stock_analysis import PricePredictionEngine
+        from scanners.ai_stock_analysis import PricePredictionEngine
         data = request.get_json()
         symbol = data.get('symbol', '').strip().upper()
         horizon = data.get('horizon', 5)

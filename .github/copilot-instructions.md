@@ -3,28 +3,60 @@
 ## Overview
 Python-based algorithmic trading platform for options, stocks, and ETFs. All data from **yfinance** (no API keys needed). Two interfaces: **Flask web dashboard** (primary) and CLI scripts.
 
+## Project Structure
+```
+TradingCode/
+├── run.py                  # Entry point → app/web_app.py
+├── app/                    # Flask web application
+│   ├── __init__.py
+│   └── web_app.py
+├── config/                 # Configuration & stock lists
+│   └── master_stock_list.py
+├── scanners/               # Market analysis & screening
+│   ├── unified_trading_system.py
+│   ├── short_squeeze_scanner.py
+│   ├── triple_confirmation_scanner.py
+│   ├── next_day_options_predictor.py
+│   └── ...
+├── trading/                # Trade execution & automation
+│   ├── autonomous_deepseek_trader.py
+│   ├── spy_qqq_options_trader.py
+│   └── ...
+├── monitoring/             # Position monitoring & alerts
+│   ├── trade_monitor_alerts.py
+│   ├── analyze_and_monitor.py
+│   └── ...
+├── routes/                 # Flask API blueprints
+├── services/               # Shared business logic
+├── templates/              # HTML pages
+├── static/                 # CSS/JS assets
+├── scripts/                # Launcher & scheduler scripts
+├── data/                   # Runtime data (gitignored)
+└── docs/                   # Documentation guides
+```
+
 ## Quick Start
 ```bash
-python3 launch_dashboard.py        # Web UI at http://localhost:5000
-python3 unified_trading_system.py  # CLI: Top 5 picks per asset type
-python3 short_squeeze_scanner.py   # CLI: Squeeze candidates
+python3 run.py                                       # Web UI at http://localhost:5000
+python3 -m scanners.unified_trading_system           # CLI: Top 5 picks per asset type
+python3 -m scanners.short_squeeze_scanner            # CLI: Squeeze candidates
 ```
 
 ## Architecture
 
 ### Data Layer
-- **State**: JSON files only (`active_positions.json`, `top_picks.json`, `*.csv`)
+- **State**: JSON files only in `data/` directory (`data/active_positions.json`, `data/top_picks.json`, `data/*.csv`)
 - **No databases** - all state file-based for portability
 - **Market data**: `yf.Ticker(symbol).history()` for prices, `.info` for fundamentals
 
-### Web App (`web_app.py`)
+### Web App (`app/web_app.py`)
 Flask + SocketIO app with scanner caching. Key patterns:
 - Routes return `jsonify({'success': True, 'data': clean_nan_values(result)})`
 - Scanners run async with `scanner_cache` dict tracking state
 - Templates in `/templates`, static assets in `/static/css|js`
 
 ### Scanner Classes
-All scanners follow this pattern (see `unified_trading_system.py`):
+All scanners follow this pattern (see `scanners/unified_trading_system.py`):
 ```python
 class Scanner:
     def __init__(self):
@@ -38,7 +70,7 @@ class Scanner:
         """0-15 score + signal list. RSI >80 = PENALTY."""
 ```
 
-### Technical Indicators (copy from `unified_trading_system.py:77-115`)
+### Technical Indicators (from `scanners/unified_trading_system.py`)
 ```python
 daily['SMA20'] = daily['Close'].rolling(20).mean()
 daily['EMA9'] = daily['Close'].ewm(span=9, adjust=False).mean()
@@ -52,17 +84,17 @@ daily['ATR'] = (daily['High'] - daily['Low']).rolling(14).mean()
 ### Trading Scanners
 | Scanner | Purpose | Output |
 |---------|---------|--------|
-| `unified_trading_system.py` | Daily top 5 picks | `top_picks.json` |
-| `short_squeeze_scanner.py` | Squeeze candidates (SI >20%) | `short_squeeze_candidates.csv` |
-| `triple_confirmation_scanner.py` | SuperTrend+VWAP+MACD aligned | `triple_confirmation_picks.json` |
-| `next_day_options_predictor.py` | 1DTE option setups | Live display |
+| `scanners/unified_trading_system.py` | Daily top 5 picks | `top_picks.json` |
+| `scanners/short_squeeze_scanner.py` | Squeeze candidates (SI >20%) | `short_squeeze_candidates.csv` |
+| `scanners/triple_confirmation_scanner.py` | SuperTrend+VWAP+MACD aligned | `triple_confirmation_picks.json` |
+| `scanners/next_day_options_predictor.py` | 1DTE option setups | Live display |
 
 ### Position Monitoring
 ```bash
-python3 trade_monitor_alerts.py --setup  # Register positions
-python3 analyze_and_monitor.py           # Full pipeline: analyze → monitor
+python3 -m monitoring.trade_monitor_alerts --setup   # Register positions
+python3 -m monitoring.analyze_and_monitor             # Full pipeline: analyze → monitor
 ```
-Monitors check prices every 5 min against targets/stops in `active_positions.json`.
+Monitors check prices every 5 min against targets/stops in `data/active_positions.json`.
 
 ## Code Conventions
 
@@ -95,16 +127,16 @@ mandatory_exit = "3:45 PM ET"  # Options must close before expiry
 ```
 
 ## Testing
-No formal test suite. Validate with:
+Validate with:
 ```bash
-python3 demo_monitoring.py  # Test without real positions
-# Or reduce universe to 3-5 tickers in any scanner for quick tests
+# Reduce universe to 3-5 tickers in any scanner for quick tests
 ```
 
 ## Adding Features
 1. Use JSON state (no databases)
-2. Copy indicator calculations from `unified_trading_system.py`
+2. Copy indicator calculations from `scanners/unified_trading_system.py`
 3. Use 0-15 scoring system
-4. Make scripts standalone (`python3 new_scanner.py`)
-5. Add web endpoint in `web_app.py` if needed
-6. Document with `*_GUIDE.md` file
+4. Make scripts standalone (add `sys.path.insert` for project root)
+5. Output data files to `DATA_DIR` (from `config import DATA_DIR`)
+5. Add web endpoint in `app/web_app.py` if needed
+6. Document with `docs/*_GUIDE.md` file

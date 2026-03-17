@@ -20,7 +20,7 @@ from services.market_data import (
     _is_rate_limit_error, _mark_rate_limited, _mark_global_rate_limit,
     _is_expected_no_data_error, scanner_cache, scanner_cache_timeout
 )
-from next_day_options_predictor import NextDayOptionsPredictor
+from scanners.next_day_options_predictor import NextDayOptionsPredictor
 
 options_bp = Blueprint("options", __name__)
 

@@ -19,8 +19,11 @@ from services.market_data import (
     _is_rate_limit_error, _mark_rate_limited, _mark_global_rate_limit,
     _is_expected_no_data_error
 )
+from config import DATA_DIR
 
 monitoring_bp = Blueprint("monitoring", __name__)
+
+POSITIONS_FILE = os.path.join(DATA_DIR, 'active_positions.json')
 
 # ============================================================================
 # POSITIONS & MONITORING ENDPOINTS
@@ -32,8 +35,8 @@ def active_positions():
     try:
         force_live = request.args.get('force_live', '0').lower() in ('1', 'true', 'yes')
 
-        if os.path.exists('active_positions.json'):
-            with open('active_positions.json', 'r') as f:
+        if os.path.exists(POSITIONS_FILE):
+            with open(POSITIONS_FILE, 'r') as f:
                 positions_dict = json.load(f)
         else:
             positions_dict = {}
@@ -284,10 +287,10 @@ def active_positions():
 def reload_positions():
     """Force reload/sync `active_positions.json` and notify connected clients."""
     try:
-        if not os.path.exists('active_positions.json'):
+        if not os.path.exists(POSITIONS_FILE):
             return jsonify({'success': False, 'error': 'active_positions.json not found'}), 404
 
-        with open('active_positions.json', 'r') as f:
+        with open(POSITIONS_FILE, 'r') as f:
             positions = json.load(f)
 
         # Notify connected UIs to refresh
@@ -315,12 +318,12 @@ def restore_position_from_backup():
         # Find backup file if not provided
         backup_file = data.get('backup_filename')
         if not backup_file:
-            # find latest active_positions.json.bak.* in cwd
-            bak_files = [f for f in os.listdir('.') if f.startswith('active_positions.json.bak')]
+            # find latest active_positions.json.bak.* in data/
+            bak_files = [f for f in os.listdir(DATA_DIR) if f.startswith('active_positions.json.bak')]
             if not bak_files:
                 return jsonify({'success': False, 'error': 'No backup files found'}), 404
             bak_files.sort()
-            backup_file = bak_files[-1]
+            backup_file = os.path.join(DATA_DIR, bak_files[-1])
 
         if not os.path.exists(backup_file):
             return jsonify({'success': False, 'error': f'Backup file not found: {backup_file}'}), 404
@@ -332,8 +335,8 @@ def restore_position_from_backup():
             return jsonify({'success': False, 'error': f'Position {key} not found in backup {backup_file}'}), 404
 
         # Load current positions
-        if os.path.exists('active_positions.json'):
-            with open('active_positions.json', 'r') as f:
+        if os.path.exists(POSITIONS_FILE):
+            with open(POSITIONS_FILE, 'r') as f:
                 current = json.load(f)
         else:
             current = {}
@@ -355,7 +358,7 @@ def restore_position_from_backup():
             restored_key = key
 
         # Save and notify
-        with open('active_positions.json', 'w') as f:
+        with open(POSITIONS_FILE, 'w') as f:
             json.dump(current, f, indent=2)
 
         try:
@@ -374,8 +377,8 @@ def add_position():
         data = request.json
         
         # Load existing positions (dict format)
-        if os.path.exists('active_positions.json'):
-            with open('active_positions.json', 'r') as f:
+        if os.path.exists(POSITIONS_FILE):
+            with open(POSITIONS_FILE, 'r') as f:
                 positions = json.load(f)
         else:
             positions = {}
@@ -433,7 +436,7 @@ def add_position():
                     existing_position['target_3'] = float(data['target_3'])
                 
                 # Save updated positions
-                with open('active_positions.json', 'w') as f:
+                with open(POSITIONS_FILE, 'w') as f:
                     json.dump(positions, f, indent=2)
                 
                 return jsonify({
@@ -532,7 +535,7 @@ def add_position():
         positions[position_key] = new_position
         
         # Save positions
-        with open('active_positions.json', 'w') as f:
+        with open(POSITIONS_FILE, 'w') as f:
             json.dump(positions, f, indent=2)
         
         return jsonify({
@@ -549,8 +552,8 @@ def add_position():
 def delete_position(index):
     """Delete position by index (legacy support - converts to dict lookup)"""
     try:
-        if os.path.exists('active_positions.json'):
-            with open('active_positions.json', 'r') as f:
+        if os.path.exists(POSITIONS_FILE):
+            with open(POSITIONS_FILE, 'r') as f:
                 positions = json.load(f)
         else:
             return jsonify({'success': False, 'error': 'No positions found'}), 404
@@ -563,7 +566,7 @@ def delete_position(index):
                 deleted = positions.pop(position_key)
                 
                 # Save updated positions
-                with open('active_positions.json', 'w') as f:
+                with open(POSITIONS_FILE, 'w') as f:
                     json.dump(positions, f, indent=2)
                 
                 return jsonify({
@@ -579,7 +582,7 @@ def delete_position(index):
                 deleted = positions.pop(index)
                 
                 # Save updated positions
-                with open('active_positions.json', 'w') as f:
+                with open(POSITIONS_FILE, 'w') as f:
                     json.dump(positions, f, indent=2)
                 
                 return jsonify({
@@ -597,8 +600,8 @@ def delete_position(index):
 def delete_position_by_key(position_key):
     """Delete position by key"""
     try:
-        if os.path.exists('active_positions.json'):
-            with open('active_positions.json', 'r') as f:
+        if os.path.exists(POSITIONS_FILE):
+            with open(POSITIONS_FILE, 'r') as f:
                 positions = json.load(f)
         else:
             return jsonify({'success': False, 'error': 'No positions found'}), 404
@@ -607,7 +610,7 @@ def delete_position_by_key(position_key):
             deleted = positions.pop(position_key)
             
             # Save updated positions
-            with open('active_positions.json', 'w') as f:
+            with open(POSITIONS_FILE, 'w') as f:
                 json.dump(positions, f, indent=2)
             
             return jsonify({
@@ -630,8 +633,8 @@ def close_position():
         exit_price = float(data.get('exit_price', 0))
         reason = data.get('reason', 'Manual Close')
         
-        if os.path.exists('active_positions.json'):
-            with open('active_positions.json', 'r') as f:
+        if os.path.exists(POSITIONS_FILE):
+            with open(POSITIONS_FILE, 'r') as f:
                 positions = json.load(f)
         else:
             return jsonify({'success': False, 'error': 'No positions found'}), 404
@@ -668,7 +671,7 @@ def close_position():
         positions[position_key] = position
         
         # Save updated positions
-        with open('active_positions.json', 'w') as f:
+        with open(POSITIONS_FILE, 'w') as f:
             json.dump(positions, f, indent=2)
         
         return jsonify({

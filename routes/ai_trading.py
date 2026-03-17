@@ -38,6 +38,7 @@ from services.bot_engine import (
     is_alpaca_execution_enabled, execute_alpaca_entry, execute_alpaca_exit
 )
 from services.symbols import is_valid_symbol_cached, filter_valid_symbols, resolve_symbol_or_name, KNOWN_DELISTED
+from config import DATA_DIR
 
 ai_trading_bp = Blueprint("ai_trading", __name__)
 
@@ -533,7 +534,7 @@ def bot_import_positions():
     account_mode = req.get('account_mode', 'demo')
     
     # Load active positions from monitoring system
-    positions_file = 'active_positions.json'
+    positions_file = os.path.join(DATA_DIR, 'active_positions.json')
     if not os.path.exists(positions_file):
         return jsonify({'success': False, 'error': 'No monitoring positions found'}), 404
     
@@ -881,7 +882,7 @@ def load_local_fallback_signals(is_intraday_mode: bool, instrument_type: str, mi
             if not allow_stock and allow_options:
                 return []
 
-            intraday_path = 'triple_confirmation_intraday.json'
+            intraday_path = os.path.join(DATA_DIR, 'triple_confirmation_intraday.json')
             if os.path.exists(intraday_path):
                 with open(intraday_path, 'r') as f:
                     data = json.load(f) or {}
@@ -913,7 +914,7 @@ def load_local_fallback_signals(is_intraday_mode: bool, instrument_type: str, mi
             if not allow_stock:
                 return []
 
-            picks_path = 'top_picks.json'
+            picks_path = os.path.join(DATA_DIR, 'top_picks.json')
             if os.path.exists(picks_path):
                 with open(picks_path, 'r') as f:
                     data = json.load(f) or {}

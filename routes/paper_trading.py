@@ -7,12 +7,14 @@ import os
 import threading
 from datetime import datetime
 
+from config import DATA_DIR
+
 paper_bp = Blueprint("paper_trading", __name__)
 
 # =============================
 # PAPER TRADING STATE HELPERS
 # =============================
-PAPER_TRADING_FILE = 'paper_trading_state.json'
+PAPER_TRADING_FILE = os.path.join(DATA_DIR, 'paper_trading_state.json')
 PAPER_TRADING_LOCK = threading.Lock()
 PAPER_TRADING_CAPITAL = 10000.0
 

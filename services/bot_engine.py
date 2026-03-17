@@ -70,7 +70,8 @@ bot_state = {
     }
 }
 
-BOT_STATE_FILE = 'ai_bot_state.json'
+from config import DATA_DIR
+BOT_STATE_FILE = os.path.join(DATA_DIR, 'ai_bot_state.json')
 BOT_STATE_LOCK = threading.RLock()
 AUTO_TRADE_DEDUP_LOCK = threading.Lock()
 AUTO_TRADE_EXECUTION_GUARD = {}  # key -> unix timestamp
