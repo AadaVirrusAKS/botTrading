@@ -40,3 +40,6 @@ tests/
 # OS
 .DS_Store
 Thumbs.db
+
+# Credentials
+.env
