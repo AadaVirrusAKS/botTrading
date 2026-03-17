@@ -22,6 +22,20 @@ import time
 import threading
 from datetime import datetime
 import yfinance as yf
+import socket
+
+
+def _get_local_ip():
+    """Return this machine's LAN IP address (e.g. 192.168.x.x)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
+
 
 # =============================
 # FLASK APP INITIALIZATION
@@ -256,8 +270,72 @@ def main():
     except Exception:
         pass
 
-    print(f"\n🌐 Open your browser and go to: https://www.BoTradeAi.com (local: http://localhost:{PORT})")
-    print("="*100 + "\n")
+    # ── Public tunnel via Cloudflare (free, no signup needed) ───────
+    # Auto-activates when network allows it. Disable with TUNNEL=0 env var.
+    public_url = None
+    _tunnel_proc = None
+    if os.environ.get('TUNNEL', '1') != '0':
+        try:
+            import subprocess as _sp, re as _re
+            _cf_bin = os.path.join(PROJECT_ROOT, '.venv', 'bin', 'cloudflared')
+            if not os.path.isfile(_cf_bin):
+                raise FileNotFoundError("cloudflared binary not found in .venv/bin/")
+            _tunnel_proc = _sp.Popen(
+                [_cf_bin, 'tunnel', '--url', f'http://localhost:{PORT}'],
+                stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True
+            )
+            # Read output until we find the public URL (with timeout)
+            _deadline = time.time() + 25
+            while time.time() < _deadline:
+                line = _tunnel_proc.stdout.readline()
+                if not line:
+                    break
+                # Check for failure early
+                if 'failed to request quick Tunnel' in line or 'no such host' in line:
+                    print("⚠️  Tunnel blocked by network (corporate/VPN) — LAN-only mode")
+                    _tunnel_proc.terminate()
+                    _tunnel_proc = None
+                    break
+                m = _re.search(r'(https://[a-z0-9][\w-]*\.trycloudflare\.com)', line)
+                if m:
+                    public_url = m.group(1)
+                    break
+
+            if public_url:
+                import config as _cfg
+                _cfg.BASE_URL = public_url
+                app.config['BASE_URL'] = public_url
+
+            # Keep reading tunnel output in background so pipe doesn't block
+            if _tunnel_proc and _tunnel_proc.poll() is None:
+                def _drain_tunnel():
+                    try:
+                        for _line in _tunnel_proc.stdout:
+                            pass
+                    except Exception:
+                        pass
+                threading.Thread(target=_drain_tunnel, daemon=True).start()
+
+        except Exception as _cf_err:
+            print(f"⚠️  Cloudflare tunnel failed ({_cf_err}) — app still available on LAN")
+
+    # Clean up tunnel on exit
+    def _kill_tunnel():
+        if _tunnel_proc and _tunnel_proc.poll() is None:
+            _tunnel_proc.terminate()
+    atexit.register(_kill_tunnel)
+
+    local_ip = _get_local_ip()
+    print("\n" + "=" * 100)
+    print("🌐  ACCESS URLS")
+    print(f"   Local :  http://localhost:{PORT}")
+    if local_ip:
+        print(f"   LAN   :  http://{local_ip}:{PORT}   (same Wi-Fi)")
+    if public_url:
+        print(f"   Public:  {public_url}   ← share this with anyone")
+    else:
+        print("   Public:  Not available (blocked by network). Try from home Wi-Fi.")
+    print("=" * 100 + "\n")
 
     # Start background position monitor
     start_background_monitor(app)
