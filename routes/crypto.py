@@ -150,51 +150,59 @@ def _get_cached_info_only(symbol):
 
 
 def _direct_crypto_download(symbols):
-    """Fallback: fetch crypto quotes one at a time via Ticker.history() (v8 API).
+    """Fallback: fetch crypto quotes via direct Yahoo v8 chart API.
 
-    yf.download() uses a different Yahoo endpoint that gets rate-limited much
-    more aggressively.  Ticker.history() uses the v8 price API which usually
-    keeps working even when the bulk endpoint is blocked.
+    Bypasses yfinance entirely to avoid rate-limit issues with the library's
+    internal session/cookie management.
     """
+    import requests as _req
+
     results = {}
     fetch_time = datetime.now()
+    session = _req.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    })
     BATCH = 10
 
     for i in range(0, len(symbols), BATCH):
         batch = symbols[i:i+BATCH]
         if i > 0:
-            time.sleep(0.5)
+            time.sleep(0.3)
 
         for sym in batch:
             try:
-                t = yf.Ticker(sym)
-                hist = t.history(period='5d', interval='1d')
-                if hist is None or hist.empty or len(hist) < 2:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                resp = session.get(url, params={'range': '5d', 'interval': '1d'}, timeout=10)
+                if resp.status_code != 200:
                     continue
-                cv = hist['Close'].dropna()
-                if len(cv) < 2:
+                data = resp.json()
+                chart_result = (data.get('chart', {}).get('result') or [None])[0]
+                if not chart_result:
                     continue
-                cur = float(cv.iloc[-1])
-                prev = float(cv.iloc[-2])
-                if cur <= 0:
+                meta = chart_result.get('meta', {})
+                cur = meta.get('regularMarketPrice')
+                prev = meta.get('chartPreviousClose') or meta.get('previousClose')
+                if not cur or cur <= 0:
                     continue
-                change = cur - prev
-                vol = int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0
-                hi = round(float(hist['High'].iloc[-1]), 2) if 'High' in hist.columns else 0
-                lo = round(float(hist['Low'].iloc[-1]), 2) if 'Low' in hist.columns else 0
+                change = round(cur - prev, 2) if prev else 0
+                change_pct = round((change / prev * 100), 2) if prev and prev > 0 else 0
 
                 q = {
-                    'symbol': sym, 'price': round(cur, 2),
-                    'change': round(change, 2),
-                    'changePct': round((change / prev * 100) if prev else 0, 2),
-                    'volume': vol, 'high': hi, 'low': lo,
+                    'symbol': sym,
+                    'price': round(cur, 2),
+                    'change': change,
+                    'changePct': change_pct,
+                    'volume': meta.get('regularMarketVolume', 0) or 0,
+                    'high': round(meta.get('regularMarketDayHigh', 0) or 0, 2),
+                    'low': round(meta.get('regularMarketDayLow', 0) or 0, 2),
                 }
                 results[sym] = q
                 quote_cache[sym] = (q, fetch_time)
             except Exception:
                 continue
 
-    print(f"🪙 Crypto v8 fetch: got {len(results)}/{len(symbols)} symbols")
+    print(f"🪙 Crypto v8 API fetch: got {len(results)}/{len(symbols)} symbols")
     return results
 
 
@@ -202,12 +210,12 @@ def _refresh_crypto_background(symbols):
     """Background thread: fetch fresh crypto data and update caches."""
     global _crypto_mem_cache, _crypto_mem_ts, _crypto_refreshing
     try:
-        # Try shared batch fetcher first
-        quotes_map = _fetch_all_quotes_batch(symbols)
+        # Try direct v8 API first (provides richer data)
+        quotes_map = _direct_crypto_download(symbols)
 
-        # Fallback: direct batched download
+        # Fallback: shared batch fetcher
         if not quotes_map:
-            quotes_map = _direct_crypto_download(symbols)
+            quotes_map = _fetch_all_quotes_batch(symbols)
 
         if quotes_map:
             _crypto_mem_cache = quotes_map
@@ -246,10 +254,12 @@ def _get_crypto_data_batch(symbols):
         return _build_crypto_list(symbols, _crypto_mem_cache)
 
     # --- Cold start: blocking fetch ---
-    quotes_map = _fetch_all_quotes_batch(symbols)
+    # Try direct v8 API first (provides richer data: change, high, low)
+    quotes_map = _direct_crypto_download(symbols)
 
+    # Fallback to shared batch fetcher if direct API returned nothing
     if not quotes_map:
-        quotes_map = _direct_crypto_download(symbols)
+        quotes_map = _fetch_all_quotes_batch(symbols)
 
     if quotes_map:
         _crypto_mem_cache = quotes_map

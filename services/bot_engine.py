@@ -73,6 +73,101 @@ bot_state = {
 from config import DATA_DIR
 BOT_STATE_FILE = os.path.join(DATA_DIR, 'ai_bot_state.json')
 BOT_STATE_LOCK = threading.RLock()
+
+# Per-user state support
+_active_user_id = None
+
+
+def _bg_owner_user_id():
+    """Return the user ID whose bot the background engine should operate on.
+    Uses the last active user, falling back to user 1 (primary owner)."""
+    if _active_user_id is not None:
+        return _active_user_id
+    # Default: primary user (ID 1)
+    path = os.path.join(DATA_DIR, 'bot_state_user_1.json')
+    if os.path.exists(path):
+        return 1
+    return None
+
+
+def _user_state_path(user_id):
+    """Return the bot-state file path for a specific user."""
+    return os.path.join(DATA_DIR, f'bot_state_user_{user_id}.json')
+
+
+def set_active_user(user_id):
+    """Switch bot state file to the given user's file.
+    Resets in-memory state to defaults so load_bot_state() loads cleanly.
+    Thread-safe via BOT_STATE_LOCK."""
+    global BOT_STATE_FILE, _active_user_id, bot_state
+    with BOT_STATE_LOCK:
+        if user_id == _active_user_id:
+            return  # Already on this user
+        if user_id is None:
+            BOT_STATE_FILE = os.path.join(DATA_DIR, 'ai_bot_state.json')
+            _active_user_id = None
+        else:
+            BOT_STATE_FILE = _user_state_path(user_id)
+            _active_user_id = user_id
+        # Reset in-memory state so load_bot_state() won't be blocked by the
+        # "0 trades vs N trades" safety guard when switching between users
+        bot_state.update({
+            'running': False, 'auto_trade': False, 'alpaca_execution': False,
+            'account_mode': 'demo', 'strategy': 'trend_following',
+            'last_scan': None, 'signals': [],
+            'demo_account': {'balance': 10000.0, 'initial_balance': 10000.0, 'positions': [], 'trades': []},
+            'real_account': {'balance': 0, 'positions': [], 'trades': []}
+        })
+
+
+def init_user_bot_state(user_id):
+    """Create a fresh $10,000 demo bot state file for a new user."""
+    path = _user_state_path(user_id)
+    if os.path.exists(path):
+        return  # Already exists
+    fresh_state = {
+        'running': False,
+        'auto_trade': False,
+        'alpaca_execution': False,
+        'account_mode': 'demo',
+        'strategy': 'trend_following',
+        'settings': {
+            'watchlist': 'top_50',
+            'scan_interval': 5,
+            'min_confidence': 85,
+            'min_option_dte_days': 1,
+            'max_positions': 3,
+            'max_daily_trades': 20,
+            'max_per_symbol_daily': 4,
+            'reentry_cooldown_minutes': 10,
+            'position_size': 4000,
+            'stop_loss': 2.0,
+            'take_profit': 4.0,
+            'trailing_stop': 'atr',
+            'partial_profit_taking': True,
+            'close_0dte_before_expiry': True,
+            'max_loss_per_trade': 500,
+            'min_option_premium': 1.0,
+            'market_regime_filter': True
+        },
+        'last_scan': None,
+        'signals': [],
+        'demo_account': {
+            'balance': 10000.0,
+            'initial_balance': 10000.0,
+            'positions': [],
+            'trades': []
+        },
+        'real_account': {
+            'balance': 0,
+            'positions': [],
+            'trades': []
+        }
+    }
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(fresh_state, f, indent=2)
+    print(f"✅ Initialized $10,000 demo account for user {user_id}")
 AUTO_TRADE_DEDUP_LOCK = threading.Lock()
 AUTO_TRADE_EXECUTION_GUARD = {}  # key -> unix timestamp
 AUTO_TRADE_DEDUP_SECONDS = 60

@@ -4,6 +4,11 @@ Routes Package - Flask Blueprint registration.
 
 def register_blueprints(app):
     """Register all route blueprints with the Flask app."""
+    # Auth (must be first — initializes Flask-Login)
+    from routes.auth import auth_bp, init_auth
+    init_auth(app)
+    app.register_blueprint(auth_bp)
+
     from routes.dashboard import dashboard_bp
     from routes.scanners import scanners_bp
     from routes.options import options_bp
@@ -34,4 +39,4 @@ def register_blueprints(app):
     app.register_blueprint(alpaca_bp)
     app.register_blueprint(daily_agent_bp)
 
-    print("  ✅ Registered 14 route blueprints")
+    print("  ✅ Registered 15 route blueprints (incl. auth)")

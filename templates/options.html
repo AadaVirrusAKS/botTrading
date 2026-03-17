@@ -10,6 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script defer src="{{ url_for('static', filename='js/user-menu.js') }}"></script>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     
     <style>
@@ -209,6 +210,24 @@
                         <li><a href="/alpaca">📈 Alpaca</a></li>
                     </ul>
                 </nav>
+                {% if current_user.is_authenticated %}
+                <div class="user-menu" onclick="this.classList.toggle('open')">
+                    <span class="user-badge">
+                        <span class="avatar-sm">{{ current_user.first_name[0] | upper }}{{ current_user.last_name[0] | upper }}</span>
+                        {{ current_user.first_name }}
+                        <span class="caret">▼</span>
+                    </span>
+                    <div class="dropdown">
+                        <div class="dropdown-header">
+                            <strong>{{ current_user.first_name }} {{ current_user.last_name }}</strong>
+                            {{ current_user.email }}
+                        </div>
+                        <a href="/profile">👤 Profile</a>
+                        <div class="divider"></div>
+                        <a href="/logout" class="logout-link">🚪 Logout</a>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
     </header>

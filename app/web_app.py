@@ -66,10 +66,48 @@ def add_no_cache_headers(response):
     return response
 
 # =============================
-# REGISTER ALL BLUEPRINTS
+# REGISTER ALL BLUEPRINTS (incl. Auth)
 # =============================
 from routes import register_blueprints
 register_blueprints(app)
+
+# =============================
+# LOGIN-REQUIRED GUARD (protect all pages except auth routes & static)
+# =============================
+from flask_login import current_user
+import secrets as _secrets
+
+PUBLIC_PREFIXES = ('/login', '/register', '/forgot-password', '/reset-password', '/static/', '/api/health')
+
+# Internal key for background engine requests (generated at startup, not guessable)
+BOT_INTERNAL_KEY = _secrets.token_hex(16)
+
+@app.before_request
+def require_login():
+    """Redirect unauthenticated users to the login page, and switch to per-user bot state."""
+    # Allow internal background engine requests (bot auto-cycle)
+    if request.headers.get('X-Bot-Internal') == BOT_INTERNAL_KEY:
+        from services.bot_engine import set_active_user, load_bot_state, _active_user_id, _bg_owner_user_id
+        owner = _bg_owner_user_id()
+        if owner and _active_user_id != owner:
+            set_active_user(owner)
+            load_bot_state()
+        return
+    if current_user.is_authenticated:
+        # Skip bot state switching for static files
+        if not request.path.startswith('/static/'):
+            from services.bot_engine import set_active_user, load_bot_state, _active_user_id
+            if _active_user_id != current_user.id:
+                set_active_user(current_user.id)
+                load_bot_state()
+        return
+    if request.path.startswith(PUBLIC_PREFIXES):
+        return
+    # Allow Socket.IO handshake
+    if request.path.startswith('/socket.io'):
+        return
+    from flask import redirect, url_for
+    return redirect(url_for('auth.login', next=request.path))
 
 # =============================
 # WEBSOCKET HANDLERS
@@ -218,7 +256,7 @@ def main():
     except Exception:
         pass
 
-    print(f"\n🌐 Open your browser and go to: http://localhost:{PORT}")
+    print(f"\n🌐 Open your browser and go to: https://www.BoTradeAi.com (local: http://localhost:{PORT})")
     print("="*100 + "\n")
 
     # Start background position monitor

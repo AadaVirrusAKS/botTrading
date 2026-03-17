@@ -144,7 +144,14 @@ def _background_position_monitor():
             
             # Call the auto_cycle endpoint internally via test_client
             with _bg_app.test_client() as client:
+                # Get internal auth key from web_app module
+                try:
+                    from app.web_app import BOT_INTERNAL_KEY
+                    headers = {'X-Bot-Internal': BOT_INTERNAL_KEY}
+                except ImportError:
+                    headers = {}
                 resp = client.post('/api/bot/auto_cycle',
+                                   headers=headers,
                                    content_type='application/json',
                                    data='{}')
                 if resp.status_code == 200:

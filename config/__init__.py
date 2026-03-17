@@ -5,3 +5,4 @@ import os
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+BASE_URL = os.environ.get('BASE_URL', 'https://www.BoTradeAi.com')

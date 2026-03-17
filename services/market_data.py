@@ -1205,7 +1205,8 @@ def _fetch_all_quotes_batch(symbols):
             for sym in uncached:
                 if sym in quote_cache:
                     results[sym] = quote_cache[sym][0]
-            return results
+            # Ensure data is a safe empty DataFrame so processing blocks skip cleanly
+            data = pd.DataFrame()
         
         fetch_time = datetime.now()
         
