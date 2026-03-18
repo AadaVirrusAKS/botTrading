@@ -46,6 +46,10 @@ ai_trading_bp = Blueprint("ai_trading", __name__)
 # Concurrent callers return cached signals instead of stacking up threads.
 _SCAN_IN_PROGRESS = threading.Lock()
 
+# Throttle: last time positions were refreshed with live prices during normal polling
+_LAST_POSITION_REFRESH = 0
+_POSITION_REFRESH_INTERVAL = 60  # seconds between auto-refreshes
+
 
 def _poll_alpaca_fill_price(order_id, max_retries=20, delay=1.0):
     """Poll Alpaca for the filled_avg_price of an order. Returns float or None."""
@@ -154,6 +158,9 @@ def bot_status():
     # in-memory state instantly so the UI never hangs.
     force_live = request.args.get('force_live', '0').lower() in ('1', 'true', 'yes')
     signals = state_copy.get('signals', [])
+
+    global _LAST_POSITION_REFRESH
+
     if force_live:
         # Run live price fetch in a thread with a timeout so the HTTP response
         # is never blocked for more than ~20s (frontend timeout is 25s).
@@ -200,7 +207,38 @@ def bot_status():
                         stored_pos[field] = updated_pos.get(field)
 
             save_bot_state()
-    
+
+        _LAST_POSITION_REFRESH = time.time()
+
+    elif positions and time.time() - _LAST_POSITION_REFRESH >= _POSITION_REFRESH_INTERVAL:
+        # Lightweight periodic refresh for option positions using cached chains.
+        # This keeps option premiums reasonably current without a manual refresh.
+        try:
+            positions = update_positions_with_live_prices(positions, force_live=False)
+            _LAST_POSITION_REFRESH = time.time()
+
+            # Persist refreshed prices
+            with BOT_STATE_LOCK:
+                load_bot_state()
+                account_mode_latest = bot_state['account_mode']
+                account_latest = bot_state['demo_account'] if account_mode_latest == 'demo' else bot_state['real_account']
+                stored_positions = account_latest.get('positions', [])
+                for idx, updated_pos in enumerate(positions):
+                    if idx >= len(stored_positions):
+                        break
+                    stored_pos = stored_positions[idx]
+                    if (
+                        stored_pos.get('symbol') != updated_pos.get('symbol')
+                        or stored_pos.get('timestamp') != updated_pos.get('timestamp')
+                    ):
+                        continue
+                    for field in ('current_price', 'current_bid', 'current_ask', 'underlying_price', 'last_price_update', 'last_checked'):
+                        if field in updated_pos and stored_pos.get(field) != updated_pos.get(field):
+                            stored_pos[field] = updated_pos.get(field)
+                save_bot_state()
+        except Exception as e:
+            print(f"⚠️ Periodic position refresh error: {e}")
+
     # Calculate total unrealized P&L
     total_pnl = 0
     for pos in positions:
@@ -1287,7 +1325,7 @@ def _bot_auto_cycle_inner():
                 pre_df = intraday_5min_data.get(symbol)
                 result = recalculate_intraday_sl_target(symbol, entry_price, stop_loss, target, side, df=pre_df)
                 if result:
-                    new_sl, new_target, signals = result
+                    new_sl, new_target, sl_signals = result
                     sl_changed = (new_sl != stop_loss)
                     tgt_changed = (new_target != target)
                     if sl_changed or tgt_changed:
@@ -1299,7 +1337,7 @@ def _bot_auto_cycle_inner():
                         if tgt_changed:
                             pos['target'] = new_target
                             target = new_target
-                        sig_str = ', '.join(signals)
+                        sig_str = ', '.join(sl_signals)
                         print(f"🔄 Dynamic SL/Target update for {symbol}: SL=${stop_loss:.2f} Target=${target:.2f} [{sig_str}]")
             
             # TRAILING STOP: Tiered, trend-aware, with minimum hold time
@@ -1463,9 +1501,10 @@ def _bot_auto_cycle_inner():
             # ===== FIX 2: SIGNAL REVERSAL DETECTION =====
             # If the scanner's latest signals flip direction against an open position, close it early
             # rather than waiting for stop loss to be hit (prevents riding losing trades down)
-            if not exit_reason and not _in_grace_period and is_option and signals:
+            cached_signals = bot_state.get('signals', [])
+            if not exit_reason and not _in_grace_period and is_option and cached_signals:
                 pos_opt_type = pos.get('option_type', '').lower()
-                for sig in signals:
+                for sig in cached_signals:
                     if sig.get('symbol') == symbol:
                         sig_direction = sig.get('direction', '').upper()
                         if pos_opt_type == 'call' and sig_direction == 'BEARISH':
@@ -1519,8 +1558,8 @@ def _bot_auto_cycle_inner():
             # Three tiers:
             #   1. 0DTE (expires today): close immediately at market open (any P&L)
             #   2. 1DTE (expires tomorrow): close immediately if losing money
-            #   3. DTE <= min_option_dte_days & losing: close at next check
-            #      (catches options that were valid at entry but aged past the threshold)
+            #   3. DAY-TRADE only: DTE < min_option_dte_days & losing → close
+            #      (swing trades are NOT force-closed here; they use tiers 1 & 2)
             if is_option and bot_state['settings'].get('close_0dte_before_expiry', True):
                 try:
                     import pytz
@@ -1544,12 +1583,15 @@ def _bot_auto_cycle_inner():
                             exit_price = current_price
                             print(f"⏰ EXPIRY PROTECTION: Closing losing {pos.get('contract', symbol)} - expires tomorrow (1DTE), P&L: ${pnl_check * quantity * multiplier:.2f}")
                         
-                        # Close if option aged below min DTE threshold and losing
-                        # (e.g. entered at 3DTE with min_dte=2, now it's 1DTE and underwater)
-                        elif days_to_expiry < get_min_option_dte_days() and pnl_check < 0:
+                        # Close if DAY-TRADE option aged below min DTE threshold and losing.
+                        # Only applies to trade_type='day'; swing trades are allowed to
+                        # hold until 1DTE/0DTE protection kicks in (tiers 1 & 2 above).
+                        # min_option_dte_days is an ENTRY gate — it should not force-close
+                        # swing positions that naturally age past the threshold.
+                        elif pos.get('trade_type') == 'day' and days_to_expiry < get_min_option_dte_days() and pnl_check < 0:
                             exit_reason = 'EXPIRY_PROTECTION'
                             exit_price = current_price
-                            print(f"⏰ EXPIRY PROTECTION: Closing {pos.get('contract', symbol)} - DTE={days_to_expiry} below min {get_min_option_dte_days()}, losing ${abs(pnl_check * quantity * multiplier):.2f}")
+                            print(f"⏰ EXPIRY PROTECTION: Closing day-trade {pos.get('contract', symbol)} - DTE={days_to_expiry} below min {get_min_option_dte_days()}, losing ${abs(pnl_check * quantity * multiplier):.2f}")
                 except Exception as e:
                     print(f"⚠️ Error in expiry protection for {symbol}: {e}")
             
@@ -1584,13 +1626,23 @@ def _bot_auto_cycle_inner():
                             alpaca_partial = execute_alpaca_exit(close_sym, qty=sell_qty)
                             if alpaca_partial['success']:
                                 alpaca_partial_id = alpaca_partial.get('order', {}).get('id')
-                                # Log Alpaca fill for reference (bot price is authoritative)
+                                # Use Alpaca fill price as authoritative partial exit price
                                 fill_price = alpaca_partial.get('order', {}).get('filled_avg_price')
                                 if not fill_price and alpaca_partial_id:
                                     fill_price = _poll_alpaca_fill_price(alpaca_partial_id)
                                 if fill_price:
                                     print(f"📋 ALPACA FILL (partial exit): {close_sym} {sell_qty} filled @ ${fill_price:.2f} (bot price: ${partial_exit_price:.2f})")
+                                    partial_exit_price = fill_price
                         
+                        # Recalculate partial P&L with final exit price
+                        if side == 'LONG':
+                            partial_pnl = (partial_exit_price - entry_price) * sell_qty * multiplier
+                        else:
+                            partial_pnl = (entry_price - partial_exit_price) * sell_qty * multiplier
+                        partial_pnl_pct = ((partial_exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                        if side == 'SHORT':
+                            partial_pnl_pct = -partial_pnl_pct
+
                         # Log partial exit trade
                         partial_trade = {
                             'symbol': symbol,
@@ -1714,14 +1766,24 @@ def _bot_auto_cycle_inner():
                     alpaca_close = execute_alpaca_exit(close_sym, qty=quantity)
                     if alpaca_close['success']:
                         alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
-                        # Sync exit price from Alpaca's actual fill
-                        # Log Alpaca fill for reference (bot price is authoritative)
+                        # Use Alpaca fill price as authoritative exit price
                         fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
                         if not fill_price and alpaca_close_order_id:
                             fill_price = _poll_alpaca_fill_price(alpaca_close_order_id)
                         if fill_price:
                             print(f"📋 ALPACA FILL (exit): {close_sym} filled @ ${fill_price:.2f} (bot price: ${exit_price:.2f})")
+                            exit_price = fill_price
+                            current_price = fill_price
                 
+                # Recalculate P&L with final exit price (may have been updated by Alpaca fill)
+                if side == 'LONG':
+                    pnl = (exit_price - entry_price) * quantity * multiplier
+                else:
+                    pnl = (entry_price - exit_price) * quantity * multiplier
+                pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                if side == 'SHORT':
+                    pnl_pct = -pnl_pct
+
                 # Log the exit trade with instrument info
                 exit_trade = {
                     'symbol': symbol,
@@ -2509,12 +2571,15 @@ def _bot_auto_cycle_inner():
                             alpaca_order_id = alpaca_result['order'].get('id')
                             position['alpaca_order_id'] = alpaca_order_id
                             position['alpaca_symbol'] = signal['option_ticker']
-                            # Log Alpaca fill for reference (bot price is authoritative)
+                            # Use Alpaca fill price as authoritative entry price
                             fill_price = alpaca_result['order'].get('filled_avg_price')
                             if not fill_price and alpaca_order_id:
                                 fill_price = _poll_alpaca_fill_price(alpaca_order_id)
                             if fill_price:
                                 print(f"📋 ALPACA FILL (entry): {signal.get('contract')} filled @ ${fill_price:.2f} (bot price: ${premium:.2f})")
+                                position['entry_price'] = fill_price
+                                position['current_price'] = fill_price
+                                premium = fill_price
                         else:
                             print(f"⚠️ Alpaca option order failed for {signal.get('contract')}, tracked locally only: {alpaca_result['error']}")
                     
@@ -2627,12 +2692,15 @@ def _bot_auto_cycle_inner():
                         if alpaca_result['success']:
                             alpaca_order_id = alpaca_result['order'].get('id')
                             position['alpaca_order_id'] = alpaca_order_id
-                            # Log Alpaca fill for reference (bot price is authoritative)
+                            # Use Alpaca fill price as authoritative entry price
                             fill_price = alpaca_result['order'].get('filled_avg_price')
                             if not fill_price and alpaca_order_id:
                                 fill_price = _poll_alpaca_fill_price(alpaca_order_id)
                             if fill_price:
                                 print(f"📋 ALPACA FILL (entry): {signal['symbol']} filled @ ${fill_price:.2f} (bot price: ${price:.2f})")
+                                position['entry_price'] = fill_price
+                                position['current_price'] = fill_price
+                                price = fill_price
                         else:
                             print(f"⚠️ Alpaca order failed for {signal['symbol']}, position tracked locally only: {alpaca_result['error']}")
                     
@@ -2768,12 +2836,15 @@ def bot_trade():
                 if alpaca_result['success']:
                     alpaca_order_id = alpaca_result['order'].get('id')
                     position['alpaca_order_id'] = alpaca_order_id
-                    # Log Alpaca fill for reference (bot price is authoritative)
+                    # Use Alpaca fill price as authoritative entry price
                     fill_price = alpaca_result['order'].get('filled_avg_price')
                     if not fill_price and alpaca_order_id:
                         fill_price = _poll_alpaca_fill_price(alpaca_order_id)
                     if fill_price:
                         print(f"📋 ALPACA FILL (entry): {symbol} filled @ ${fill_price:.2f} (bot price: ${price:.2f})")
+                        position['entry_price'] = fill_price
+                        position['current_price'] = fill_price
+                        price = fill_price
 
             # Log trade
             trade = {
@@ -2824,13 +2895,17 @@ def bot_trade():
                     alpaca_close = execute_alpaca_exit(symbol)
                     if alpaca_close['success']:
                         alpaca_close_id = alpaca_close.get('order', {}).get('id')
-                        # Log Alpaca fill for reference (bot price is authoritative)
+                        # Use Alpaca fill price as authoritative exit price
                         fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
                         if not fill_price and alpaca_close_id:
                             fill_price = _poll_alpaca_fill_price(alpaca_close_id)
                         if fill_price:
                             print(f"📋 ALPACA FILL (exit): {symbol} filled @ ${fill_price:.2f} (bot price: ${price:.2f})")
+                            price = fill_price
                 
+                # Recalculate P&L with final exit price
+                pnl = (price - long_position['entry_price']) * long_position['quantity']
+
                 # Log trade with P&L
                 trade = {
                     'symbol': symbol,
@@ -2881,12 +2956,15 @@ def bot_trade():
                         if alpaca_result['success']:
                             alpaca_order_id = alpaca_result['order'].get('id')
                             position['alpaca_order_id'] = alpaca_order_id
-                            # Log Alpaca fill for reference (bot price is authoritative)
+                            # Use Alpaca fill price as authoritative entry price
                             fill_price = alpaca_result['order'].get('filled_avg_price')
                             if not fill_price and alpaca_order_id:
                                 fill_price = _poll_alpaca_fill_price(alpaca_order_id)
                             if fill_price:
                                 print(f"📋 ALPACA FILL (entry): {symbol} SHORT filled @ ${fill_price:.2f} (bot price: ${price:.2f})")
+                                position['entry_price'] = fill_price
+                                position['current_price'] = fill_price
+                                price = fill_price
                     
                     trade = {
                         'symbol': symbol,
@@ -3029,12 +3107,14 @@ def bot_trade_option():
                 alpaca_order_id = alpaca_result['order'].get('id')
                 position['alpaca_order_id'] = alpaca_order_id
                 position['alpaca_symbol'] = alpaca_sym
-                # Log Alpaca fill for reference (bot price is authoritative)
+                # Use Alpaca fill price as authoritative entry price
                 fill_price = alpaca_result['order'].get('filled_avg_price')
                 if not fill_price and alpaca_order_id:
                     fill_price = _poll_alpaca_fill_price(alpaca_order_id)
                 if fill_price:
                     print(f"📋 ALPACA FILL (entry): {contract} filled @ ${fill_price:.2f} (bot price: ${premium:.2f})")
+                    position['entry_price'] = fill_price
+                    position['current_price'] = fill_price
 
         account['positions'].append(position)
 

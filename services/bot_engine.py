@@ -1117,6 +1117,12 @@ def get_live_option_premium(symbol, expiry, strike, option_type='call', fallback
             if not ticker_match.empty:
                 row = ticker_match.iloc[0]
 
+        # Strike-based fallback when contractSymbol match fails
+        if row is None and strike and 'strike' in df.columns:
+            strike_match = df[abs(df['strike'].astype(float) - float(strike)) < 0.01]
+            if not strike_match.empty:
+                row = strike_match.iloc[0]
+
         if row is None:
             return float(fallback) if fallback else None
         last = float(row.get('lastPrice', 0) or 0)

@@ -148,8 +148,9 @@ def _background_position_monitor():
                 try:
                     from app.web_app import BOT_INTERNAL_KEY
                     headers = {'X-Bot-Internal': BOT_INTERNAL_KEY}
-                except ImportError:
+                except Exception:
                     headers = {}
+                    print("⚠️ BG Engine: Could not import BOT_INTERNAL_KEY — request may fail auth")
                 resp = client.post('/api/bot/auto_cycle',
                                    headers=headers,
                                    content_type='application/json',

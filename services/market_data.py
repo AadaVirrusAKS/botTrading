@@ -244,6 +244,57 @@ def _log_fetch_event(kind, key, message, cooldown=120):
 # aggressive polling (e.g. 10-second interval) from hammering Yahoo.
 _FORCE_LIVE_MIN_TTL = 15   # seconds — fresh-enough for real-time monitoring
 
+
+def _extract_close_column(data, symbol=None):
+    """Extract the Close price column from yfinance data, handling both
+    flat and MultiIndex column structures (yfinance 0.2.54+ compatibility).
+    Returns a pandas Series or None."""
+    if data is None or data.empty:
+        return None
+    try:
+        cols = data.columns
+        # Case 1: MultiIndex columns (multi-symbol download or yfinance 0.2.54 single)
+        if hasattr(cols, 'nlevels') and cols.nlevels >= 2:
+            level_values = list(cols.get_level_values(0).unique())
+            # Check if symbol is a top-level key (group_by='ticker')
+            if symbol and symbol in level_values:
+                sym_data = data[symbol]
+                if 'Close' in sym_data.columns:
+                    return sym_data['Close'].dropna()
+            # Check if 'Close' is a top-level key (default grouping)
+            if 'Close' in level_values:
+                close_frame = data['Close']
+                if symbol and symbol in close_frame.columns:
+                    return close_frame[symbol].dropna()
+                elif hasattr(close_frame, 'dropna'):
+                    # Single symbol inside Close group
+                    if isinstance(close_frame, pd.Series):
+                        return close_frame.dropna()
+                    # DataFrame with one column
+                    if len(close_frame.columns) == 1:
+                        return close_frame.iloc[:, 0].dropna()
+            # Try ('Price', 'Close') pattern from newer yfinance
+            if 'Price' in level_values:
+                price_data = data['Price']
+                if 'Close' in price_data.columns if hasattr(price_data, 'columns') else False:
+                    return price_data['Close'].dropna()
+        # Case 2: Flat columns
+        if 'Close' in cols:
+            close = data['Close']
+            if isinstance(close, pd.DataFrame):
+                if symbol and symbol in close.columns:
+                    return close[symbol].dropna()
+                if len(close.columns) == 1:
+                    return close.iloc[:, 0].dropna()
+            else:
+                return close.dropna()
+        # Case 3: 'Adj Close' fallback
+        if 'Adj Close' in cols:
+            return data['Adj Close'].dropna() if isinstance(data['Adj Close'], pd.Series) else None
+    except Exception:
+        pass
+    return None
+
 def cached_get_price(symbol, period='1d', interval='1m', prepost=True, use_cache=True):
     """Get current price for a symbol with caching. Returns (price, hist_df) or (None, None)."""
     cache_key = symbol
@@ -350,9 +401,10 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
             return prices
         try:
             # yf.download can fetch multiple symbols at once — single API call
+            # Explicitly set auto_adjust=False for backward compatibility with yfinance 0.2.54+
             data = yf.download(uncached, period=period, interval=interval, 
                              prepost=prepost, group_by='ticker', threads=True,
-                             progress=False)
+                             progress=False, auto_adjust=False)
             now = datetime.now()
             _mark_global_rate_limit_success()
             
@@ -363,44 +415,25 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
                 pass  # No data returned, fall through to fallback
             elif len(uncached) == 1:
                 sym = uncached[0]
-                # Single symbol: yfinance returns flat columns like 'Close', 'Open', etc.
-                if 'Close' in data.columns:
-                    close_col = data['Close'].dropna()
-                    if not close_col.empty:
-                        price = float(close_col.iloc[-1])
-                        prices[sym] = price
-                        with _price_cache_lock:
-                            _price_cache[sym] = {'price': price, 'hist': data, 'ts': now}
+                # Single symbol: yfinance may return MultiIndex or flat columns
+                close_col = _extract_close_column(data, sym)
+                if close_col is not None and not close_col.empty:
+                    price = float(close_col.iloc[-1])
+                    prices[sym] = price
+                    with _price_cache_lock:
+                        _price_cache[sym] = {'price': price, 'hist': data, 'ts': now}
             else:
                 # Multiple symbols: yfinance returns MultiIndex columns (symbol, field)
-                # Check if we have MultiIndex columns
-                if hasattr(data.columns, 'get_level_values'):
+                for sym in uncached:
                     try:
-                        available_symbols = list(data.columns.get_level_values(0).unique())
-                    except Exception:
-                        available_symbols = []
-                    
-                    for sym in uncached:
-                        try:
-                            if sym in available_symbols:
-                                sym_data = data[sym]
-                                if not sym_data.empty and 'Close' in sym_data.columns:
-                                    close_col = sym_data['Close'].dropna()
-                                    if not close_col.empty:
-                                        price = float(close_col.iloc[-1])
-                                        prices[sym] = price
-                                        with _price_cache_lock:
-                                            _price_cache[sym] = {'price': price, 'hist': sym_data, 'ts': now}
-                        except Exception:
-                            pass
-                else:
-                    # Flat columns - try to extract 'Close' directly
-                    if 'Close' in data.columns:
-                        close_col = data['Close'].dropna()
-                        if not close_col.empty:
-                            # For single result, apply to first uncached symbol
+                        close_col = _extract_close_column(data, sym)
+                        if close_col is not None and not close_col.empty:
                             price = float(close_col.iloc[-1])
-                            prices[uncached[0]] = price
+                            prices[sym] = price
+                            with _price_cache_lock:
+                                _price_cache[sym] = {'price': price, 'ts': now}
+                    except Exception:
+                        pass
         except Exception as e:
             # Suppress rate-limit and trivial errors
             if _is_rate_limit_error(e):
@@ -428,37 +461,19 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
             try:
                 data2 = yf.download(missing_after_batch, period='5d', interval='5m',
                                     prepost=prepost, group_by='ticker', threads=True,
-                                    progress=False)
+                                    progress=False, auto_adjust=False)
                 now2 = datetime.now()
                 if data2 is not None and not data2.empty:
-                    if len(missing_after_batch) == 1:
-                        sym = missing_after_batch[0]
-                        if 'Close' in data2.columns:
-                            close_col = data2['Close'].dropna()
-                            if not close_col.empty:
+                    for sym in missing_after_batch:
+                        try:
+                            close_col = _extract_close_column(data2, sym)
+                            if close_col is not None and not close_col.empty:
                                 price = float(close_col.iloc[-1])
                                 prices[sym] = price
                                 with _price_cache_lock:
-                                    _price_cache[sym] = {'price': price, 'hist': data2, 'ts': now2}
-                    else:
-                        if hasattr(data2.columns, 'get_level_values'):
-                            try:
-                                avail2 = list(data2.columns.get_level_values(0).unique())
-                            except Exception:
-                                avail2 = []
-                            for sym in missing_after_batch:
-                                try:
-                                    if sym in avail2:
-                                        sd = data2[sym]
-                                        if not sd.empty and 'Close' in sd.columns:
-                                            cl = sd['Close'].dropna()
-                                            if not cl.empty:
-                                                price = float(cl.iloc[-1])
-                                                prices[sym] = price
-                                                with _price_cache_lock:
-                                                    _price_cache[sym] = {'price': price, 'hist': sd, 'ts': now2}
-                                except Exception:
-                                    pass
+                                    _price_cache[sym] = {'price': price, 'ts': now2}
+                        except Exception:
+                            pass
             except Exception as e2:
                 if _is_rate_limit_error(e2):
                     _mark_global_rate_limit()
@@ -510,10 +525,15 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
     return prices
 
 
-def fetch_quote_api_batch(symbols, timeout=8):
-    """Fetch best-effort live prices using multiple Yahoo Finance API endpoints."""
+def fetch_quote_api_batch(symbols, timeout=5):
+    """Fetch best-effort live prices using multiple Yahoo Finance API endpoints.
+    Uses short timeouts to avoid hanging when Yahoo is rate-limiting."""
     unique_symbols = sorted(set((s or '').strip().upper() for s in symbols if s))
     if not unique_symbols:
+        return {}
+
+    # Don't attempt if globally rate-limited
+    if _is_globally_rate_limited():
         return {}
 
     out = {}
@@ -531,12 +551,17 @@ def fetch_quote_api_batch(symbols, timeout=8):
             try:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
                 resp = session.get(url, params={'range': '1d', 'interval': '1m'}, timeout=timeout)
+                if resp.status_code == 429:
+                    _mark_global_rate_limit()
+                    break  # Stop trying if rate limited
                 if resp.status_code == 200:
                     data = resp.json()
                     meta = (data.get('chart', {}).get('result') or [{}])[0].get('meta', {})
                     price = meta.get('regularMarketPrice') or meta.get('previousClose')
                     if price:
                         out[sym] = float(price)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                break  # Network issues, stop trying
             except Exception:
                 pass
         if out:
@@ -548,13 +573,18 @@ def fetch_quote_api_batch(symbols, timeout=8):
     for sym in unique_symbols:
         if sym in out:
             continue
+        if _is_globally_rate_limited():
+            break
         try:
             t = yf.Ticker(sym)
             fi = t.fast_info
             price = getattr(fi, 'last_price', None) or getattr(fi, 'previous_close', None)
             if price and float(price) > 0:
                 out[sym] = float(price)
-        except Exception:
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                _mark_global_rate_limit()
+                break
             pass
 
     return out
@@ -766,7 +796,8 @@ def prewarm_history_cache(symbols, period='5d', interval='5m'):
         try:
             data = yf.download(
                 chunk, period=period, interval=interval,
-                group_by='ticker', threads=True, progress=False
+                group_by='ticker', threads=True, progress=False,
+                auto_adjust=False
             )
             fetch_time = datetime.now()
             
@@ -777,30 +808,29 @@ def prewarm_history_cache(symbols, period='5d', interval='5m'):
             
             if len(chunk) == 1:
                 sym = chunk[0]
-                # Single symbol: flat columns
-                if not data.empty and 'Close' in data.columns:
+                close_col = _extract_close_column(data, sym)
+                if close_col is not None and not close_col.empty:
                     cache_key = (sym, period, interval)
                     with _history_cache_lock:
                         _history_cache[cache_key] = {'data': data.copy(), 'ts': fetch_time}
                     warmed += 1
             else:
-                # Multiple symbols: MultiIndex columns
-                if hasattr(data.columns, 'get_level_values'):
+                # Multiple symbols: use _extract_close_column to verify data
+                for sym in chunk:
                     try:
-                        avail = list(data.columns.get_level_values(0).unique())
+                        close_col = _extract_close_column(data, sym)
+                        if close_col is not None and not close_col.empty:
+                            # Try to extract per-symbol DataFrame for cache
+                            try:
+                                sym_data = data[sym] if hasattr(data.columns, 'nlevels') and data.columns.nlevels >= 2 else data
+                            except Exception:
+                                sym_data = data
+                            cache_key = (sym, period, interval)
+                            with _history_cache_lock:
+                                _history_cache[cache_key] = {'data': sym_data.copy() if hasattr(sym_data, 'copy') else data.copy(), 'ts': fetch_time}
+                            warmed += 1
                     except Exception:
-                        avail = []
-                    for sym in chunk:
-                        try:
-                            if sym in avail:
-                                sym_data = data[sym]
-                                if sym_data is not None and not sym_data.empty:
-                                    cache_key = (sym, period, interval)
-                                    with _history_cache_lock:
-                                        _history_cache[cache_key] = {'data': sym_data.copy(), 'ts': fetch_time}
-                                    warmed += 1
-                        except Exception:
-                            pass
+                        pass
         except Exception as e:
             if _is_rate_limit_error(e):
                 _mark_global_rate_limit()
@@ -1119,6 +1149,20 @@ scanner_cache = {
     'intraday-options': {'data': None, 'timestamp': None, 'running': False}
 }
 scanner_cache_timeout = 600  # 10 minutes - increased to reduce API calls
+_SCANNER_MAX_RUN_TIME = 300   # 5 minutes max before considering a scan stuck
+
+
+def check_scanner_stale_running(cache_key):
+    """Reset a scanner's running flag if it's been running for too long (stuck).
+    Call this before checking cache_entry['running'] to start a new scan."""
+    if cache_key not in scanner_cache:
+        return
+    entry = scanner_cache[cache_key]
+    if entry.get('running') and entry.get('run_started'):
+        run_age = (datetime.now() - entry['run_started']).total_seconds()
+        if run_age > _SCANNER_MAX_RUN_TIME:
+            print(f"⚠️ Scanner '{cache_key}' stuck for {int(run_age)}s — resetting running flag")
+            entry['running'] = False
 
 # Autonomous trading state
 autonomous_trader_state = {

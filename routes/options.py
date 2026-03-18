@@ -53,14 +53,22 @@ def options_analysis():
         
         # Initialize cache entry if needed
         if cache_key not in scanner_cache:
-            scanner_cache[cache_key] = {'data': None, 'timestamp': None, 'running': False}
+            scanner_cache[cache_key] = {'data': None, 'timestamp': None, 'running': False, 'run_started': None}
         
         cache_entry = scanner_cache[cache_key]
         
-        # Check if we have valid cached data
+        # Reset stuck running flag (if running for more than 5 minutes, assume crashed)
+        if cache_entry.get('running') and cache_entry.get('run_started'):
+            run_age = (datetime.now() - cache_entry['run_started']).total_seconds()
+            if run_age > 300:  # 5 minutes max
+                print(f"⚠️ Options scan '{cache_key}' stuck for {int(run_age)}s — resetting running flag")
+                cache_entry['running'] = False
+        
+        # Check if we have valid cached data (don't serve empty results as valid)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_results = len(cache_entry['data']) > 0 or len(cache_entry.get('weak_signals', [])) > 0
+            if age < scanner_cache_timeout and has_results:
                 return jsonify(clean_nan_values({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -76,6 +84,7 @@ def options_analysis():
             def run_analysis():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting options analysis ({expiry_type}) for {len(tickers)} symbols...")
                     predictor = NextDayOptionsPredictor(real_time_mode=False)
                     
@@ -101,11 +110,15 @@ def options_analysis():
                     predictions.sort(key=lambda x: x.get('signal_strength', 0), reverse=True)
                     weak_signals.sort(key=lambda x: x.get('signal_strength', 0), reverse=True)
                     
-                    scanner_cache[cache_key]['data'] = predictions
-                    scanner_cache[cache_key]['expiry_type'] = expiry_type
-                    scanner_cache[cache_key]['weak_signals'] = weak_signals
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
-                    print(f"✅ Options analysis complete! Found {len(predictions)} strong signals, {len(weak_signals)} weak signals")
+                    # Only cache if we got actual results (don't cache empty due to rate limiting)
+                    if predictions or weak_signals:
+                        scanner_cache[cache_key]['data'] = predictions
+                        scanner_cache[cache_key]['expiry_type'] = expiry_type
+                        scanner_cache[cache_key]['weak_signals'] = weak_signals
+                        scanner_cache[cache_key]['timestamp'] = datetime.now()
+                        print(f"✅ Options analysis complete! Found {len(predictions)} strong signals, {len(weak_signals)} weak signals")
+                    else:
+                        print(f"⚠️ Options analysis found 0 results (possible rate limiting) — not caching empty results")
                 except Exception as e:
                     print(f"❌ Options analysis error: {e}")
                 finally:
