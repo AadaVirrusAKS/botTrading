@@ -144,13 +144,13 @@ def _background_position_monitor():
             
             # Call the auto_cycle endpoint internally via test_client
             with _bg_app.test_client() as client:
-                # Get internal auth key from web_app module
-                try:
-                    from app.web_app import BOT_INTERNAL_KEY
-                    headers = {'X-Bot-Internal': BOT_INTERNAL_KEY}
-                except Exception:
-                    headers = {}
-                    print("⚠️ BG Engine: Could not import BOT_INTERNAL_KEY — request may fail auth")
+                # Read the internal auth key from the app instance (NOT from
+                # 'from app.web_app import ...') to avoid the __main__ vs
+                # app.web_app dual-module key mismatch.
+                internal_key = _bg_app.config.get('BOT_INTERNAL_KEY', '')
+                headers = {'X-Bot-Internal': internal_key} if internal_key else {}
+                if not internal_key:
+                    print("⚠️ BG Engine: BOT_INTERNAL_KEY not found in app.config — request may fail auth")
                 resp = client.post('/api/bot/auto_cycle',
                                    headers=headers,
                                    content_type='application/json',

@@ -2033,7 +2033,12 @@ def _bot_auto_cycle_inner():
                             lf['_below_threshold'] = True
                         signals = live_fallback
                         print(f"🤖 Using live option fallback (display only, below {min_confidence}% threshold)")
-            print(f"🤖 Options scan complete: {len(intraday_results)} results, {len(signals)} signals above {min_confidence}% confidence")
+            _above_thresh = sum(1 for s in signals if not s.get('_below_threshold'))
+            _display_only = sum(1 for s in signals if s.get('_below_threshold'))
+            if _display_only:
+                print(f"🤖 Options scan complete: {len(intraday_results)} results, {_above_thresh} above {min_confidence}% confidence, {_display_only} display-only candidates")
+            else:
+                print(f"🤖 Options scan complete: {len(intraday_results)} results, {_above_thresh} signals above {min_confidence}% confidence")
         
         if run_intraday_stocks:
             print(f"🤖 Running INTRADAY STOCKS scanner")

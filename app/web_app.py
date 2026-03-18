@@ -94,7 +94,10 @@ import secrets as _secrets
 PUBLIC_PREFIXES = ('/login', '/register', '/forgot-password', '/reset-password', '/static/', '/api/health')
 
 # Internal key for background engine requests (generated at startup, not guessable)
+# Stored on app.config so the background engine (which may import this module as
+# a *different* module name than __main__) always reads the SAME key.
 BOT_INTERNAL_KEY = _secrets.token_hex(16)
+app.config['BOT_INTERNAL_KEY'] = BOT_INTERNAL_KEY
 
 @app.before_request
 def require_login():
