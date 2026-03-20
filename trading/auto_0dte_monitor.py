@@ -11,6 +11,16 @@ import pytz
 import warnings
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_price, cached_get_ticker_info,
+        _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # AUTOMATED 0DTE TRADER & MONITOR
 # Executes SPY & QQQ PUT trades and monitors until 2:50 PM CT
@@ -30,6 +40,12 @@ class Auto0DTEMonitor:
     def get_live_price(self, ticker):
         """Get current live price"""
         try:
+            if _USE_CACHED:
+                price, _ = cached_get_price(ticker)
+                if price:
+                    return price
+                info = cached_get_ticker_info(ticker) or {}
+                return info.get('currentPrice')
             stock = yf.Ticker(ticker)
             price = stock.info.get('currentPrice')
             if not price:
@@ -42,8 +58,13 @@ class Auto0DTEMonitor:
     
     def get_atr(self, ticker):
         """Calculate ATR"""
-        stock = yf.Ticker(ticker)
-        daily = stock.history(period='1mo', interval='1d')
+        if _USE_CACHED:
+            daily = cached_get_history(ticker, period='1mo', interval='1d')
+        else:
+            stock = yf.Ticker(ticker)
+            daily = stock.history(period='1mo', interval='1d')
+        if daily is None or daily.empty:
+            return None
         daily['TR'] = daily['High'] - daily['Low']
         return daily['TR'].rolling(14).mean().iloc[-1]
     

@@ -20,6 +20,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config.master_stock_list import get_master_stock_list, MASTER_ETF_UNIVERSE
 from config import PROJECT_ROOT, DATA_DIR
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_ticker_info, cached_get_price,
+        prewarm_history_cache, _is_globally_rate_limited,
+        cached_get_option_dates, cached_get_option_chain
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class UnifiedTradingSystem:
     """Main trading system for all asset types"""
     
@@ -76,23 +87,34 @@ class UnifiedTradingSystem:
     def get_live_data(self, ticker: str) -> Optional[Dict]:
         """Get comprehensive live data for any ticker"""
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-            
-            # Get current price
-            current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-            if not current_price:
-                hist = stock.history(period='1d', interval='1m')
-                if len(hist) > 0:
-                    current_price = hist['Close'].iloc[-1]
-            
-            if not current_price:
-                return None
-            
-            # Get historical data
-            daily = stock.history(period='3mo', interval='1d')
-            if len(daily) < 20:
-                return None
+            # Use centralized cache layer when available (rate-limit safe)
+            if _USE_CACHED:
+                # Skip if globally rate-limited
+                if _is_globally_rate_limited():
+                    return None
+                info = cached_get_ticker_info(ticker) or {}
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                if not current_price:
+                    price, _ = cached_get_price(ticker)
+                    current_price = price
+                if not current_price:
+                    return None
+                daily = cached_get_history(ticker, period='1y', interval='1d')
+                if daily is None or len(daily) < 20:
+                    return None
+            else:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                if not current_price:
+                    hist = stock.history(period='1d', interval='1m')
+                    if len(hist) > 0:
+                        current_price = hist['Close'].iloc[-1]
+                if not current_price:
+                    return None
+                daily = stock.history(period='1y', interval='1d')
+                if len(daily) < 20:
+                    return None
             
             # Calculate indicators
             daily['SMA20'] = daily['Close'].rolling(window=20).mean()
@@ -150,25 +172,58 @@ class UnifiedTradingSystem:
             return None
     
     def score_asset(self, data: Dict, asset_type: str) -> Tuple[float, List[str]]:
-        """Score an asset based on technical indicators"""
+        """Score an asset based on technical indicators — works in both bullish AND bearish markets"""
         score = 0
         signals = []
         
         if not data:
             return 0, []
         
-        # Trend scoring (common for all)
+        # Determine market direction from multiple indicators
+        bearish_indicators = 0
+        bullish_indicators = 0
+        
+        if data['ema9'] > data['ema21']:
+            bullish_indicators += 1
+        else:
+            bearish_indicators += 1
+        
+        if data['macd'] > data['signal']:
+            bullish_indicators += 1
+        else:
+            bearish_indicators += 1
+        
+        if data['rsi'] > 50:
+            bullish_indicators += 1
+        else:
+            bearish_indicators += 1
+        
+        is_bearish = bearish_indicators >= 2
+        
+        # === TREND SCORING — rewards EITHER clear bullish OR clear bearish trends ===
         if data['ema9'] > data['ema21']:
             score += 2
             signals.append("Bullish EMAs")
+        elif data['ema9'] < data['ema21'] * 0.995:  # Clear bearish separation
+            score += 2
+            signals.append("Bearish EMAs (PUT opportunity)")
+        
         if data['price'] > data['sma50']:
             score += 1
             signals.append("Above SMA50")
-        if data.get('sma200') and data['price'] > data['sma200']:
+        elif data['price'] < data['sma50'] * 0.98:  # Clearly below SMA50
             score += 1
-            signals.append("Above SMA200")
+            signals.append("Below SMA50 (bearish trend)")
         
-        # Momentum scoring - AVOID OVERBOUGHT (sharp drop risk)
+        if data.get('sma200') and not (isinstance(data['sma200'], float) and data['sma200'] != data['sma200']):
+            if data['price'] > data['sma200']:
+                score += 1
+                signals.append("Above SMA200")
+            elif data['price'] < data['sma200'] * 0.98:
+                score += 1
+                signals.append("Below SMA200 (bearish)")
+        
+        # === RSI SCORING — rewards healthy levels AND extreme reversals ===
         if 40 <= data['rsi'] <= 60:
             score += 3
             signals.append("RSI healthy (40-60)")
@@ -182,28 +237,46 @@ class UnifiedTradingSystem:
             score -= 2
             signals.append("⚠️ RSI OVERBOUGHT - AVOID (drop risk)")
         elif data['rsi'] <= 30:
-            score += 2
-            signals.append("RSI oversold (bounce opportunity)")
+            if is_bearish:
+                score += 3  # Strong PUT signal - deep oversold in downtrend
+                signals.append("RSI deeply oversold (strong bearish momentum)")
+            else:
+                score += 2
+                signals.append("RSI oversold (bounce opportunity)")
         
+        # === MACD SCORING — rewards EITHER bullish or bearish crossovers ===
         if data['macd'] > data['signal']:
             score += 2
             signals.append("MACD bullish")
+        elif data['macd'] < data['signal']:
+            macd_spread = abs(data['macd'] - data['signal'])
+            if macd_spread > data['atr'] * 0.1:  # Strong bearish MACD divergence
+                score += 2
+                signals.append("MACD bearish (strong downtrend)")
+            else:
+                score += 1
+                signals.append("MACD slightly bearish")
         
-        # Volume
+        # === Volume ===
         if data['volume_ratio'] > 1.2:
             score += 1
             signals.append("High volume")
         
-        # Asset-specific scoring
+        # === Asset-specific scoring ===
         if asset_type == 'OPTIONS':
-            # High volatility is good for options, but avoid overbought
+            # High volatility is good for options in EITHER direction
             if data['atr'] / data['price'] > 0.02:
                 score += 2
                 signals.append("High volatility (options-friendly)")
-            if abs(data['change_pct']) > 1 and data['rsi'] < 70:
+            elif data['atr'] / data['price'] > 0.01:
                 score += 1
-                signals.append("Strong momentum")
-            # Extra penalty for overbought options
+                signals.append("Moderate volatility")
+            
+            if abs(data['change_pct']) > 1:
+                score += 1
+                signals.append("Strong momentum" if data['change_pct'] > 0 else "Strong bearish momentum")
+            
+            # Extra penalty for extreme overbought options (keep this)
             if data['rsi'] >= 75:
                 score -= 1
                 signals.append("⚠️ Extreme overbought")
@@ -213,6 +286,9 @@ class UnifiedTradingSystem:
             if 0 < data['change_pct'] < 3:
                 score += 2
                 signals.append("Steady positive trend")
+            elif data['change_pct'] < -2 and data['rsi'] < 35:
+                score += 2
+                signals.append("Deep dip (potential reversal buy)")
             if data.get('market_cap', 0) > 10e9:
                 score += 1
                 signals.append("Large cap stability")
@@ -229,7 +305,7 @@ class UnifiedTradingSystem:
         return score, signals
     
     def generate_option_setup(self, ticker: str, data: Dict) -> Optional[Dict]:
-        """Generate option trade setup"""
+        """Generate option trade setup using live option chain data"""
         if not data:
             return None
         
@@ -256,14 +332,111 @@ class UnifiedTradingSystem:
         else:
             bearish_score += 1
         
-        if bullish_score > bearish_score:
-            direction = 'CALL'
+        direction = 'CALL' if bullish_score > bearish_score else 'PUT'
+        
+        # --- Fetch LIVE option chain data ---
+        expiry_date = None
+        chain = None
+        
+        if _USE_CACHED:
+            try:
+                dates = cached_get_option_dates(ticker)
+                if dates:
+                    # Find nearest expiry (1DTE or next available)
+                    today = datetime.now().date()
+                    for d in dates:
+                        exp = datetime.strptime(d, '%Y-%m-%d').date() if isinstance(d, str) else d
+                        if exp > today:
+                            expiry_date = d
+                            break
+                
+                if expiry_date:
+                    chain = cached_get_option_chain(ticker, expiry_date)
+            except Exception as e:
+                print(f"  ⚠️ {ticker}: Option chain fetch failed: {e}")
+        else:
+            try:
+                t = yf.Ticker(ticker)
+                dates = list(t.options)
+                if dates:
+                    today = datetime.now().date()
+                    for d in dates:
+                        exp = datetime.strptime(d, '%Y-%m-%d').date() if isinstance(d, str) else d
+                        if exp > today:
+                            expiry_date = d
+                            break
+                    if expiry_date:
+                        chain = t.option_chain(expiry_date)
+            except Exception as e:
+                print(f"  ⚠️ {ticker}: Option chain fetch failed: {e}")
+        
+        # --- Extract real premium from chain data ---
+        if chain is not None:
+            try:
+                if direction == 'CALL' and hasattr(chain, 'calls') and not chain.calls.empty:
+                    options_df = chain.calls
+                else:
+                    options_df = chain.puts if hasattr(chain, 'puts') and not chain.puts.empty else None
+                
+                if options_df is not None and not options_df.empty:
+                    # Find nearest OTM strike
+                    if direction == 'CALL':
+                        otm = options_df[options_df['strike'] >= price].head(3)
+                    else:
+                        otm = options_df[options_df['strike'] <= price].tail(3)
+                    
+                    if otm.empty:
+                        otm = options_df.iloc[:3] if len(options_df) >= 3 else options_df
+                    
+                    # Pick the first OTM strike with decent volume
+                    best = None
+                    for _, row in otm.iterrows():
+                        vol = row.get('volume', 0)
+                        oi = row.get('openInterest', 0)
+                        if vol is None: vol = 0
+                        if oi is None: oi = 0
+                        bid = row.get('bid', 0) or 0
+                        ask = row.get('ask', 0) or 0
+                        last = row.get('lastPrice', 0) or 0
+                        mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
+                        if mid > 0:
+                            best = {'strike': row['strike'], 'premium': mid, 'volume': int(vol), 'oi': int(oi)}
+                            break
+                    
+                    if best and best['premium'] > 0:
+                        premium = best['premium']
+                        strike = best['strike']
+                        
+                        expiry_label = expiry_date if expiry_date else '1DTE (Tomorrow)'
+                        contract = f"{ticker} ${strike:.0f}{direction[0]} {expiry_label}"
+                        
+                        return {
+                            'ticker': ticker,
+                            'type': direction,
+                            'strike': strike,
+                            'contract': contract,
+                            'premium': round(premium, 2),
+                            'contract_cost': round(premium * 100, 2),
+                            'target_1': round(premium * 2, 2),
+                            'target_2': round(premium * 3, 2),
+                            'target_3': round(premium * 4, 2),
+                            'stop_loss': round(premium * 0.5, 2),
+                            'confidence': max(bullish_score, bearish_score),
+                            'expiry': expiry_label,
+                            'volume': best['volume'],
+                            'open_interest': best['oi'],
+                            'data_source': 'LIVE',
+                            'live_data': True
+                        }
+            except Exception as e:
+                print(f"  ⚠️ {ticker}: Error parsing option chain: {e}")
+        
+        # --- Fallback: estimate premium from ATR if chain unavailable ---
+        if direction == 'CALL':
             strike = round(price + (atr * 0.1), 0)
         else:
-            direction = 'PUT'
             strike = round(price + (atr * 0.25), 0)
         
-        # Calculate premium
         intrinsic = max(0, price - strike) if direction == 'CALL' else max(0, strike - price)
         time_value = atr * 0.35
         premium = max(intrinsic + time_value, atr * 0.25)
@@ -273,14 +446,17 @@ class UnifiedTradingSystem:
             'ticker': ticker,
             'type': direction,
             'strike': strike,
-            'premium': premium,
-            'contract_cost': premium * 100,
-            'target_1': premium * 2,
-            'target_2': premium * 3,
-            'target_3': premium * 4,
-            'stop_loss': premium * 0.5,
+            'contract': f"{ticker} ${strike:.0f}{direction[0]} est.",
+            'premium': round(premium, 2),
+            'contract_cost': round(premium * 100, 2),
+            'target_1': round(premium * 2, 2),
+            'target_2': round(premium * 3, 2),
+            'target_3': round(premium * 4, 2),
+            'stop_loss': round(premium * 0.5, 2),
             'confidence': max(bullish_score, bearish_score),
-            'expiry': '1DTE (Tomorrow)'
+            'expiry': '1DTE (Tomorrow)',
+            'data_source': 'ESTIMATED',
+            'live_data': False
         }
     
     def get_top_5_picks(self) -> Dict:
@@ -324,9 +500,15 @@ class UnifiedTradingSystem:
             except Exception as e:
                 return None
         
-        # Scan OPTIONS universe (parallel - 10x faster!)
+        # Pre-warm cache with a single batch download (avoids per-ticker rate limiting)
+        if _USE_CACHED:
+            all_symbols = list(set(self.options_universe + self.stock_universe + self.etf_universe))
+            print(f"  📦 Pre-warming cache for {len(all_symbols)} symbols...")
+            prewarm_history_cache(all_symbols, period='1y', interval='1d')
+
+        # Scan OPTIONS universe (throttled workers to respect rate limits)
         print("\n💰 Scanning Options Candidates...")
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {executor.submit(analyze_ticker, ticker, 'OPTIONS'): ticker 
                       for ticker in self.options_universe}
             
@@ -336,9 +518,9 @@ class UnifiedTradingSystem:
                     all_picks['options'].append(result)
                     print(f"  ✅ {result['ticker']} - Score: {result['score']}/15")
         
-        # Scan STOCKS universe (parallel)
+        # Scan STOCKS universe (throttled)
         print("\n📈 Scanning Stock Candidates...")
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {executor.submit(analyze_ticker, ticker, 'STOCK'): ticker 
                       for ticker in self.stock_universe}
             
@@ -348,9 +530,9 @@ class UnifiedTradingSystem:
                     all_picks['stocks'].append(result)
                     print(f"  ✅ {result['ticker']} - Score: {result['score']}/15")
         
-        # Scan ETF universe (parallel)
+        # Scan ETF universe (throttled)
         print("\n📊 Scanning ETF Candidates...")
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {executor.submit(analyze_ticker, ticker, 'ETF'): ticker 
                       for ticker in self.etf_universe}
             

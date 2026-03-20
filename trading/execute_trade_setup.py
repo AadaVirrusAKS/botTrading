@@ -14,6 +14,17 @@ import numpy as np
 from datetime import datetime, timedelta
 import time
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_price, cached_get_ticker_info,
+        cached_get_option_dates, cached_get_option_chain,
+        _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class TradeExecutor:
     def __init__(self):
         """Initialize trade executor"""
@@ -45,10 +56,13 @@ class TradeExecutor:
         # For stocks, find appropriate weekly/monthly expiration
         # Avoid current week expiry if Thu/Fri (too close to expiration)
         try:
-            if stock_obj is None:
+            if _USE_CACHED:
+                expirations = cached_get_option_dates(ticker)
+            elif stock_obj is None:
                 stock_obj = yf.Ticker(ticker)
-            
-            expirations = stock_obj.options
+                expirations = stock_obj.options
+            else:
+                expirations = stock_obj.options
             
             if expirations:
                 # Convert to datetime objects
@@ -90,6 +104,13 @@ class TradeExecutor:
     def get_live_price(self, ticker):
         """Get current live price"""
         try:
+            if _USE_CACHED:
+                price, _ = cached_get_price(ticker)
+                if price:
+                    return price
+                info = cached_get_ticker_info(ticker) or {}
+                return info.get('currentPrice') or info.get('regularMarketPrice')
+
             stock = yf.Ticker(ticker)
             info = stock.info
             
@@ -108,13 +129,15 @@ class TradeExecutor:
     def calculate_indicators(self, ticker):
         """Calculate technical indicators"""
         try:
-            stock = yf.Ticker(ticker)
+            if _USE_CACHED:
+                daily = cached_get_history(ticker, period='3mo', interval='1d')
+                hourly = cached_get_history(ticker, period='5d', interval='1h')
+            else:
+                stock = yf.Ticker(ticker)
+                daily = stock.history(period='3mo', interval='1d')
+                hourly = stock.history(period='5d', interval='1h')
             
-            # Get data
-            daily = stock.history(period='3mo', interval='1d')
-            hourly = stock.history(period='5d', interval='1h')
-            
-            if len(daily) < 20 or len(hourly) < 20:
+            if daily is None or hourly is None or len(daily) < 20 or len(hourly) < 20:
                 return None
             
             # Calculate EMAs
@@ -306,10 +329,11 @@ class TradeExecutor:
         
         # Get actual option chain data for real premiums
         try:
-            stock = yf.Ticker(ticker)
-            
-            # Get available expirations
-            expirations = stock.options
+            if _USE_CACHED:
+                expirations = cached_get_option_dates(ticker)
+            else:
+                stock = yf.Ticker(ticker)
+                expirations = list(stock.options) if stock.options else []
             if not expirations:
                 print(f"⚠️ No options available for {ticker}")
                 return None
@@ -331,7 +355,10 @@ class TradeExecutor:
             print(f"\n📅 Using expiration: {target_expiration}")
             
             # Fetch option chain
-            opt_chain = stock.option_chain(target_expiration)
+            if _USE_CACHED:
+                opt_chain = cached_get_option_chain(ticker, target_expiration)
+            else:
+                opt_chain = stock.option_chain(target_expiration)
             
         except Exception as e:
             print(f"⚠️ Error fetching option chain: {e}")

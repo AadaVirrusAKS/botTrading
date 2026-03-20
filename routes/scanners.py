@@ -15,7 +15,7 @@ from services.utils import clean_nan_values, SECTOR_ETFS
 from services.market_data import (
     cached_batch_prices, cached_get_price, cached_get_history,
     cached_get_ticker_info, cached_get_option_dates, cached_get_option_chain,
-    scanner_cache, scanner_cache_timeout,
+    scanner_cache, scanner_cache_timeout, check_scanner_stale_running,
     _is_rate_limited, _log_fetch_event,
     _is_rate_limit_error, _mark_rate_limited, _mark_global_rate_limit,
     _is_expected_no_data_error, fetch_quote_api_batch
@@ -61,10 +61,17 @@ def unified_scanner():
         cache_key = 'unified'
         cache_entry = scanner_cache[cache_key]
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            # Only serve cache if data is non-empty or cache is fresh (< timeout)
+            has_data = isinstance(cache_entry['data'], dict) and any(
+                len(v) > 0 for v in cache_entry['data'].values() if isinstance(v, list)
+            )
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -78,17 +85,19 @@ def unified_scanner():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting unified scanner in background...")
                     system = UnifiedTradingSystem()
                     
                     # Limit stock universes to avoid rate limiting
-                    system.stock_symbols = [
+                    # NOTE: class uses stock_universe / etf_universe (not stock_symbols)
+                    system.stock_universe = [
                         'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD',
                         'JPM', 'BAC', 'V', 'MA', 'WFC', 'GS',
                         'UNH', 'JNJ', 'LLY', 'ABBV', 'MRK',
                         'WMT', 'HD', 'COST', 'NKE', 'MCD'
                     ]
-                    system.etf_symbols = ['SPY', 'QQQ', 'IWM', 'DIA', 'XLF', 'XLK', 'XLE', 'XLV']
+                    system.etf_universe = ['SPY', 'QQQ', 'IWM', 'DIA', 'XLF', 'XLK', 'XLE', 'XLV']
                     
                     picks = system.get_top_5_picks()
                     # Clean NaN values for JSON serialization
@@ -98,8 +107,7 @@ def unified_scanner():
                     print(f"✅ Unified scanner complete!")
                 except Exception as e:
                     print(f"❌ Unified scanner error: {e}")
-                    scanner_cache[cache_key]['data'] = {'options': [], 'stocks': [], 'etfs': []}
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results - leave data as None so next request retries
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -132,10 +140,14 @@ def short_squeeze():
         cache_key = 'short-squeeze'
         cache_entry = scanner_cache[cache_key]
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -149,6 +161,7 @@ def short_squeeze():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting short squeeze scanner in background...")
                     scanner = ShortSqueezeScanner()
                     # Reduce workers to avoid rate limiting (3 instead of 10)
@@ -179,9 +192,7 @@ def short_squeeze():
                     print(f"✅ Short squeeze scanner complete! Found {len(results)} candidates")
                 except Exception as e:
                     print(f"❌ Short squeeze scanner error: {e}")
-                    # On error, return empty results
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -214,10 +225,14 @@ def weekly_screener():
         cache_key = 'weekly-screener'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -231,6 +246,7 @@ def weekly_screener():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting weekly screener in background...")
                     
                     try:
@@ -269,8 +285,7 @@ def weekly_screener():
                     print(f"✅ Weekly screener complete! Found {len(results)} stocks")
                 except Exception as e:
                     print(f"❌ Weekly screener error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -303,10 +318,14 @@ def quality_stocks():
         cache_key = 'quality-stocks'
         cache_entry = scanner_cache[cache_key]
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -320,6 +339,7 @@ def quality_stocks():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting quality stocks scanner in background...")
                     scanner = BeatenDownQualityScanner()
                     
@@ -342,8 +362,7 @@ def quality_stocks():
                     print(f"✅ Quality stocks scanner complete! Found {len(results)} stocks")
                 except Exception as e:
                     print(f"❌ Quality stocks scanner error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -376,10 +395,14 @@ def golden_cross_scanner():
         cache_key = 'golden-cross'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -393,6 +416,7 @@ def golden_cross_scanner():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting golden cross scanner in background...")
                     
                     try:
@@ -498,10 +522,14 @@ def triple_confirmation_scanner():
         cache_key = 'triple-confirmation'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -515,6 +543,7 @@ def triple_confirmation_scanner():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting triple confirmation scanner in background...")
                     
                     if TripleConfirmationScanner:
@@ -550,8 +579,7 @@ def triple_confirmation_scanner():
                     print(f"✅ Triple confirmation scanner complete! Found {len(results)} stocks")
                 except Exception as e:
                     print(f"❌ Triple confirmation scanner error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -584,10 +612,14 @@ def triple_confirmation_intraday():
         cache_key = 'triple-intraday'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -601,6 +633,7 @@ def triple_confirmation_intraday():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting triple confirmation intraday scanner in background...")
                     
                     if TripleConfirmationIntraday:
@@ -636,8 +669,7 @@ def triple_confirmation_intraday():
                     print(f"✅ Triple confirmation intraday complete! Found {len(results)} stocks")
                 except Exception as e:
                     print(f"❌ Triple confirmation intraday error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -670,10 +702,14 @@ def triple_confirmation_positional():
         cache_key = 'triple-positional'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
         
-        # Check if we have valid cached data
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
+        # Check if we have valid cached data (non-empty)
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -687,6 +723,7 @@ def triple_confirmation_positional():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting triple confirmation positional scanner in background...")
                     
                     if TripleConfirmationPositional:
@@ -723,8 +760,7 @@ def triple_confirmation_positional():
                     print(f"✅ Triple confirmation positional complete! Found {len(results)} stocks")
                 except Exception as e:
                     print(f"❌ Triple confirmation positional error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -760,6 +796,9 @@ def triple_confirmation_all():
         
         cache_key = 'triple-confirmation-all'
         cache_entry = scanner_cache[cache_key]
+        
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
         
         # Check if scan is already running
         if cache_entry['running']:
@@ -801,6 +840,7 @@ def triple_confirmation_all():
         def run_all_scans():
             try:
                 scanner_cache[cache_key]['running'] = True
+                scanner_cache[cache_key]['run_started'] = datetime.now()
                 
                 # Run all three scanners
                 swing_scanner = TripleConfirmationScanner()
@@ -862,7 +902,7 @@ def triple_confirmation_all():
                 
             except Exception as e:
                 print(f"Error in triple confirmation all: {e}")
-                scanner_cache[cache_key]['data'] = {'swing': [], 'intraday': [], 'positional': []}
+                # Don't cache empty error results
             finally:
                 scanner_cache[cache_key]['running'] = False
         
@@ -898,6 +938,9 @@ def volume_spike_scanner():
     try:
         cache_key = 'volume-spike'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
+        
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
         
         # Check if market is open (9:30 AM - 4:00 PM ET, weekdays, excluding holidays)
         import pytz
@@ -946,6 +989,7 @@ def volume_spike_scanner():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print("🔄 Volume spike scanner starting...")
                     
                     results = []
@@ -1047,8 +1091,7 @@ def volume_spike_scanner():
                     
                 except Exception as e:
                     print(f"❌ Volume spike scanner error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             
@@ -1145,6 +1188,9 @@ def etf_scanner():
         cache_key = 'etf-scanner'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
         
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+        
         # Check cache
         if cache_entry['data'] is not None and cache_entry['timestamp'] is not None:
             try:
@@ -1154,7 +1200,8 @@ def etf_scanner():
                 age = (datetime.now() - cache_ts).total_seconds()
             except:
                 age = 999
-            if age < scanner_cache_timeout:
+            has_data = isinstance(cache_entry['data'], list) and len(cache_entry['data']) > 0
+            if age < scanner_cache_timeout and has_data:
                 return jsonify({
                     'success': True,
                     'timestamp': datetime.now().isoformat(),
@@ -1168,6 +1215,7 @@ def etf_scanner():
             def run_scan():
                 try:
                     scanner_cache[cache_key]['running'] = True
+                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print("🔄 ETF Scanner starting...")
                     
                     results = []
@@ -1318,8 +1366,7 @@ def etf_scanner():
                     
                 except Exception as e:
                     print(f"❌ ETF Scanner error: {e}")
-                    scanner_cache[cache_key]['data'] = []
-                    scanner_cache[cache_key]['timestamp'] = datetime.now()
+                    # Don't cache empty error results
                 finally:
                     scanner_cache[cache_key]['running'] = False
             

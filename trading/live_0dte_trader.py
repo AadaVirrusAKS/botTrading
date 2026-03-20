@@ -11,6 +11,16 @@ import pytz
 import warnings
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_price, cached_get_ticker_info,
+        _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # LIVE 0DTE OPTIONS TRADER WITH MONITORING
 # Executes trades and monitors until 2:50 PM CT (3:50 PM ET)
@@ -67,8 +77,15 @@ class Live0DTETrader:
         entry_time = position['entry_time']
         
         # Get current price
-        stock = yf.Ticker(ticker)
-        current_price = stock.info.get('currentPrice') or stock.history(period='1d', interval='1m')['Close'].iloc[-1]
+        if _USE_CACHED:
+            price, _ = cached_get_price(ticker)
+            if price is None:
+                info = cached_get_ticker_info(ticker) or {}
+                price = info.get('currentPrice')
+            current_price = price
+        else:
+            stock = yf.Ticker(ticker)
+            current_price = stock.info.get('currentPrice') or stock.history(period='1d', interval='1m')['Close'].iloc[-1]
         
         # Calculate intrinsic value
         if direction == 'CALL':
@@ -262,16 +279,23 @@ class Live0DTETrader:
 # -----------------------------
 
 if __name__ == "__main__":
-    # Get current market data
-    spy = yf.Ticker('SPY')
-    qqq = yf.Ticker('QQQ')
+    # Get current market data via cache layer when available
+    if _USE_CACHED:
+        spy_price, _ = cached_get_price('SPY')
+        qqq_price, _ = cached_get_price('QQQ')
+        spy_daily = cached_get_history('SPY', period='1mo', interval='1d')
+        qqq_daily = cached_get_history('QQQ', period='1mo', interval='1d')
+    else:
+        spy = yf.Ticker('SPY')
+        qqq = yf.Ticker('QQQ')
+        spy_price = spy.info.get('currentPrice') or spy.history(period='1d', interval='1m')['Close'].iloc[-1]
+        qqq_price = qqq.info.get('currentPrice') or qqq.history(period='1d', interval='1m')['Close'].iloc[-1]
+        spy_daily = spy.history(period='1mo', interval='1d')
+        qqq_daily = qqq.history(period='1mo', interval='1d')
     
-    spy_price = spy.info.get('currentPrice') or spy.history(period='1d', interval='1m')['Close'].iloc[-1]
-    qqq_price = qqq.info.get('currentPrice') or qqq.history(period='1d', interval='1m')['Close'].iloc[-1]
-    
-    # Get ATR for premium calculation
-    spy_daily = spy.history(period='1mo', interval='1d')
-    qqq_daily = qqq.history(period='1mo', interval='1d')
+    if not spy_price or not qqq_price or spy_daily is None or qqq_daily is None:
+        print("❌ Could not get market data. Check rate limits.")
+        sys.exit(1)
     
     spy_daily['TR'] = spy_daily[['High', 'Low']].apply(lambda x: x['High'] - x['Low'], axis=1)
     qqq_daily['TR'] = qqq_daily[['High', 'Low']].apply(lambda x: x['High'] - x['Low'], axis=1)

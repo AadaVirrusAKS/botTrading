@@ -10,6 +10,16 @@ import warnings
 import time
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_price, cached_get_ticker_info,
+        _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # AUTONOMOUS TRADING AGENT
 # Handles: Analysis, Entry, Stop Loss, Take Profit, Risk/Reward Management
@@ -74,10 +84,15 @@ class AutonomousTradingAgent:
         Returns: Analysis result with entry signal, stop loss, take profit
         """
         try:
-            stock = yf.Ticker(ticker)
-            data = stock.history(period='1y', interval='1d')
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                data = cached_get_history(ticker, period='1y', interval='1d')
+            else:
+                stock = yf.Ticker(ticker)
+                data = stock.history(period='1y', interval='1d')
             
-            if len(data) < 200:
+            if data is None or len(data) < 200:
                 return None
             
             # Calculate indicators
@@ -234,14 +249,18 @@ class AutonomousTradingAgent:
         
         for ticker, position in self.open_positions.items():
             try:
-                # Get current price
-                stock = yf.Ticker(ticker)
-                current_data = stock.history(period='1d', interval='1m')
-                
-                if len(current_data) == 0:
-                    continue
-                
-                current_price = current_data['Close'].iloc[-1]
+                # Get current price via cache layer (rate-limit safe)
+                if _USE_CACHED:
+                    price, current_data = cached_get_price(ticker)
+                    if price is None:
+                        continue
+                    current_price = price
+                else:
+                    stock = yf.Ticker(ticker)
+                    current_data = stock.history(period='1d', interval='1m')
+                    if len(current_data) == 0:
+                        continue
+                    current_price = current_data['Close'].iloc[-1]
                 
                 # Calculate P&L
                 unrealized_pl = (current_price - position['entry_price']) * position['shares']
@@ -374,12 +393,18 @@ class AutonomousTradingAgent:
         total_unrealized_pl = 0
         for ticker, position in self.open_positions.items():
             try:
-                stock = yf.Ticker(ticker)
-                current_data = stock.history(period='1d', interval='1m')
-                if len(current_data) > 0:
-                    current_price = current_data['Close'].iloc[-1]
-                    unrealized_pl = (current_price - position['entry_price']) * position['shares']
-                    total_unrealized_pl += unrealized_pl
+                if _USE_CACHED:
+                    price, _ = cached_get_price(ticker)
+                    if price:
+                        unrealized_pl = (price - position['entry_price']) * position['shares']
+                        total_unrealized_pl += unrealized_pl
+                else:
+                    stock = yf.Ticker(ticker)
+                    current_data = stock.history(period='1d', interval='1m')
+                    if len(current_data) > 0:
+                        current_price = current_data['Close'].iloc[-1]
+                        unrealized_pl = (current_price - position['entry_price']) * position['shares']
+                        total_unrealized_pl += unrealized_pl
             except:
                 pass
         

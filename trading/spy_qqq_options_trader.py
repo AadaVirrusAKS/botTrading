@@ -9,6 +9,16 @@ from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_price, cached_get_ticker_info,
+        _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # SPY & QQQ DAILY OPTIONS TRADING BOT
 # Target: 1:10 Risk/Reward Ratio on Daily Expiry Options
@@ -85,6 +95,14 @@ class DailyOptionsTrader:
     def get_live_price(self, ticker):
         """Get real-time live price from Yahoo Finance"""
         try:
+            if _USE_CACHED:
+                price, _ = cached_get_price(ticker)
+                if price:
+                    return price
+                # Fallback to ticker info
+                info = cached_get_ticker_info(ticker) or {}
+                return info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
+
             stock = yf.Ticker(ticker)
             # Try to get the most recent price
             info = stock.info
@@ -117,8 +135,6 @@ class DailyOptionsTrader:
         Returns: Call or Put signal with strike and premium estimates
         """
         try:
-            stock = yf.Ticker(ticker)
-            
             # Get LIVE current price first
             live_price = self.get_live_price(ticker)
             if live_price is None or live_price <= 0:
@@ -126,10 +142,16 @@ class DailyOptionsTrader:
                 return None
             
             print(f"  💹 LIVE Price: ${live_price:.2f}")
-            
-            # Get recent data (1 month of daily + today's intraday)
-            data_daily = stock.history(period='1mo', interval='1d')
-            data_intraday = stock.history(period='1d', interval='5m')
+
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                data_daily = cached_get_history(ticker, period='1mo', interval='1d')
+                data_intraday = cached_get_history(ticker, period='1d', interval='5m')
+            else:
+                stock = yf.Ticker(ticker)
+                data_daily = stock.history(period='1mo', interval='1d')
+                data_intraday = stock.history(period='1d', interval='5m')
             
             print(f"  📊 Data points: {len(data_daily)} daily candles, {len(data_intraday)} intraday candles")
             

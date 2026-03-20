@@ -20,7 +20,7 @@ from services.market_data import (
     cached_batch_prices, cached_get_price, cached_get_history,
     cached_get_option_dates, cached_get_option_chain, cached_get_ticker_info,
     fetch_quote_api_batch, scanner_cache, scanner_cache_timeout,
-    prewarm_history_cache,
+    prewarm_history_cache, check_scanner_stale_running,
     _is_rate_limited, _log_fetch_event,
     _is_rate_limit_error, _is_expected_no_data_error, _mark_rate_limited,
     _mark_global_rate_limit, clear_rate_limit_blocks
@@ -1958,23 +1958,23 @@ def _bot_auto_cycle_inner():
 
             option_candidates = []
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                # FIX 5: Better confidence formula — score 7=58%, 10=70%, 13=82%, 15=90%, 18+=95%
-                # Penalize low volume ratio, reward high OI and volume confirmation
-                base_conf = int(30 + r['score'] * 4)
+                # Confidence formula: score 7=70%, 9=80%, 11=90%, 13+=95%
+                # Base maps score directly to a meaningful confidence range
+                base_conf = int(35 + r['score'] * 5)
                 vol_ratio = r.get('volume_ratio', 0)
                 oi = r.get('open_interest', 0)
                 rsi_val = r.get('rsi', 50)
                 direction = r.get('direction', 'BULLISH')
-                # Volume confirmation bonus/penalty
+                # Volume confirmation bonus/penalty (only penalize truly dead volume)
                 if vol_ratio >= 1.5:
                     base_conf += 5
-                elif vol_ratio < 0.5:
-                    base_conf -= 10
+                elif vol_ratio < 0.2:
+                    base_conf -= 5
                 # OI liquidity bonus
                 if oi >= 5000:
                     base_conf += 3
-                elif oi < 500:
-                    base_conf -= 5
+                elif oi < 200:
+                    base_conf -= 3
                 # RSI divergence penalty: buying calls when overbought or puts when oversold
                 if direction == 'BULLISH' and rsi_val > 70:
                     base_conf -= 8
@@ -2010,7 +2010,8 @@ def _bot_auto_cycle_inner():
                     'stock_price': r['price'],
                     'iv': r.get('iv', 0),
                     'open_interest': r.get('open_interest', 0),
-                    'scan_type': 'intraday'
+                    'scan_type': 'intraday',
+                    'timestamp': r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                 }
                 option_candidates.append(option_signal)
                 if confidence >= min_confidence:
@@ -2052,15 +2053,15 @@ def _bot_auto_cycle_inner():
                 fallback_symbols=['SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'TSLA']
             )
             for r in sorted(intraday_results, key=lambda x: x['score'], reverse=True)[:10]:
-                # FIX 5: Better confidence — same modifier logic as options
-                base_conf = int(30 + r['score'] * 4)
+                # Confidence formula: score 7=70%, 9=80%, 11=90%, 13+=95%
+                base_conf = int(35 + r['score'] * 5)
                 vol_ratio = r.get('volume_ratio', 0)
                 rsi_val = r.get('rsi', 50)
                 direction = r.get('direction', 'BULLISH')
                 if vol_ratio >= 1.5:
                     base_conf += 5
-                elif vol_ratio < 0.5:
-                    base_conf -= 10
+                elif vol_ratio < 0.2:
+                    base_conf -= 5
                 if direction == 'BULLISH' and rsi_val > 70:
                     base_conf -= 8
                 elif direction == 'BEARISH' and rsi_val < 30:
@@ -2082,7 +2083,8 @@ def _bot_auto_cycle_inner():
                         'volume_ratio': r['volume_ratio'],
                         'atr': r.get('atr', 0),
                         'instrument_type': 'stock',
-                        'scan_type': 'intraday'
+                        'scan_type': 'intraday',
+                        'timestamp': r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                     })
         
         if run_daily_scan:
@@ -4192,6 +4194,9 @@ def bot_intraday_stocks():
         cache_key = 'intraday-stocks'
         cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
 
+        # Reset stuck scanners
+        check_scanner_stale_running(cache_key)
+
         # Return cached data if fresh
         if cache_entry['data'] is not None and cache_entry['timestamp']:
             age = (datetime.now() - cache_entry['timestamp']).total_seconds()
@@ -4215,6 +4220,7 @@ def bot_intraday_stocks():
         def run_scan():
             try:
                 scanner_cache[cache_key]['running'] = True
+                scanner_cache[cache_key]['run_started'] = datetime.now()
                 previous_data = scanner_cache[cache_key].get('data') or []
                 results = run_intraday_scan_batched(
                     INTRADAY_STOCK_UNIVERSE,
@@ -4284,6 +4290,7 @@ def bot_intraday_options():
         def run_scan():
             try:
                 scanner_cache[cache_key]['running'] = True
+                scanner_cache[cache_key]['run_started'] = datetime.now()
                 previous_data = scanner_cache[cache_key].get('data') or []
                 results = run_intraday_scan_batched(
                     INTRADAY_OPTIONS_UNIVERSE,
@@ -4304,8 +4311,7 @@ def bot_intraday_options():
                 print(f"✅ Intraday options scan complete: {len(results)} setups found")
             except Exception as e:
                 print(f"❌ Intraday options scan error: {e}")
-                scanner_cache[cache_key]['data'] = []
-                scanner_cache[cache_key]['timestamp'] = datetime.now()
+                # Don't cache empty error results
             finally:
                 scanner_cache[cache_key]['running'] = False
 

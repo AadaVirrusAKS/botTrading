@@ -780,9 +780,20 @@ def prewarm_history_cache(symbols, period='5d', interval='5m'):
         return 0  # Everything already cached
     
     if _is_globally_rate_limited():
-        _log_fetch_event('prewarm-skip', 'global',
-            f"[PreWarm] Skipping pre-warm ({len(uncached)} symbols) — globally rate-limited", cooldown=60)
-        return 0
+        _log_fetch_event('prewarm-v8', 'global',
+            f"[PreWarm] yfinance rate-limited — using v8 API for {len(uncached)} symbols", cooldown=60)
+        # Skip yf.download entirely, go straight to v8 API backfill
+        warmed = 0
+        for sym in uncached:
+            df = _fetch_history_v8_api(sym, period=period, interval=interval)
+            if df is not None and not df.empty:
+                with _history_cache_lock:
+                    _history_cache[(sym, period, interval)] = {'data': df, 'ts': datetime.now()}
+                warmed += 1
+            time.sleep(0.15)
+        if warmed > 0:
+            print(f"[PreWarm] ✅ Pre-warmed {warmed}/{len(uncached)} symbols via v8 API (rate-limit bypass)")
+        return warmed
 
     # Throttle: one token for the batch download
     if not _throttle_acquire(timeout=15):
@@ -810,9 +821,19 @@ def prewarm_history_cache(symbols, period='5d', interval='5m'):
                 sym = chunk[0]
                 close_col = _extract_close_column(data, sym)
                 if close_col is not None and not close_col.empty:
+                    # yf.download() returns MultiIndex columns even for 1 symbol.
+                    # Flatten to match yf.Ticker().history() format so consumers
+                    # can do df['Close'] and get a Series.
+                    if hasattr(data.columns, 'nlevels') and data.columns.nlevels >= 2:
+                        try:
+                            flat_data = data[sym].copy()
+                        except Exception:
+                            flat_data = data.copy()
+                    else:
+                        flat_data = data.copy()
                     cache_key = (sym, period, interval)
                     with _history_cache_lock:
-                        _history_cache[cache_key] = {'data': data.copy(), 'ts': fetch_time}
+                        _history_cache[cache_key] = {'data': flat_data, 'ts': fetch_time}
                     warmed += 1
             else:
                 # Multiple symbols: use _extract_close_column to verify data
@@ -1186,11 +1207,14 @@ autonomous_trader_state = {
 
 
 def _fetch_all_quotes_batch(symbols):
-    """Fetch quotes for all symbols using a SINGLE yf.download() call.
+    """Fetch quotes for all symbols using chunked yf.download() calls.
     
-    This replaces the old per-symbol ThreadPoolExecutor approach which generated
-    ~200 individual API calls. Now uses one batch download request.
+    Splits large symbol lists into chunks of ~20 to avoid Yahoo silently
+    returning empty DataFrames for oversized batch requests. Falls back
+    to parallel v8 API calls for any symbols still missing.
     """
+    _BATCH_CHUNK_SIZE = 20  # Yahoo is more reliable with smaller batches
+
     unique_symbols = list(set(s.strip().upper() for s in symbols if s))
     if not unique_symbols:
         return {}
@@ -1215,179 +1239,215 @@ def _fetch_all_quotes_batch(symbols):
     
     # 2. If globally rate-limited, serve stale cache entries
     if _is_globally_rate_limited():
-        print(f"[BatchQuotes] ⚠️ Globally rate-limited — serving stale cache for {len(uncached)} symbols")
+        print(f"[BatchQuotes] Globally rate-limited - serving stale cache for {len(uncached)} symbols")
         for sym in uncached:
             if sym in quote_cache:
                 cached_data, _ = quote_cache[sym]
                 results[sym] = cached_data
+        # Still try v8 API fallback (it uses a different endpoint)
+        still_missing = [s for s in uncached if s not in results]
+        if still_missing:
+            _apply_v8_api_fallback(still_missing, results)
         return results
     
     # 3. Throttle: one token for the batch download
     if not _throttle_acquire(timeout=30):
-        print(f"[BatchQuotes] ⚠️ Throttle timeout (30s) — serving stale cache for {len(uncached)} symbols")
+        print(f"[BatchQuotes] Throttle timeout (30s) - serving stale cache for {len(uncached)} symbols")
         for sym in uncached:
             if sym in quote_cache:
                 results[sym] = quote_cache[sym][0]
         return results
 
-    # 4. Single yf.download() batch call
-    try:
-        data = yf.download(
-            uncached,
-            period='5d',
-            interval='1d',
-            group_by='ticker',
-            auto_adjust=True,
-            threads=True,
-            progress=False,
-            timeout=60
-        )
-        
-        if data is None or data.empty:
-            print(f"[BatchQuotes] ⚠️ yf.download returned empty for {len(uncached)} symbols")
-            # Serve stale cache as fallback
-            for sym in uncached:
-                if sym in quote_cache:
-                    results[sym] = quote_cache[sym][0]
-            # Ensure data is a safe empty DataFrame so processing blocks skip cleanly
-            data = pd.DataFrame()
-        
-        fetch_time = datetime.now()
-        
-        if len(uncached) == 1:
-            # Single symbol -> flat columns (Close, Open, etc.)
-            sym = uncached[0]
-            try:
-                # Handle both MultiIndex and flat columns
-                if isinstance(data.columns, pd.MultiIndex):
-                    # Single ticker with MultiIndex: try data[sym] or data['Close'][sym]
-                    try:
-                        sym_close = data[sym]['Close'].dropna() if sym in data.columns.get_level_values(0) else data['Close'].dropna()
-                    except (KeyError, TypeError):
-                        sym_close = data['Close'].dropna() if 'Close' in data.columns.get_level_values(0) else pd.Series(dtype=float)
-                    if len(sym_close) >= 2:
-                        current_price = float(sym_close.iloc[-1])
-                        prev_close = float(sym_close.iloc[-2])
-                        change = current_price - prev_close
-                        change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-                        vol_col = data[sym]['Volume'] if sym in data.columns.get_level_values(0) else data.get('Volume', pd.Series([0]))
-                        quote = {
-                            'symbol': sym,
-                            'price': round(current_price, 2),
-                            'change': round(change, 2),
-                            'changePct': round(change_pct, 2),
-                            'volume': int(vol_col.iloc[-1]) if len(vol_col) > 0 else 0,
-                        }
-                        results[sym] = quote
-                        quote_cache[sym] = (quote, fetch_time)
-                elif 'Close' in data.columns and len(data) >= 2:
-                    close_vals = data['Close'].dropna()
-                    if len(close_vals) >= 2:
-                        current_price = float(close_vals.iloc[-1])
-                        prev_close = float(close_vals.iloc[-2])
-                        change = current_price - prev_close
-                        change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-                        quote = {
-                            'symbol': sym,
-                            'price': round(current_price, 2),
-                            'change': round(change, 2),
-                            'changePct': round(change_pct, 2),
-                            'volume': int(data['Volume'].iloc[-1]) if 'Volume' in data.columns else 0,
-                            'high': round(float(data['High'].iloc[-1]), 2) if 'High' in data.columns else 0,
-                            'low': round(float(data['Low'].iloc[-1]), 2) if 'Low' in data.columns else 0,
-                            'open': round(float(data['Open'].iloc[-1]), 2) if 'Open' in data.columns else 0,
-                        }
-                        results[sym] = quote
-                        quote_cache[sym] = (quote, fetch_time)
-            except Exception:
-                pass
-        else:
-            # Multiple symbols -> MultiIndex columns
-            # yfinance may return (Ticker, Price) or (Price, Ticker) depending on group_by
-            avail_symbols = []
-            field_first = False  # True if columns are (Price, Ticker) instead of (Ticker, Price)
-            if hasattr(data.columns, 'get_level_values'):
-                try:
-                    level0 = list(data.columns.get_level_values(0).unique())
-                    level1 = list(data.columns.get_level_values(1).unique())
-                    # Detect layout: if level 0 has field names like 'Close', it's (Price, Ticker)
-                    price_fields = {'Close', 'Open', 'High', 'Low', 'Volume'}
-                    if set(level0) & price_fields:
-                        # Format: (Price, Ticker) — field-first
-                        field_first = True
-                        avail_symbols = level1
-                    else:
-                        # Format: (Ticker, Price) — ticker-first (group_by='ticker')
-                        avail_symbols = level0
-                except Exception:
-                    avail_symbols = []
+    # 4. Chunked yf.download() calls
+    chunks = [uncached[i:i + _BATCH_CHUNK_SIZE] for i in range(0, len(uncached), _BATCH_CHUNK_SIZE)]
+    total_fetched_yf = 0
+
+    for chunk_idx, chunk in enumerate(chunks):
+        if _is_globally_rate_limited():
+            print(f"[BatchQuotes] Rate-limited mid-batch at chunk {chunk_idx+1}/{len(chunks)}")
+            break
+        try:
+            data = yf.download(
+                chunk,
+                period='5d',
+                interval='1d',
+                group_by='ticker',
+                auto_adjust=True,
+                threads=True,
+                progress=False,
+                timeout=30
+            )
             
-            for sym in uncached:
-                try:
-                    if sym not in avail_symbols:
-                        continue
-                    
-                    if field_first:
-                        # Access as data['Close'][sym], etc.
-                        close_vals = data['Close'][sym].dropna() if 'Close' in data.columns.get_level_values(0) else pd.Series(dtype=float)
-                        vol_vals = data['Volume'][sym] if 'Volume' in data.columns.get_level_values(0) else pd.Series([0])
-                        high_vals = data['High'][sym] if 'High' in data.columns.get_level_values(0) else pd.Series([0])
-                        low_vals = data['Low'][sym] if 'Low' in data.columns.get_level_values(0) else pd.Series([0])
-                        open_vals = data['Open'][sym] if 'Open' in data.columns.get_level_values(0) else pd.Series([0])
-                    else:
-                        # Access as data[sym]['Close'], etc.
-                        sym_data = data[sym]
-                        if sym_data is None or sym_data.empty:
-                            continue
-                        close_vals = sym_data['Close'].dropna() if 'Close' in sym_data.columns else pd.Series(dtype=float)
-                        vol_vals = sym_data['Volume'] if 'Volume' in sym_data.columns else pd.Series([0])
-                        high_vals = sym_data['High'] if 'High' in sym_data.columns else pd.Series([0])
-                        low_vals = sym_data['Low'] if 'Low' in sym_data.columns else pd.Series([0])
-                        open_vals = sym_data['Open'] if 'Open' in sym_data.columns else pd.Series([0])
-                    
-                    if len(close_vals) < 2:
-                        continue
-                    current_price = float(close_vals.iloc[-1])
-                    prev_close = float(close_vals.iloc[-2])
-                    if current_price <= 0:
-                        continue
-                    change = current_price - prev_close
-                    change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-                    quote = {
-                        'symbol': sym,
-                        'price': round(current_price, 2),
-                        'change': round(change, 2),
-                        'changePct': round(change_pct, 2),
-                        'volume': int(vol_vals.iloc[-1]) if len(vol_vals) > 0 else 0,
-                        'high': round(float(high_vals.iloc[-1]), 2) if len(high_vals) > 0 else 0,
-                        'low': round(float(low_vals.iloc[-1]), 2) if len(low_vals) > 0 else 0,
-                        'open': round(float(open_vals.iloc[-1]), 2) if len(open_vals) > 0 else 0,
-                    }
-                    results[sym] = quote
-                    quote_cache[sym] = (quote, fetch_time)
-                except Exception:
-                    continue
-        
-        print(f"📊 Batch quotes: fetched {len(results)}/{len(unique_symbols)} symbols in 1 API call")
+            if data is None or data.empty:
+                continue  # this chunk failed, will be caught by v8 fallback
+            
+            fetch_time = datetime.now()
+            chunk_count = _parse_download_into_quotes(data, chunk, results, fetch_time)
+            total_fetched_yf += chunk_count
+
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                _mark_global_rate_limit()
+                break  # stop trying more chunks
+            print(f"[BatchQuotes] Chunk {chunk_idx+1} error: {e}")
+
+    if total_fetched_yf > 0:
+        _mark_global_rate_limit_success()
+
+    print(f"[BatchQuotes] yf.download: {total_fetched_yf}/{len(uncached)} symbols "
+          f"in {len(chunks)} chunk(s), {len(results)}/{len(unique_symbols)} total (incl. cache)")
     
-    except Exception as e:
-        if _is_rate_limit_error(e):
-            _mark_global_rate_limit()
-        print(f"Batch quote download error: {e}")
-        # Serve stale cache as fallback
-        for sym in uncached:
-            if sym in quote_cache:
-                results[sym] = quote_cache[sym][0]
-    
-    # 5. API fallback for symbols still missing (bypasses yfinance rate limiter)
+    # 5. Parallel v8 API fallback for symbols still missing
     still_missing = [s for s in unique_symbols if s not in results]
     if still_missing:
-        _log_fetch_event('batch-api-fallback', ','.join(still_missing[:5]),
-                         f"Trying API fallback for {len(still_missing)} missing symbols", cooldown=60)
-        api_prices = fetch_quote_api_batch(still_missing)
-        api_time = datetime.now()
-        for sym, price in api_prices.items():
-            if price and price > 0:
+        _apply_v8_api_fallback(still_missing, results)
+
+    return results
+
+
+def _parse_download_into_quotes(data, symbols, results, fetch_time):
+    """Parse a yf.download() DataFrame into quote dicts. Returns count of quotes added."""
+    added = 0
+    if len(symbols) == 1:
+        sym = symbols[0]
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                try:
+                    sym_close = data[sym]['Close'].dropna() if sym in data.columns.get_level_values(0) else data['Close'].dropna()
+                except (KeyError, TypeError):
+                    sym_close = data['Close'].dropna() if 'Close' in data.columns.get_level_values(0) else pd.Series(dtype=float)
+                if len(sym_close) >= 2:
+                    vol_col = data[sym]['Volume'] if sym in data.columns.get_level_values(0) else data.get('Volume', pd.Series([0]))
+                    quote = _build_quote(sym, sym_close, vol_col)
+                    if quote:
+                        results[sym] = quote
+                        quote_cache[sym] = (quote, fetch_time)
+                        added += 1
+            elif 'Close' in data.columns and len(data) >= 2:
+                close_vals = data['Close'].dropna()
+                if len(close_vals) >= 2:
+                    quote = _build_quote(
+                        sym, close_vals,
+                        data.get('Volume', pd.Series([0])),
+                        data.get('High', pd.Series([0])),
+                        data.get('Low', pd.Series([0])),
+                        data.get('Open', pd.Series([0])),
+                    )
+                    if quote:
+                        results[sym] = quote
+                        quote_cache[sym] = (quote, fetch_time)
+                        added += 1
+        except Exception:
+            pass
+    else:
+        avail_symbols = []
+        field_first = False
+        if hasattr(data.columns, 'get_level_values'):
+            try:
+                level0 = list(data.columns.get_level_values(0).unique())
+                level1 = list(data.columns.get_level_values(1).unique())
+                price_fields = {'Close', 'Open', 'High', 'Low', 'Volume'}
+                if set(level0) & price_fields:
+                    field_first = True
+                    avail_symbols = level1
+                else:
+                    avail_symbols = level0
+            except Exception:
+                avail_symbols = []
+        
+        for sym in symbols:
+            try:
+                if sym not in avail_symbols:
+                    continue
+                if field_first:
+                    close_vals = data['Close'][sym].dropna() if 'Close' in data.columns.get_level_values(0) else pd.Series(dtype=float)
+                    vol_vals = data['Volume'][sym] if 'Volume' in data.columns.get_level_values(0) else pd.Series([0])
+                    high_vals = data['High'][sym] if 'High' in data.columns.get_level_values(0) else pd.Series([0])
+                    low_vals = data['Low'][sym] if 'Low' in data.columns.get_level_values(0) else pd.Series([0])
+                    open_vals = data['Open'][sym] if 'Open' in data.columns.get_level_values(0) else pd.Series([0])
+                else:
+                    sym_data = data[sym]
+                    if sym_data is None or sym_data.empty:
+                        continue
+                    close_vals = sym_data['Close'].dropna() if 'Close' in sym_data.columns else pd.Series(dtype=float)
+                    vol_vals = sym_data['Volume'] if 'Volume' in sym_data.columns else pd.Series([0])
+                    high_vals = sym_data['High'] if 'High' in sym_data.columns else pd.Series([0])
+                    low_vals = sym_data['Low'] if 'Low' in sym_data.columns else pd.Series([0])
+                    open_vals = sym_data['Open'] if 'Open' in sym_data.columns else pd.Series([0])
+                
+                quote = _build_quote(sym, close_vals, vol_vals, high_vals, low_vals, open_vals)
+                if quote:
+                    results[sym] = quote
+                    quote_cache[sym] = (quote, fetch_time)
+                    added += 1
+            except Exception:
+                continue
+    return added
+
+
+def _build_quote(sym, close_vals, vol_vals=None, high_vals=None, low_vals=None, open_vals=None):
+    """Build a quote dict from price series. Returns None if insufficient data."""
+    if len(close_vals) < 2:
+        return None
+    current_price = float(close_vals.iloc[-1])
+    prev_close = float(close_vals.iloc[-2])
+    if current_price <= 0:
+        return None
+    change = current_price - prev_close
+    change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+    quote = {
+        'symbol': sym,
+        'price': round(current_price, 2),
+        'change': round(change, 2),
+        'changePct': round(change_pct, 2),
+        'volume': int(vol_vals.iloc[-1]) if vol_vals is not None and len(vol_vals) > 0 else 0,
+        'high': round(float(high_vals.iloc[-1]), 2) if high_vals is not None and len(high_vals) > 0 else 0,
+        'low': round(float(low_vals.iloc[-1]), 2) if low_vals is not None and len(low_vals) > 0 else 0,
+        'open': round(float(open_vals.iloc[-1]), 2) if open_vals is not None and len(open_vals) > 0 else 0,
+    }
+    return quote
+
+
+def _apply_v8_api_fallback(missing_symbols, results):
+    """Parallel v8 API fallback for symbols that yf.download missed."""
+    import requests as _req
+    _V8_WORKERS = 8
+
+    _log_fetch_event('batch-api-fallback', ','.join(missing_symbols[:5]),
+                     f"Trying parallel v8 API fallback for {len(missing_symbols)} symbols", cooldown=60)
+
+    session = _req.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    })
+
+    def _fetch_one_v8(sym):
+        if _is_globally_rate_limited():
+            return None
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+            resp = session.get(url, params={'range': '1d', 'interval': '1m'}, timeout=5)
+            if resp.status_code == 429:
+                _mark_global_rate_limit()
+                return None
+            if resp.status_code == 200:
+                chart_data = resp.json()
+                meta = (chart_data.get('chart', {}).get('result') or [{}])[0].get('meta', {})
+                price = meta.get('regularMarketPrice') or meta.get('previousClose')
+                if price:
+                    return (sym, float(price))
+        except Exception:
+            pass
+        return None
+
+    api_time = datetime.now()
+    recovered = 0
+    with ThreadPoolExecutor(max_workers=_V8_WORKERS) as pool:
+        futures = {pool.submit(_fetch_one_v8, sym): sym for sym in missing_symbols}
+        for future in futures:
+            result = future.result()
+            if result:
+                sym, price = result
                 quote = {
                     'symbol': sym,
                     'price': round(price, 2),
@@ -1398,7 +1458,6 @@ def _fetch_all_quotes_batch(symbols):
                     'low': 0,
                     'open': 0,
                 }
-                # Try to compute change from stale cache
                 if sym in quote_cache:
                     old_quote, _ = quote_cache[sym]
                     old_price = old_quote.get('price', 0)
@@ -1407,8 +1466,10 @@ def _fetch_all_quotes_batch(symbols):
                         quote['changePct'] = round((price - old_price) / old_price * 100, 2)
                 results[sym] = quote
                 quote_cache[sym] = (quote, api_time)
-        if api_prices:
-            print(f"[BatchQuotes] ✅ API fallback recovered {len(api_prices)}/{len(still_missing)} symbols")
+                recovered += 1
 
-    return results
+    if recovered:
+        _mark_global_rate_limit_success()
+        print(f"[BatchQuotes] v8 API fallback recovered {recovered}/{len(missing_symbols)} symbols")
+    session.close()
 

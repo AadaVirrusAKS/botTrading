@@ -379,7 +379,8 @@ class TradingDashboard {
         }
     }
 
-    async loadScanner(scannerType, callback) {
+    async loadScanner(scannerType, callback, retryCount = 0) {
+        const MAX_RETRIES = 20; // Max 20 retries (~60 seconds)
         try {
             this.showLoading('scanner-results');
             const response = await resilientFetch(`/api/scanner/${scannerType}?_ts=${Date.now()}`, {
@@ -390,6 +391,18 @@ class TradingDashboard {
             if (data.success) {
                 // Check if scanner is still running
                 if (data.scanning || (data.picks && Object.values(data.picks).every(arr => arr.length === 0))) {
+                    if (retryCount >= MAX_RETRIES) {
+                        const container = document.getElementById('scanner-results');
+                        if (container) {
+                            container.innerHTML = `
+                                <div style="color: var(--text-secondary); padding: 20px; text-align: center;">
+                                    <strong>⚠️ Scanner timed out</strong><br>
+                                    <small>No results found after scanning. Try refreshing the page.</small>
+                                </div>
+                            `;
+                        }
+                        return;
+                    }
                     const container = document.getElementById('scanner-results');
                     if (container) {
                         container.innerHTML = `
@@ -405,8 +418,8 @@ class TradingDashboard {
                     
                     // Auto-retry after 3 seconds
                     setTimeout(() => {
-                        console.log(`🔄 Retrying ${scannerType} scanner...`);
-                        this.loadScanner(scannerType, callback);
+                        console.log(`🔄 Retrying ${scannerType} scanner... (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+                        this.loadScanner(scannerType, callback, retryCount + 1);
                     }, 3000);
                 } else {
                     this.renderScannerResults(data, scannerType);

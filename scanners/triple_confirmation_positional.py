@@ -18,6 +18,15 @@ import json
 from config.master_stock_list import get_master_stock_list
 from config import PROJECT_ROOT, DATA_DIR
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, prewarm_history_cache, _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 
 class TripleConfirmationPositional:
     """Positional scanner using weekly timeframes for 1-2 week holds"""
@@ -97,12 +106,15 @@ class TripleConfirmationPositional:
     def analyze_stock(self, ticker):
         """Analyze stock for positional triple confirmation"""
         try:
-            stock = yf.Ticker(ticker)
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                weekly = cached_get_history(ticker, period='2y', interval='1wk')
+            else:
+                stock = yf.Ticker(ticker)
+                weekly = stock.history(period='2y', interval='1wk')
             
-            # Get 2 years of weekly data for robust analysis
-            weekly = stock.history(period='2y', interval='1wk')
-            
-            if weekly.empty or len(weekly) < 52:
+            if weekly is None or weekly.empty or len(weekly) < 52:
                 return None
             
             # Calculate all indicators on weekly timeframe
@@ -259,7 +271,13 @@ class TripleConfirmationPositional:
         
         self.results = []
         
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        # Pre-warm cache with batch download
+        if _USE_CACHED:
+            print(f"  📦 Pre-warming cache for {len(self.universe)} symbols...")
+            prewarm_history_cache(self.universe, period='2y', interval='1wk')
+
+        # Throttled parallel processing (3 workers to respect rate limits)
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_ticker = {executor.submit(self.analyze_stock, ticker): ticker 
                                for ticker in self.universe}
             

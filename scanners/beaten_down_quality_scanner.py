@@ -17,6 +17,16 @@ from config.master_stock_list import get_master_stock_list
 from config import PROJECT_ROOT, DATA_DIR
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_ticker_info,
+        prewarm_history_cache, _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class BeatenDownQualityScanner:
     def __init__(self):
         # S&P 500 components and popular ETFs
@@ -29,11 +39,15 @@ class BeatenDownQualityScanner:
     def get_price_metrics(self, symbol):
         """Calculate price decline metrics"""
         try:
-            stock = yf.Ticker(symbol)
-            
-            # Get 1 year of historical data
-            hist = stock.history(period='1y')
-            if hist.empty or len(hist) < 50:
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                hist = cached_get_history(symbol, period='1y', interval='1d')
+            else:
+                stock = yf.Ticker(symbol)
+                hist = stock.history(period='1y')
+
+            if hist is None or hist.empty or len(hist) < 50:
                 return None
             
             current_price = hist['Close'].iloc[-1]
@@ -86,8 +100,13 @@ class BeatenDownQualityScanner:
     def get_fundamental_metrics(self, symbol):
         """Get fundamental analysis metrics"""
         try:
-            stock = yf.Ticker(symbol)
-            info = stock.info
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                info = cached_get_ticker_info(symbol) or {}
+            else:
+                stock = yf.Ticker(symbol)
+                info = stock.info
             
             # Extract key fundamental metrics
             fundamentals = {

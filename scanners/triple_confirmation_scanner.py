@@ -18,6 +18,15 @@ import json
 from config.master_stock_list import get_master_stock_list
 from config import PROJECT_ROOT, DATA_DIR
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, prewarm_history_cache, _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 
 class TripleConfirmationScanner:
     """Scanner for stocks with SuperTrend + VWAP + MACD alignment"""
@@ -84,19 +93,22 @@ class TripleConfirmationScanner:
     def analyze_stock(self, ticker):
         """Analyze a single stock for triple confirmation"""
         try:
-            # Fetch data - need intraday for VWAP
-            stock = yf.Ticker(ticker)
+            if _USE_CACHED:
+                # Skip if globally rate-limited
+                if _is_globally_rate_limited():
+                    return None
+                # Use cached history to avoid rate limiting
+                intraday = cached_get_history(ticker, period='5d', interval='5m')
+                daily = cached_get_history(ticker, period='3mo', interval='1d')
+            else:
+                stock = yf.Ticker(ticker)
+                intraday = stock.history(period='5d', interval='5m')
+                daily = stock.history(period='3mo')
             
-            # Get 5 days of 5-minute data for intraday VWAP
-            intraday = stock.history(period='5d', interval='5m')
-            
-            if intraday.empty or len(intraday) < 50:
+            if intraday is None or intraday.empty or len(intraday) < 50:
                 return None
             
-            # Get daily data for longer-term indicators
-            daily = stock.history(period='3mo')
-            
-            if daily.empty or len(daily) < 50:
+            if daily is None or daily.empty or len(daily) < 50:
                 return None
             
             # Calculate indicators on daily timeframe
@@ -246,12 +258,18 @@ class TripleConfirmationScanner:
         print("🔍 TRIPLE CONFIRMATION SCANNER - SuperTrend + VWAP + MACD")
         print("=" * 100)
         print(f"📊 Scanning {len(self.universe)} stocks for aligned signals...")
-        print(f"⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        print(f"\n\u2699\ufe0f Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         
         self.results = []
         
-        # Parallel processing
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        # Pre-warm cache with batch downloads to avoid per-ticker rate limiting
+        if _USE_CACHED:
+            print(f"  📦 Pre-warming cache for {len(self.universe)} symbols...")
+            prewarm_history_cache(self.universe, period='5d', interval='5m')
+            prewarm_history_cache(self.universe, period='3mo', interval='1d')
+
+        # Throttled parallel processing (3 workers to respect rate limits)
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_ticker = {executor.submit(self.analyze_stock, ticker): ticker 
                                for ticker in self.universe}
             

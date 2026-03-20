@@ -18,6 +18,15 @@ import json
 from config.master_stock_list import get_intraday_core_list
 from config import PROJECT_ROOT, DATA_DIR
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, prewarm_history_cache, _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 
 class TripleConfirmationIntraday:
     """Intraday scanner using 5-15 minute timeframes for all indicators"""
@@ -81,12 +90,17 @@ class TripleConfirmationIntraday:
     def analyze_stock(self, ticker):
         """Analyze stock for intraday triple confirmation"""
         try:
-            stock = yf.Ticker(ticker)
+            if _USE_CACHED:
+                # Skip if globally rate-limited
+                if _is_globally_rate_limited():
+                    return None
+                # Use cached history to avoid rate limiting
+                data_5m = cached_get_history(ticker, period='5d', interval='5m')
+            else:
+                stock = yf.Ticker(ticker)
+                data_5m = stock.history(period='5d', interval='5m')
             
-            # Get 5 days of 5-minute data for analysis
-            data_5m = stock.history(period='5d', interval='5m')
-            
-            if data_5m.empty or len(data_5m) < 50:
+            if data_5m is None or data_5m.empty or len(data_5m) < 50:
                 return None
             
             # Calculate all indicators on 5-minute timeframe
@@ -241,7 +255,13 @@ class TripleConfirmationIntraday:
         
         self.results = []
         
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        # Pre-warm cache with batch download to avoid per-ticker rate limiting
+        if _USE_CACHED:
+            print(f"  📦 Pre-warming cache for {len(self.universe)} symbols...")
+            prewarm_history_cache(self.universe, period='5d', interval='5m')
+
+        # Throttled parallel processing (3 workers to respect rate limits)
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_ticker = {executor.submit(self.analyze_stock, ticker): ticker 
                                for ticker in self.universe}
             

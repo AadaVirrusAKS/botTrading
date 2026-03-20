@@ -19,6 +19,16 @@ from config.master_stock_list import get_master_stock_list
 from config import PROJECT_ROOT, DATA_DIR
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, cached_get_ticker_info,
+        prewarm_history_cache, _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class ShortSqueezeScanner:
     def __init__(self):
         # Get comprehensive stock universe
@@ -55,8 +65,13 @@ class ShortSqueezeScanner:
     def get_short_interest_data(self, symbol):
         """Get short interest metrics"""
         try:
-            stock = yf.Ticker(symbol)
-            info = stock.info
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                info = cached_get_ticker_info(symbol) or {}
+            else:
+                stock = yf.Ticker(symbol)
+                info = stock.info
             
             # Key short interest metrics
             short_data = {
@@ -85,12 +100,16 @@ class ShortSqueezeScanner:
     def get_price_momentum(self, symbol):
         """Analyze recent price momentum and volume"""
         try:
-            def fetch_history():
-                stock = yf.Ticker(symbol)
-                return stock.history(period='3mo')
-            
-            # Get 3 months of data with retry
-            hist = self.retry_with_backoff(fetch_history)
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                hist = cached_get_history(symbol, period='3mo', interval='1d')
+            else:
+                def fetch_history():
+                    stock = yf.Ticker(symbol)
+                    return stock.history(period='3mo')
+                hist = self.retry_with_backoff(fetch_history)
+
             if hist is None or hist.empty or len(hist) < 20:
                 return None
             
@@ -151,11 +170,16 @@ class ShortSqueezeScanner:
     def get_fundamental_data(self, symbol):
         """Get basic fundamental data"""
         try:
-            def fetch_info():
-                stock = yf.Ticker(symbol)
-                return stock.info
-            
-            info = self.retry_with_backoff(fetch_info)
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                info = cached_get_ticker_info(symbol)
+            else:
+                def fetch_info():
+                    stock = yf.Ticker(symbol)
+                    return stock.info
+                info = self.retry_with_backoff(fetch_info)
+
             if info is None:
                 return None
             

@@ -10,6 +10,15 @@ import warnings
 from config.master_stock_list import get_master_stock_list
 warnings.filterwarnings('ignore')
 
+# Use centralized caching layer to avoid Yahoo rate limiting
+try:
+    from services.market_data import (
+        cached_get_history, _is_globally_rate_limited
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # COMPREHENSIVE US MARKET SCANNER
 # -----------------------------
@@ -78,10 +87,15 @@ class USMarketScanner:
     def analyze_stock(self, ticker):
         """Analyze individual stock"""
         try:
-            stock = yf.Ticker(ticker)
-            data = stock.history(period='1y', interval='1d')
+            if _USE_CACHED:
+                if _is_globally_rate_limited():
+                    return None
+                data = cached_get_history(ticker, period='1y', interval='1d')
+            else:
+                stock = yf.Ticker(ticker)
+                data = stock.history(period='1y', interval='1d')
             
-            if len(data) < 200:
+            if data is None or len(data) < 200:
                 return None
             
             # Calculate indicators
