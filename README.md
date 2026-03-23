@@ -229,6 +229,59 @@ yfinance API  →  services/market_data.py (cache layer)
            (active_positions.json, top_picks.json, etc.)
 ```
 
+### Cache & Staleness Protection
+
+`services/market_data.py` provides a multi-level caching layer to minimize yfinance API calls and handle Yahoo 429 rate limits gracefully. When rate-limited, stale cached data may be served as a fallback — but **max staleness limits** prevent the system from acting on data that is too old.
+
+#### Cache TTLs (fresh data served within these windows)
+
+| Cache | TTL | Description |
+|-------|-----|-------------|
+| Price | 60s | Current stock/ETF prices |
+| History (5m/1m bars) | 5 min | Intraday OHLCV for VWAP, RSI, MACD |
+| History (daily bars) | 5 min | Daily OHLCV for SMA, EMA, swing scoring |
+| Option chain | 45s | Strikes, premiums, bid/ask, OI |
+| Option expiry dates | 1 hour | Available expiration dates |
+| Ticker info | 5 min | Fundamentals (market cap, sector, etc.) |
+| Scanner results | 10 min | Cached scanner output for web UI |
+
+#### Max Staleness Limits (rate-limit fallback caps)
+
+When the system is rate-limited by Yahoo, cached data is only served if younger than these limits. **Data older than the max staleness returns `None`**, causing scanners to skip the symbol rather than score on stale indicators.
+
+| Cache | Max Stale | Rationale |
+|-------|-----------|-----------|
+| Price | 10 min | Prices older than 10 min are unusable for intraday trading |
+| History (intraday) | 10 min | 5m-bar VWAP/RSI/volume spikes are transient; stale data corrupts direction |
+| History (daily) | 1 hour | Daily bars change slowly; 1-hour staleness is acceptable |
+| Option chain | 5 min | Premiums and bid/ask move fast; stale chains cause bad fills |
+| Ticker info | 30 min | Fundamentals are slow-moving |
+
+#### Intraday Data Freshness Penalty
+
+The intraday scanners (`scan_intraday_option`, `scan_intraday_stock`) additionally check the **age of the newest bar** in the DataFrame. Even data within the staleness limit may not be fresh enough for momentum-based scoring:
+
+| Bar Age | Action |
+|---------|--------|
+| > 30 min | Skip symbol entirely (`return None`) |
+| > 15 min | −3 score penalty (indicators unreliable) |
+| > 8 min | −1 score penalty (slightly stale) |
+| ≤ 8 min | No penalty (fresh enough) |
+
+#### Signal Fallback Age Limit
+
+When a scan returns 0 results (e.g. rate-limited), the bot previously preserved arbitrarily old signals. Now signals are only reused if they are **less than 30 minutes old**. Older signals are discarded to prevent trades based on expired market conditions.
+
+#### Rate-Limit Fallback Chain
+
+```
+1. Check in-memory cache (fresh TTL)
+2. If rate-limited → serve stale cache (up to max staleness limit)
+3. If too stale → try v8 API fallback (Yahoo chart API, separate rate-limit pool)
+4. If v8 fails → try v7 API fallback (options only)
+5. If all fail → return None (scanner skips symbol)
+```
+
 ---
 
 ## Web Dashboard Pages
@@ -411,6 +464,30 @@ Detailed guides are in the `docs/` directory:
 | [REALTIME_TRADING_GUIDE.md](docs/REALTIME_TRADING_GUIDE.md) | Real-time trade execution |
 | [README_PaperTrading.md](docs/README_PaperTrading.md) | Alpaca paper trading setup |
 | [Weekly_Screener_Guide.md](docs/Weekly_Screener_Guide.md) | Weekly screening strategy |
+
+---
+
+## Changelog
+
+### 2026-03-23 — Stale Data Fix (Cache Staleness Protection)
+
+**Problem observed**: After implementing the yfinance rate-limit caching layer, bot pick quality dropped significantly. On March 23, the User 1 bot made 19 entries with only a 37.5% win rate (−$4,103 total P&L), exhibiting:
+
+- **Direction whipsawing** — bought 7 calls at open, pivoted to heavy put buying by 10:48, then flipped back to calls at 12:17. Stale VWAP/RSI/MACD data was causing the scanner to misread direction.
+- **Signal reversals causing large losses** — PLTR $155P (−$1,176, −30%) and COIN $198P (−$825, −24%) entered bearish then the signal flipped bullish. The original bearish signal was based on stale momentum data.
+- **Contradictory same-symbol trades** — COIN had both a put and call same day; SLV had puts and calls in the same session.
+- **Volume data missing** — signals showed `volume_ratio=0`, meaning trades were made without volume confirmation.
+
+**Root cause**: Every cache fallback path returned data **without any age check**. When rate-limited, a price or 5-minute bar cached at 9 AM could still be served at 2 PM. Since intraday options scoring relies on transient signals (volume spikes, VWAP position, RSI momentum), stale data corrupted direction determination and scoring.
+
+**Fixes applied** (4 files changed):
+
+| File | Change |
+|------|--------|
+| `services/market_data.py` | Added max staleness limits on all cache fallback paths: prices (10 min), intraday history (10 min), daily history (1 hour), option chains (5 min), ticker info (30 min). Data older than the limit returns `None` instead of being silently served. |
+| `services/market_data.py` | Fixed v8 API fallback to pass `prepost` parameter through (was hardcoded to `false`, losing pre-market data). |
+| `routes/ai_trading.py` | Added intraday data freshness penalty in `scan_intraday_option` and `scan_intraday_stock`: bars >30 min old → skip; >15 min → −3 score; >8 min → −1 score. |
+| `routes/ai_trading.py` | Added 30-minute age limit on signal fallback — previously, when a scan returned 0 results, arbitrarily old signals (even from the previous day) were preserved and could be auto-traded. |
 
 ---
 
