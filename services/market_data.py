@@ -81,6 +81,20 @@ _history_cache_lock = threading.Lock()
 _history_rate_limit_block = {}  # {key: unix_timestamp_until} — shared by price + history
 _history_rate_limit_ttl = 120   # seconds — cooldown after per-symbol 429
 _history_rate_limit_lock = threading.Lock()
+
+# =============================
+# MAX STALENESS LIMITS
+# =============================
+# When rate-limited, stale cache is served as fallback. Without a cap, data could
+# be hours old, causing scanners to score on stale volume/RSI/MACD/VWAP — leading
+# to bad picks.  These constants set the maximum acceptable age for stale data;
+# anything older returns None so the scanner skips the symbol instead of acting on
+# garbage.  Intraday (5m) data goes stale much faster than daily data.
+_PRICE_MAX_STALE = 600        # 10 min — prices older than this are useless for trading
+_HISTORY_MAX_STALE_INTRADAY = 600   # 10 min — 5m/1m bars older than this corrupt VWAP/volume
+_HISTORY_MAX_STALE_DAILY = 3600     # 1 hour — daily bars change less often
+_CHAIN_MAX_STALE = 300        # 5 min — option premiums move fast
+_TICKER_INFO_MAX_STALE = 1800 # 30 min — fundamentals are slow-moving
 _rate_limit_log = {'last_log_ts': 0.0, 'suppressed': 0}
 _rate_limit_log_lock = threading.Lock()
 
@@ -312,18 +326,25 @@ def cached_get_price(symbol, period='1d', interval='1m', prepost=True, use_cache
     
     # Skip if rate-limited (per-symbol or global)
     if _is_rate_limited(symbol):
-        # Return stale cache entry if available (better than nothing)
+        # Return stale cache entry if not too old
         with _price_cache_lock:
             if cache_key in _price_cache:
                 entry = _price_cache[cache_key]
-                return entry['price'], entry.get('hist')
+                stale_age = (now - entry['ts']).total_seconds()
+                if stale_age < _PRICE_MAX_STALE:
+                    return entry['price'], entry.get('hist')
+                _log_fetch_event('stale-reject', f'price-{symbol}',
+                    f"[Stale] Rejecting {symbol} price ({stale_age:.0f}s old > {_PRICE_MAX_STALE}s limit)", cooldown=60)
         return None, None
 
     # Throttle: wait for a token before making the API call
     if not _throttle_acquire(timeout=10):
         with _price_cache_lock:
             if cache_key in _price_cache:
-                return _price_cache[cache_key]['price'], _price_cache[cache_key].get('hist')
+                entry = _price_cache[cache_key]
+                stale_age = (now - entry['ts']).total_seconds()
+                if stale_age < _PRICE_MAX_STALE:
+                    return entry['price'], entry.get('hist')
         return None, None
 
     try:
@@ -378,8 +399,8 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
                 elif (not use_cache) and age < _FORCE_LIVE_MIN_TTL:
                     # force-live but data is very recent — reuse it
                     prices[sym] = entry['price']
-                elif _is_globally_rate_limited():
-                    # Serve stale cache when globally rate-limited (better than nothing)
+                elif _is_globally_rate_limited() and age < _PRICE_MAX_STALE:
+                    # Serve stale cache when globally rate-limited, but only if not too old
                     prices[sym] = entry['price']
                 else:
                     uncached.append(sym)
@@ -716,13 +737,13 @@ def _fetch_option_chain_v7(symbol, expiry):
         return None
 
 
-def _fetch_history_v8_api(symbol, period='3mo', interval='1d'):
+def _fetch_history_v8_api(symbol, period='3mo', interval='1d', prepost=False):
     """Fallback: fetch historical OHLCV data via Yahoo v8 chart API when yfinance is rate-limited.
     Returns a DataFrame compatible with yfinance output, or None."""
     try:
         import requests
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        params = {'range': period, 'interval': interval, 'includePrePost': 'false'}
+        params = {'range': period, 'interval': interval, 'includePrePost': 'true' if prepost else 'false'}
         resp = requests.get(url, params=params, timeout=10, headers={
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         })
@@ -904,14 +925,22 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
             if (now - entry['ts']).total_seconds() < _history_cache_ttl:
                 return entry['data']
 
+    # Determine max staleness based on data granularity
+    _is_intraday = interval in ('1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h')
+    _max_stale = _HISTORY_MAX_STALE_INTRADAY if _is_intraday else _HISTORY_MAX_STALE_DAILY
+
     # Skip if rate-limited (per-symbol or global)
     if _is_rate_limited(symbol):
-        # Return stale cache if available
+        # Return stale cache if not too old
         with _history_cache_lock:
             if cache_key in _history_cache:
-                return _history_cache[cache_key]['data']
+                stale_age = (now - _history_cache[cache_key]['ts']).total_seconds()
+                if stale_age < _max_stale:
+                    return _history_cache[cache_key]['data']
+                _log_fetch_event('stale-reject', f'hist-{symbol}',
+                    f"[Stale] Rejecting {symbol} history ({stale_age:.0f}s old > {_max_stale}s limit, {interval})", cooldown=60)
         # Try v8 API fallback (different rate-limit pool)
-        df = _fetch_history_v8_api(symbol, period=period, interval=interval)
+        df = _fetch_history_v8_api(symbol, period=period, interval=interval, prepost=prepost)
         if df is not None and not df.empty:
             _mark_global_rate_limit_success()  # v8 success = Yahoo partially working
             with _history_cache_lock:
@@ -923,7 +952,9 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
     if not _throttle_acquire(timeout=10):
         with _history_cache_lock:
             if cache_key in _history_cache:
-                return _history_cache[cache_key]['data']
+                stale_age = (now - _history_cache[cache_key]['ts']).total_seconds()
+                if stale_age < _max_stale:
+                    return _history_cache[cache_key]['data']
         return None
 
     try:
@@ -938,16 +969,18 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
         if _is_rate_limit_error(e):
             _mark_rate_limited(symbol)
             _mark_global_rate_limit()
-            # Return stale cache
+            # Return stale cache if not too old
             with _history_cache_lock:
                 if cache_key in _history_cache:
-                    return _history_cache[cache_key]['data']
+                    stale_age = (now - _history_cache[cache_key]['ts']).total_seconds()
+                    if stale_age < _max_stale:
+                        return _history_cache[cache_key]['data']
         else:
             if not _is_expected_no_data_error(e):
                 _log_fetch_event('history-error', symbol, f"[Cache] Error fetching history for {symbol}: {e}", cooldown=180)
     
     # Final fallback: v8 API
-    df = _fetch_history_v8_api(symbol, period=period, interval=interval)
+    df = _fetch_history_v8_api(symbol, period=period, interval=interval, prepost=prepost)
     if df is not None and not df.empty:
         _mark_global_rate_limit_success()  # v8 success = Yahoo partially working; unblock option chain calls
         with _history_cache_lock:
@@ -1033,14 +1066,20 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
     if _is_globally_rate_limited():
         with _chain_cache_lock:
             if cache_key in _chain_cache:
-                return _chain_cache[cache_key]['chain']
+                stale_age = (now - _chain_cache[cache_key]['ts']).total_seconds()
+                if stale_age < _CHAIN_MAX_STALE:
+                    return _chain_cache[cache_key]['chain']
+                _log_fetch_event('stale-reject', f'chain-{symbol}',
+                    f"[Stale] Rejecting {symbol} option chain ({stale_age:.0f}s old > {_CHAIN_MAX_STALE}s limit)", cooldown=60)
         # Fall through to try yfinance anyway
     
     # Throttle: wait for a token
     if not _throttle_acquire(timeout=10):
         with _chain_cache_lock:
             if cache_key in _chain_cache:
-                return _chain_cache[cache_key]['chain']
+                stale_age = (now - _chain_cache[cache_key]['ts']).total_seconds()
+                if stale_age < _CHAIN_MAX_STALE:
+                    return _chain_cache[cache_key]['chain']
         return None
 
     try:
@@ -1067,10 +1106,12 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
             _chain_cache[cache_key] = {'chain': chain, 'ts': now}
         return chain
 
-    # Serve stale cache if we have it
+    # Serve stale cache if we have it (with max staleness)
     with _chain_cache_lock:
         if cache_key in _chain_cache:
-            return _chain_cache[cache_key]['chain']
+            stale_age = (now - _chain_cache[cache_key]['ts']).total_seconds()
+            if stale_age < _CHAIN_MAX_STALE:
+                return _chain_cache[cache_key]['chain']
     return None
 
 
@@ -1086,17 +1127,21 @@ def cached_get_ticker_info(symbol):
 
     # Skip upstream call while rate-limited (per-symbol or global)
     if _is_rate_limited(symbol):
-        # Return stale cache if available
+        # Return stale cache if not too old
         with _ticker_info_lock:
             if symbol in _ticker_info_cache:
-                return _ticker_info_cache[symbol]['info']
+                stale_age = (now - _ticker_info_cache[symbol]['ts']).total_seconds()
+                if stale_age < _TICKER_INFO_MAX_STALE:
+                    return _ticker_info_cache[symbol]['info']
         return {}
     
     # Throttle: wait for a token
     if not _throttle_acquire(timeout=10):
         with _ticker_info_lock:
             if symbol in _ticker_info_cache:
-                return _ticker_info_cache[symbol]['info']
+                stale_age = (now - _ticker_info_cache[symbol]['ts']).total_seconds()
+                if stale_age < _TICKER_INFO_MAX_STALE:
+                    return _ticker_info_cache[symbol]['info']
         return {}
 
     try:

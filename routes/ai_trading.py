@@ -727,6 +727,7 @@ def bot_scan():
             oi = r.get('open_interest', 0)
             rsi_val = r.get('rsi', 50)
             direction = r.get('direction', 'BULLISH')
+            opt_vol = r.get('option_volume', 0)
             # Volume confirmation bonus/penalty
             if vol_ratio >= 1.5:
                 base_conf += 5
@@ -737,11 +738,25 @@ def bot_scan():
                 base_conf += 3
             elif oi < 500:
                 base_conf -= 5
+            # Option volume confirmation — actual trading activity
+            if opt_vol >= 1000:
+                base_conf += 3
+            elif opt_vol < 100:
+                base_conf -= 3
             # RSI divergence penalty: buying calls when overbought or puts when oversold
             if direction == 'BULLISH' and rsi_val > 70:
                 base_conf -= 8
             elif direction == 'BEARISH' and rsi_val < 30:
                 base_conf -= 8
+            # Bid-ask spread penalty (from scanner data)
+            _spread_pct = 0
+            _bid = r.get('bid', 0)
+            _ask = r.get('ask', 0)
+            _prem = r.get('premium', 0)
+            if _bid > 0 and _ask > 0 and _prem > 0:
+                _spread_pct = (_ask - _bid) / _prem
+                if _spread_pct > 0.25:
+                    base_conf -= 5  # Wide spread = poor fills
             confidence = min(95, max(40, base_conf))
             
             # FIX 3: Skip options with no liquidity (OI < 100 AND stock vol dead)
@@ -1421,18 +1436,26 @@ def _bot_auto_cycle_inner():
                                 pos_atr = entry_price * 0.015
 
                         # Tiered ATR multiplier based on profit level
-                        if profit_pct < 0.10:
-                            # <10% profit: wide trailing, give room to breathe
-                            atr_multiplier = 3.5 if is_option else 2.5
+                        # CRITICAL FIX: For options with small profit (<5%), use a
+                        # tighter trailing so tiny gains aren't given back entirely.
+                        # Today's IWM/ORCL/JPM all went from +2-5% to -10% because
+                        # the 3.5x ATR trailing was too wide for thin profits.
+                        if is_option and profit_pct < 0.05:
+                            # Very small option profit: trail at breakeven + small buffer
+                            # This ensures we don't turn winners into losers
+                            atr_multiplier = 2.0
+                        elif profit_pct < 0.10:
+                            # <10% profit: give room to breathe
+                            atr_multiplier = 3.0 if is_option else 2.5
                         elif profit_pct < 0.25:
                             # 10-25% profit: medium trailing
-                            atr_multiplier = 3.0 if is_option else 2.0
+                            atr_multiplier = 2.5 if is_option else 2.0
                         elif profit_pct < 0.50:
                             # 25-50% profit: start tightening to lock gains
-                            atr_multiplier = 2.5 if is_option else 1.8
+                            atr_multiplier = 2.0 if is_option else 1.8
                         else:
                             # >50% profit: big runner, protect but give room
-                            atr_multiplier = 2.0 if is_option else 1.5
+                            atr_multiplier = 1.8 if is_option else 1.5
 
                         # TREND BONUS: If trend is in our favor, widen trailing by 30%
                         if _trend_aligned:
@@ -1499,24 +1522,35 @@ def _bot_auto_cycle_inner():
             exit_price = current_price
             
             # ===== FIX 2: SIGNAL REVERSAL DETECTION =====
-            # If the scanner's latest signals flip direction against an open position, close it early
-            # rather than waiting for stop loss to be hit (prevents riding losing trades down)
+            # Only close on reversal if the OPPOSITE signal is STRONG (score >= 10, confidence >= 85).
+            # Weak reversals (score 7-9) are noise — they caused huge losses on PLTR/COIN today.
+            # Also require the position to be held at least 30 min before honoring reversals.
             cached_signals = bot_state.get('signals', [])
             if not exit_reason and not _in_grace_period and is_option and cached_signals:
+                _REVERSAL_MIN_SCORE = 10       # Only trust strong reversal signals
+                _REVERSAL_MIN_CONFIDENCE = 85  # High confidence required
+                _REVERSAL_MIN_HOLD_MINUTES = 30  # Don't flip on fresh positions
                 pos_opt_type = pos.get('option_type', '').lower()
                 for sig in cached_signals:
                     if sig.get('symbol') == symbol:
                         sig_direction = sig.get('direction', '').upper()
-                        if pos_opt_type == 'call' and sig_direction == 'BEARISH':
+                        sig_score = int(sig.get('score', 0))
+                        sig_conf = int(sig.get('confidence', 0))
+                        _held_long_enough = _pos_age_seconds >= (_REVERSAL_MIN_HOLD_MINUTES * 60)
+                        _strong_reversal = sig_score >= _REVERSAL_MIN_SCORE and sig_conf >= _REVERSAL_MIN_CONFIDENCE
+                        if pos_opt_type == 'call' and sig_direction == 'BEARISH' and _strong_reversal and _held_long_enough:
                             exit_reason = 'SIGNAL_REVERSAL'
                             exit_price = current_price
-                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding CALL but scanner now BEARISH (score={sig.get('score', 0)})")
+                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding CALL but scanner now BEARISH (score={sig_score}, conf={sig_conf}%)")
                             break
-                        elif pos_opt_type == 'put' and sig_direction == 'BULLISH':
+                        elif pos_opt_type == 'put' and sig_direction == 'BULLISH' and _strong_reversal and _held_long_enough:
                             exit_reason = 'SIGNAL_REVERSAL'
                             exit_price = current_price
-                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding PUT but scanner now BULLISH (score={sig.get('score', 0)})")
+                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding PUT but scanner now BULLISH (score={sig_score}, conf={sig_conf}%)")
                             break
+                        elif (pos_opt_type == 'call' and sig_direction == 'BEARISH') or (pos_opt_type == 'put' and sig_direction == 'BULLISH'):
+                            # Weak reversal — log but don't close
+                            print(f"⚠️ Weak reversal signal for {pos.get('contract', symbol)} (score={sig_score}, conf={sig_conf}%, held={_pos_age_seconds//60:.0f}m) — HOLDING")
             
             # Track whether stop was trailed into profit (for exit reason labeling)
             _stop_is_trailing = (stop_loss > entry_price) if side == 'LONG' else (0 < stop_loss < entry_price)
@@ -2127,9 +2161,22 @@ def _bot_auto_cycle_inner():
                 bot_state['signals'] = signals
             else:
                 # Preserve previous signals when scan finds nothing (e.g. rate-limited)
+                # but only if they're less than 30 minutes old — stale signals cause bad trades
                 signals = bot_state.get('signals', [])
                 if signals:
-                    print("🤖 Scan returned 0 results; keeping previous cached signals")
+                    last_scan_str = bot_state.get('last_scan')
+                    _signals_age = 9999
+                    if last_scan_str:
+                        try:
+                            _signals_age = (datetime.now() - datetime.fromisoformat(last_scan_str)).total_seconds()
+                        except Exception:
+                            pass
+                    if _signals_age < 1800:  # 30 minutes
+                        print(f"🤖 Scan returned 0 results; keeping previous signals ({_signals_age:.0f}s old)")
+                    else:
+                        print(f"⚠️ Scan returned 0 results; discarding stale signals ({_signals_age:.0f}s old > 30min)")
+                        signals = []
+                        bot_state['signals'] = []
             save_bot_state()
     else:
         # Use cached signals when rate limited
@@ -2306,6 +2353,50 @@ def _bot_auto_cycle_inner():
             skipped_reasons.append(f"Max daily trades reached ({MAX_DAILY_TRADES})")
             execution_signals = []  # Skip execution only; keep display signals
         
+        # ===== DAILY DRAWDOWN CIRCUIT BREAKER =====
+        # If today's realized losses exceed threshold, stop opening new trades.
+        # This prevents compounding losses on bad days (e.g., direction flips).
+        MAX_DAILY_DRAWDOWN_PCT = 5.0  # Max 5% portfolio loss per day
+        MAX_DAILY_DRAWDOWN_ABS = 3000  # Hard dollar cap
+        today_realized_loss = 0.0
+        for t in account.get('trades', []):
+            ts = t.get('timestamp', '')
+            if ts.startswith(today_str) and t.get('pnl') is not None:
+                today_realized_loss += float(t.get('pnl', 0))
+        _day_start_eq = bot_state.get('day_start_equity', float(account.get('balance', 10000)))
+        _drawdown_pct = abs(today_realized_loss / _day_start_eq * 100) if _day_start_eq > 0 and today_realized_loss < 0 else 0
+        if today_realized_loss < -MAX_DAILY_DRAWDOWN_ABS or _drawdown_pct >= MAX_DAILY_DRAWDOWN_PCT:
+            skipped_reasons.append(f"DAILY DRAWDOWN BREAKER: Today's P&L ${today_realized_loss:.2f} ({_drawdown_pct:.1f}%) exceeds limit — no new trades")
+            print(f"\U0001f6d1 DAILY DRAWDOWN CIRCUIT BREAKER: P&L ${today_realized_loss:.2f} ({_drawdown_pct:.1f}%) — halting new entries")
+            execution_signals = []
+        
+        # ===== CONSECUTIVE LOSS CIRCUIT BREAKER =====
+        # If last N trades were all losses, pause to avoid tilt/chop.
+        MAX_CONSECUTIVE_LOSSES = 3
+        _recent_exits = sorted(
+            [t for t in account.get('trades', [])
+             if t.get('timestamp', '').startswith(today_str)
+             and t.get('pnl') is not None
+             and t.get('auto_exit')],
+            key=lambda t: t.get('timestamp', ''),
+            reverse=True
+        )
+        _consec_losses = 0
+        for t in _recent_exits:
+            if float(t.get('pnl', 0)) < 0:
+                _consec_losses += 1
+            else:
+                break
+        if _consec_losses >= MAX_CONSECUTIVE_LOSSES and execution_signals:
+            skipped_reasons.append(f"CONSECUTIVE LOSS BREAKER: {_consec_losses} losses in a row — pausing 15 min")
+            print(f"\U0001f6d1 CONSECUTIVE LOSS BREAKER: {_consec_losses} straight losses — pausing entries")
+            # Check if enough time has passed since last loss to resume
+            if _recent_exits:
+                _last_loss_time = datetime.fromisoformat(_recent_exits[0].get('timestamp', datetime.now().isoformat()))
+                _mins_since_last_loss = (datetime.now() - _last_loss_time).total_seconds() / 60
+                if _mins_since_last_loss < 15:
+                    execution_signals = []
+
         # ===== MARKET REGIME FILTER =====
         # Check SPY trend to avoid trading CALLs in bearish conditions
         _market_regime = 'neutral'  # default: allow all
@@ -2390,7 +2481,34 @@ def _bot_auto_cycle_inner():
             if sym_trade_counts.get(sym, 0) >= MAX_PER_SYMBOL:
                 skipped_reasons.append(f"{sym}: Max {MAX_PER_SYMBOL} entries/symbol/day reached")
                 continue
-            
+
+            # ===== DIRECTION FLIP COOLDOWN =====
+            # If we already traded this symbol in the OPPOSITE direction today, require
+            # a longer cooldown (60 min) before flipping. This prevents the
+            # call->put->call whipsaw pattern that destroyed COIN/SLV today.
+            if is_option_signal:
+                new_opt_type = signal.get('option_type', '').lower()
+                _had_opposite_today = False
+                for t in account.get('trades', []):
+                    if (t.get('timestamp', '').startswith(today_str)
+                        and t.get('symbol') == sym
+                        and t.get('instrument_type') == 'option'):
+                        prev_opt_type = t.get('option_type', '').lower()
+                        if prev_opt_type and prev_opt_type != new_opt_type:
+                            _had_opposite_today = True
+                            _opposite_ts = t.get('timestamp', '')
+                            break
+                if _had_opposite_today:
+                    try:
+                        _flip_time = datetime.fromisoformat(_opposite_ts)
+                        _mins_since_flip = (datetime.now() - _flip_time).total_seconds() / 60
+                        DIRECTION_FLIP_COOLDOWN = 60  # 60 min cooldown for direction flips
+                        if _mins_since_flip < DIRECTION_FLIP_COOLDOWN:
+                            skipped_reasons.append(f"{sym}: Direction flip cooldown — traded opposite direction {_mins_since_flip:.0f}m ago (need {DIRECTION_FLIP_COOLDOWN}m)")
+                            continue
+                    except Exception:
+                        pass
+
             # ===== MARKET REGIME FILTER (direction gating) =====
             signal_direction = signal.get('option_type', signal.get('action', '')).lower()
             if _market_regime == 'bearish' and signal_direction in ('call', 'BUY'):
@@ -3616,6 +3734,24 @@ def scan_intraday_stock(symbol):
         if df is None or df.empty or len(df) < 50:
             return None
 
+        # Check data freshness for intraday scanning
+        _data_stale_penalty = 0
+        try:
+            _last_bar_ts = df.index[-1]
+            if hasattr(_last_bar_ts, 'tz_localize') and _last_bar_ts.tzinfo is None:
+                _last_bar_ts = _last_bar_ts.tz_localize('America/New_York')
+            elif hasattr(_last_bar_ts, 'tz_convert'):
+                _last_bar_ts = _last_bar_ts.tz_convert('America/New_York')
+            _bar_age_min = (datetime.now(ZoneInfo('America/New_York')) - _last_bar_ts).total_seconds() / 60
+            if _bar_age_min > 30:
+                return None
+            elif _bar_age_min > 15:
+                _data_stale_penalty = -3
+            elif _bar_age_min > 8:
+                _data_stale_penalty = -1
+        except Exception:
+            pass
+
         # --- VWAP ---
         df['Typical'] = (df['High'] + df['Low'] + df['Close']) / 3
         df['Date'] = df.index.date
@@ -3675,6 +3811,11 @@ def scan_intraday_stock(symbol):
         score = 0
         signals = []
         direction = None
+
+        # Penalty for stale cached data
+        if _data_stale_penalty:
+            score += _data_stale_penalty
+            signals.append(f'⚠️ Stale Data ({_bar_age_min:.0f}m)')
 
         # VWAP position
         above_vwap = price > vwap
@@ -3876,6 +4017,26 @@ def scan_intraday_option(symbol):
         if df is None or df.empty or len(df) < 50:
             return None
 
+        # Check data freshness: if the newest bar is too old, the data is stale
+        # and momentum indicators (RSI, VWAP, volume) are unreliable for intraday.
+        _data_stale_penalty = 0
+        try:
+            _last_bar_ts = df.index[-1]
+            if hasattr(_last_bar_ts, 'tz_localize') and _last_bar_ts.tzinfo is None:
+                _last_bar_ts = _last_bar_ts.tz_localize('America/New_York')
+            elif hasattr(_last_bar_ts, 'tz_convert'):
+                _last_bar_ts = _last_bar_ts.tz_convert('America/New_York')
+            _bar_age_min = (datetime.now(ZoneInfo('America/New_York')) - _last_bar_ts).total_seconds() / 60
+            if _bar_age_min > 30:
+                # Data is very stale (>30 min) — skip entirely
+                return None
+            elif _bar_age_min > 15:
+                _data_stale_penalty = -3  # Heavy penalty: indicators are unreliable
+            elif _bar_age_min > 8:
+                _data_stale_penalty = -1  # Moderate penalty
+        except Exception:
+            pass  # If we can't check, proceed without penalty
+
         # VWAP
         df['Typical'] = (df['High'] + df['Low'] + df['Close']) / 3
         df['Date'] = df.index.date
@@ -4035,6 +4196,11 @@ def scan_intraday_option(symbol):
         score = 0
         signals = []
 
+        # Penalty for stale cached data (reduced confidence in indicators)
+        if _data_stale_penalty:
+            score += _data_stale_penalty
+            signals.append(f'⚠️ Stale Data ({_bar_age_min:.0f}m)')
+
         # Penalty for EMA/MACD mild conflict (passed the filter but still not ideal)
         if ema_macd_conflict:
             score -= 1
@@ -4137,10 +4303,15 @@ def scan_intraday_option(symbol):
             elif spread_pct < 0.10:
                 signals.append('✅ Tight Spread')
 
-        # R:R on premium
-        sl_premium = round(premium * 0.50, 2)  # 50% stop
-        tp_1 = round(premium * 2.0, 2)          # 2x target
-        tp_2 = round(premium * 3.0, 2)          # 3x target
+        # R:R on premium — use ATR-based stop instead of fixed 50%
+        # Fixed 50% stop is too wide for high-premium options and too tight for cheap ones.
+        # ATR-based stop adapts to actual volatility.
+        _atr_stop_pct = min(0.50, max(0.20, (atr / price) * 2.5)) if price > 0 else 0.50
+        sl_premium = round(premium * (1 - _atr_stop_pct), 2)  # ATR-scaled stop
+        sl_premium = max(sl_premium, round(premium * 0.20, 2))  # Floor: never less than 20% stop
+        _risk = premium - sl_premium
+        tp_1 = round(premium + (_risk * 2.0), 2)   # 1:2 R:R target
+        tp_2 = round(premium + (_risk * 3.0), 2)   # 1:3 R:R target
 
         dte = (datetime.strptime(best_exp, '%Y-%m-%d') - today_dt).days
 
