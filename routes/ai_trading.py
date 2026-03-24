@@ -1522,14 +1522,14 @@ def _bot_auto_cycle_inner():
             exit_price = current_price
             
             # ===== FIX 2: SIGNAL REVERSAL DETECTION =====
-            # Only close on reversal if the OPPOSITE signal is STRONG (score >= 10, confidence >= 85).
-            # Weak reversals (score 7-9) are noise — they caused huge losses on PLTR/COIN today.
-            # Also require the position to be held at least 30 min before honoring reversals.
+            # Only close on reversal if the OPPOSITE signal is STRONG (score >= 12, confidence >= 90).
+            # Weak reversals (score 7-11) are noise — they caused huge losses on PLTR/COIN/AMD.
+            # Also require the position to be held at least 60 min before honoring reversals.
             cached_signals = bot_state.get('signals', [])
             if not exit_reason and not _in_grace_period and is_option and cached_signals:
-                _REVERSAL_MIN_SCORE = 10       # Only trust strong reversal signals
-                _REVERSAL_MIN_CONFIDENCE = 85  # High confidence required
-                _REVERSAL_MIN_HOLD_MINUTES = 30  # Don't flip on fresh positions
+                _REVERSAL_MIN_SCORE = 12       # Only trust very strong reversal signals
+                _REVERSAL_MIN_CONFIDENCE = 90  # Very high confidence required
+                _REVERSAL_MIN_HOLD_MINUTES = 60  # Don't flip on positions held < 1 hour
                 pos_opt_type = pos.get('option_type', '').lower()
                 for sig in cached_signals:
                     if sig.get('symbol') == symbol:
@@ -1558,7 +1558,7 @@ def _bot_auto_cycle_inner():
             # ===== MAX LOSS % GUARD FOR OPTIONS =====
             # Prevents catastrophic option losses (e.g., -50% GOOGL calls)
             if not exit_reason and is_option and entry_price > 0:
-                max_option_loss_pct = float(bot_state['settings'].get('max_option_loss_pct', 40)) / 100
+                max_option_loss_pct = float(bot_state['settings'].get('max_option_loss_pct', 30)) / 100
                 if side == 'LONG':
                     option_loss_pct = (entry_price - current_price) / entry_price
                 else:
@@ -1575,7 +1575,7 @@ def _bot_auto_cycle_inner():
             # max_loss_per_trade. This guard only fires if price gaps past the stop.
             if not exit_reason and entry_price > 0:
                 max_loss_dollars = float(bot_state['settings'].get('max_loss_per_trade', 500))
-                gap_buffer = 1.5  # Allow 50% buffer over planned max loss before hard exit
+                gap_buffer = 1.2  # Allow 20% buffer over planned max loss before hard exit
                 if max_loss_dollars > 0:
                     if side == 'LONG':
                         unrealized_loss = (entry_price - current_price) * quantity * multiplier
@@ -2346,8 +2346,19 @@ def _bot_auto_cycle_inner():
                     prev = recent_auto_exits.get(sym)
                     if not prev or ts > prev:
                         recent_auto_exits[sym] = ts
-        COOLDOWN_MINUTES = 30
-        REENTRY_COOLDOWN_MINUTES = int(bot_state['settings'].get('reentry_cooldown_minutes', 10))
+        COOLDOWN_MINUTES = 45
+        REENTRY_COOLDOWN_MINUTES = int(bot_state['settings'].get('reentry_cooldown_minutes', 15))
+        
+        # ===== PER-SYMBOL DAILY LOSS CAP =====
+        # If we've already lost > $500 on a symbol today, don't trade it again.
+        # Prevents the AMD/TSLA pattern: keep re-entering a loser and compounding losses.
+        _PER_SYMBOL_DAILY_LOSS_CAP = 500
+        per_symbol_daily_pnl = {}
+        for t in account.get('trades', []):
+            if t.get('timestamp', '').startswith(today_str) and t.get('pnl') is not None:
+                _sym = t.get('symbol', '')
+                if _sym:
+                    per_symbol_daily_pnl[_sym] = per_symbol_daily_pnl.get(_sym, 0) + float(t.get('pnl', 0))
         
         if daily_trade_count >= MAX_DAILY_TRADES:
             skipped_reasons.append(f"Max daily trades reached ({MAX_DAILY_TRADES})")
@@ -2356,8 +2367,8 @@ def _bot_auto_cycle_inner():
         # ===== DAILY DRAWDOWN CIRCUIT BREAKER =====
         # If today's realized losses exceed threshold, stop opening new trades.
         # This prevents compounding losses on bad days (e.g., direction flips).
-        MAX_DAILY_DRAWDOWN_PCT = 5.0  # Max 5% portfolio loss per day
-        MAX_DAILY_DRAWDOWN_ABS = 3000  # Hard dollar cap
+        MAX_DAILY_DRAWDOWN_PCT = 3.0  # Max 3% portfolio loss per day
+        MAX_DAILY_DRAWDOWN_ABS = 2000  # Hard dollar cap (lowered from 3000)
         today_realized_loss = 0.0
         for t in account.get('trades', []):
             ts = t.get('timestamp', '')
@@ -2372,7 +2383,7 @@ def _bot_auto_cycle_inner():
         
         # ===== CONSECUTIVE LOSS CIRCUIT BREAKER =====
         # If last N trades were all losses, pause to avoid tilt/chop.
-        MAX_CONSECUTIVE_LOSSES = 3
+        MAX_CONSECUTIVE_LOSSES = 2
         _recent_exits = sorted(
             [t for t in account.get('trades', [])
              if t.get('timestamp', '').startswith(today_str)
@@ -2477,6 +2488,12 @@ def _bot_auto_cycle_inner():
             # --- PER-SYMBOL OVERTRADING GUARDS ---
             sym = signal['symbol']
             
+            # ===== PER-SYMBOL DAILY LOSS CAP CHECK =====
+            # If we've lost > $500 on this symbol today, don't trade it again
+            if per_symbol_daily_pnl.get(sym, 0) < -_PER_SYMBOL_DAILY_LOSS_CAP:
+                skipped_reasons.append(f"{sym}: Per-symbol daily loss cap — already lost ${abs(per_symbol_daily_pnl[sym]):.0f} today (limit: ${_PER_SYMBOL_DAILY_LOSS_CAP})")
+                continue
+            
             # Check per-symbol daily cap (avoid repeat SL hits on same ticker)
             if sym_trade_counts.get(sym, 0) >= MAX_PER_SYMBOL:
                 skipped_reasons.append(f"{sym}: Max {MAX_PER_SYMBOL} entries/symbol/day reached")
@@ -2485,10 +2502,14 @@ def _bot_auto_cycle_inner():
             # ===== DIRECTION FLIP COOLDOWN =====
             # If we already traded this symbol in the OPPOSITE direction today, require
             # a longer cooldown (60 min) before flipping. This prevents the
-            # call->put->call whipsaw pattern that destroyed COIN/SLV today.
+            # call->put->call whipsaw pattern that destroyed COIN/SLV/TSLA/AMD.
+            # FIX: Use the LATEST opposite-direction trade timestamp (not first),
+            # and block same-symbol direction flip entirely if we already lost on it today.
             if is_option_signal:
                 new_opt_type = signal.get('option_type', '').lower()
                 _had_opposite_today = False
+                _opposite_ts = ''
+                _lost_on_opposite = False
                 for t in account.get('trades', []):
                     if (t.get('timestamp', '').startswith(today_str)
                         and t.get('symbol') == sym
@@ -2496,13 +2517,21 @@ def _bot_auto_cycle_inner():
                         prev_opt_type = t.get('option_type', '').lower()
                         if prev_opt_type and prev_opt_type != new_opt_type:
                             _had_opposite_today = True
-                            _opposite_ts = t.get('timestamp', '')
-                            break
+                            # Use the LATEST timestamp, not first
+                            if t.get('timestamp', '') > _opposite_ts:
+                                _opposite_ts = t.get('timestamp', '')
+                            # Check if we lost money on the opposite direction
+                            if t.get('pnl') is not None and float(t.get('pnl', 0)) < 0:
+                                _lost_on_opposite = True
+                if _lost_on_opposite:
+                    # Hard block: never flip direction on a symbol we already lost on today
+                    skipped_reasons.append(f"{sym}: Direction flip BLOCKED — already lost on opposite direction today")
+                    continue
                 if _had_opposite_today:
                     try:
                         _flip_time = datetime.fromisoformat(_opposite_ts)
                         _mins_since_flip = (datetime.now() - _flip_time).total_seconds() / 60
-                        DIRECTION_FLIP_COOLDOWN = 60  # 60 min cooldown for direction flips
+                        DIRECTION_FLIP_COOLDOWN = 120  # 2 hour cooldown for direction flips
                         if _mins_since_flip < DIRECTION_FLIP_COOLDOWN:
                             skipped_reasons.append(f"{sym}: Direction flip cooldown — traded opposite direction {_mins_since_flip:.0f}m ago (need {DIRECTION_FLIP_COOLDOWN}m)")
                             continue
