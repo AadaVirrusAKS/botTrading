@@ -159,9 +159,9 @@ class TradeAlertMonitor:
             return entry_premium
     
     def check_mandatory_exit_time(self):
-        """Check if it's time for mandatory exit (2:50 PM CT = 3:50 PM ET)"""
+        """Check if it's time for mandatory exit (3:00 PM CT = 4:00 PM ET)"""
         now = datetime.now()
-        exit_time = dt_time(14, 50)  # 2:50 PM CT
+        exit_time = dt_time(15, 0)  # 3:00 PM CT
         current_time = now.time()
         
         return current_time >= exit_time
@@ -302,7 +302,7 @@ class TradeAlertMonitor:
         
         # Time remaining
         now = datetime.now()
-        exit_time = now.replace(hour=14, minute=50, second=0)
+        exit_time = now.replace(hour=15, minute=0, second=0)
         if now < exit_time:
             time_remaining = exit_time - now
             hours = time_remaining.seconds // 3600

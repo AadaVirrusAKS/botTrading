@@ -14,14 +14,14 @@ warnings.filterwarnings('ignore')
 
 # -----------------------------
 # NEXT DAY OPTIONS PREDICTION SYSTEM
-# Predicts trades for next day expiry at 2:50 PM CT (3:50 PM ET)
+# Predicts trades for next day expiry at 3:00 PM CT (4:00 PM ET)
 # Target: 1:3 or 1:5 Risk/Reward Ratio
 # -----------------------------
 
 class NextDayOptionsPredictor:
     def __init__(self, real_time_mode=False):
         """Initialize predictor for next day options"""
-        self.prediction_time = "2:50 PM CT (3:50 PM ET)"
+        self.prediction_time = "3:00 PM CT (4:00 PM ET)"
         self.min_rr = 3.0  # Minimum 1:3 ratio
         self.target_rr = 5.0  # Target 1:5 ratio
         self.real_time_mode = real_time_mode
@@ -508,7 +508,7 @@ class NextDayOptionsPredictor:
                     while next_day.weekday() >= 5:
                         next_day += timedelta(days=1)
                 expiry_label = '0DTE (Same Day)'
-                exit_time = '2:50 PM CT / 3:50 PM ET'
+                exit_time = '3:00 PM CT / 4:00 PM ET'
             elif expiry_type == 'weekly':
                 # Find next Friday
                 days_until_friday = (4 - today.weekday()) % 7
@@ -516,7 +516,7 @@ class NextDayOptionsPredictor:
                     days_until_friday = 7  # Next Friday if current Friday after 3 PM
                 next_day = today + timedelta(days=max(days_until_friday, 1))
                 expiry_label = 'Weekly (Friday)'
-                exit_time = '3:00 PM ET Friday'
+                exit_time = '3:00 PM CT / 4:00 PM ET Friday'
             elif expiry_type == 'monthly':
                 # Find 3rd Friday of current/next month
                 import calendar
@@ -550,14 +550,14 @@ class NextDayOptionsPredictor:
                     third_friday = fridays[2]
                     next_day = datetime(year, month, third_friday)
                 expiry_label = 'Monthly (3rd Friday)'
-                exit_time = '3:00 PM ET on Expiry'
+                exit_time = '3:00 PM CT / 4:00 PM ET on Expiry'
             else:  # 'daily' or default
                 next_day = today + timedelta(days=1)
                 # Skip weekends
                 while next_day.weekday() >= 5:
                     next_day += timedelta(days=1)
                 expiry_label = 'Next Day (1DTE)'
-                exit_time = '2:50 PM CT / 3:50 PM ET'
+                exit_time = '3:00 PM CT / 4:00 PM ET'
             
             expiry_date = next_day.strftime('%m/%d/%Y')
             expiry_day = next_day.strftime('%a')
@@ -647,7 +647,7 @@ class NextDayOptionsPredictor:
         print(f"   ✅ Take 1:3 profit: Close 50% of position")
         print(f"   ✅ Take 1:5 profit: Close remaining 50%")
         print(f"   🛑 Stop Loss: -50% from entry")
-        print(f"   ⏰ MANDATORY EXIT: 2:50 PM CT (3:50 PM ET) - No exceptions!")
+        print(f"   ⏰ MANDATORY EXIT: 3:00 PM CT (4:00 PM ET) - No exceptions!")
         
         # Risk calculations
         cost_1_contract = prediction['estimated_premium'] * 100
@@ -803,9 +803,9 @@ class NextDayOptionsPredictor:
                             if setup['position_size'] > 0:
                                 print(f"   P&L: ${setup['pnl']:.2f}")
                 
-                # Check if we should exit (2:50 PM CT = 3:50 PM ET)
+                # Check if we should exit (3:00 PM CT = 4:00 PM ET)
                 current_time = datetime.now().time()
-                exit_time = datetime.strptime('14:50', '%H:%M').time()  # 2:50 PM CT
+                exit_time = datetime.strptime('15:00', '%H:%M').time()  # 3:00 PM CT
                 if current_time >= exit_time:
                     print(f"\n⚠️  EXIT TIME REACHED - CLOSE ALL POSITIONS!")
                     self.monitoring = False
@@ -944,7 +944,7 @@ if __name__ == "__main__":
     print(f"{'=' * 100}")
     print(f"1. These are PREDICTIONS based on technical analysis")
     print(f"2. Options can move quickly - monitor every 15-30 minutes")
-    print(f"3. MUST exit by 2:50 PM CT (3:50 PM ET) tomorrow")
+    print(f"3. MUST exit by 3:00 PM CT (4:00 PM ET) tomorrow")
     print(f"4. Use stop loss discipline - protect your capital")
     print(f"5. Take partial profits at 1:3, let rest run to 1:5")
     print(f"6. Market conditions can change overnight - reassess in morning")

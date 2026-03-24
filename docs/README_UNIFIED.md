@@ -258,7 +258,7 @@ python3 unified_trading_system.py
 - Monitor alerts
 - Take profits at targets
 - Respect stop losses
-- Exit options by 2:50 PM CT
+- Exit options by 3:00 PM CT
 
 ---
 
@@ -311,7 +311,7 @@ Edit `score_asset()` method (lines 145-200) to change criteria.
 ✅ Trade highest volatility picks (TSLA, NVDA)  
 ✅ Use 1DTE for next-day trades  
 ✅ Take profits at 1:2 minimum  
-✅ Never hold past 2:50 PM CT  
+✅ Never hold past 3:00 PM CT  
 
 ### For Stocks:
 ✅ Focus on high-score picks (9-10)  
@@ -330,7 +330,7 @@ Edit `score_asset()` method (lines 145-200) to change criteria.
 ## ⚠️ Important Notes
 
 ### Options Trading:
-1. **Exit Time**: MUST close by 2:50 PM CT (3:50 PM ET)
+1. **Exit Time**: MUST close by 3:00 PM CT (4:00 PM ET)
 2. **Premium Cap**: Automatically kept < 1.5% of stock price
 3. **OTM Strikes**: Used for affordability
 4. **Risk**: Never risk more than you can afford to lose

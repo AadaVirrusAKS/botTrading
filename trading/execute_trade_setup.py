@@ -484,7 +484,7 @@ class TradeExecutor:
         print(f"   Risk/Reward: 1:2 minimum")
         
         print(f"\n⏰ EXIT RULES:")
-        print(f"   MANDATORY EXIT: 2:50 PM CT (3:50 PM ET)")
+        print(f"   MANDATORY EXIT: 3:00 PM CT (4:00 PM ET)")
         print(f"   Monitor every 15-30 minutes")
         print(f"   Take partials at each target")
         print(f"   Trail stop after Target 1 hits")
@@ -517,7 +517,7 @@ class TradeExecutor:
         print(f"  [ ] Set alert at ${setup['target_2']:.2f} (Target 2)")
         print(f"  [ ] Set alert at ${setup['target_3']:.2f} (Target 3)")
         print(f"  [ ] Set stop loss at ${setup['stop_loss_premium']:.2f}")
-        print(f"  [ ] Set calendar reminder for 2:50 PM CT exit")
+        print(f"  [ ] Set calendar reminder for 3:00 PM CT exit")
         print(f"{'=' * 100}")
     
     def run(self):
@@ -560,7 +560,7 @@ if __name__ == "__main__":
     print(f"2. 📊 Verify option liquidity and bid-ask spread")
     print(f"3. 🎯 Use LIMIT orders - never market orders")
     print(f"4. 🛑 Stick to stop loss - no exceptions")
-    print(f"5. ⏰ MUST exit by 2:50 PM CT (3:50 PM ET)")
+    print(f"5. ⏰ MUST exit by 3:00 PM CT (4:00 PM ET)")
     print(f"6. 📈 Monitor position every 15-30 minutes")
     print(f"7. 💰 Take partial profits at each target")
     print(f"8. 🔄 Options premium can change rapidly")

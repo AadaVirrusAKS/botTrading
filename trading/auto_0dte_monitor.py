@@ -23,7 +23,7 @@ except ImportError:
 
 # -----------------------------
 # AUTOMATED 0DTE TRADER & MONITOR
-# Executes SPY & QQQ PUT trades and monitors until 2:50 PM CT
+# Executes SPY & QQQ PUT trades and monitors until 3:00 PM CT
 # Target: 1:3 Risk/Reward Ratio
 # -----------------------------
 
@@ -33,8 +33,8 @@ class Auto0DTEMonitor:
         self.et_tz = pytz.timezone('US/Eastern')
         self.ct_tz = pytz.timezone('US/Central')
         self.positions = []
-        self.exit_hour_et = 15  # 3 PM ET
-        self.exit_minute_et = 50  # 3:50 PM ET
+        self.exit_hour_et = 16  # 4 PM ET
+        self.exit_minute_et = 0  # 4:00 PM ET
         self.monitor_interval = 300  # 5 minutes
         
     def get_live_price(self, ticker):
@@ -294,7 +294,7 @@ class Auto0DTEMonitor:
         print("\n" + "="*100)
         print("🤖 AUTOMATED 0DTE TRADER - SPY & QQQ PUTS")
         print("="*100)
-        print(f"⏰ Exit Time: 2:50 PM CT (3:50 PM ET)")
+        print(f"⏰ Exit Time: 3:00 PM CT (4:00 PM ET)")
         print(f"🔄 Monitor Interval: {self.monitor_interval//60} minutes")
         print("="*100)
         

@@ -328,7 +328,7 @@ class TripleConfirmationIntraday:
         
         print("\n⏰ INTRADAY TRADING RULES:")
         print("   • Enter within 5-10 minutes of scan")
-        print("   • Close ALL positions by 3:50 PM ET")
+        print("   • Close ALL positions by 4:00 PM ET")
         print("   • Use tight stops - SuperTrend level")
         print("   • Take profits quickly at T1/T2")
         print("   • Re-scan every 1-2 hours\n")

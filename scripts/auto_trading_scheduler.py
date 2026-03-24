@@ -31,13 +31,13 @@ def get_market_status():
     if hour >= 16:
         return "CLOSED", f"Market closed at 4:00 PM (Currently {now.strftime('%I:%M %p')})"
     
-    # Force close time (3:45 PM)
-    if hour == 15 and minute >= 45:
-        return "FORCE_CLOSE", "CRITICAL: 15 minutes until market close - CLOSE ALL POSITIONS NOW!"
-    
-    # Late afternoon warning (3:00 PM)
+    # Force close time (3:00 PM CT / 4:00 PM ET)
     if hour >= 15:
-        return "CLOSING_SOON", f"Market closing in {60 - minute} minutes - Start closing positions"
+        return "FORCE_CLOSE", "CRITICAL: Market closing - CLOSE ALL POSITIONS NOW!"
+    
+    # Late afternoon warning (2:45 PM)
+    if hour == 14 and minute >= 45:
+        return "CLOSING_SOON", f"Market closing soon - Start closing positions"
     
     # Normal trading hours
     if (hour == 9 and minute >= 30) or (10 <= hour < 15):
@@ -99,7 +99,7 @@ def main():
     print("  • Check market status every minute")
     print("  • Execute trades at optimal times (10:00 AM)")
     print("  • Monitor positions every 5 minutes")
-    print("  • Force close all positions at 3:45 PM")
+    print("  • Force close all positions at 3:00 PM CT")
     print("=" * 100)
     
     trade_executed_today = False

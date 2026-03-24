@@ -1758,15 +1758,15 @@ def _bot_auto_cycle_inner():
             elif _in_grace_period and not exit_reason:
                 print(f"⏳ {symbol}: In grace period ({_pos_age_seconds:.0f}s/{_POSITION_GRACE_SECONDS}s) — skipping SL/target/trailing checks")
             
-            # TIME-BASED EXIT: Close DAY TRADE positions at 3:45 PM ET
+            # TIME-BASED EXIT: Close DAY TRADE positions at 4:00 PM ET
             # Only applies to positions with trade_type='day', NOT swing trades
             if not exit_reason:
                 try:
                     import pytz
                     et_tz = pytz.timezone('US/Eastern')
                     now_et = datetime.now(et_tz)
-                    # EOD at 3:45 PM ET (15 min before close to ensure fills)
-                    is_eod = (now_et.hour == 15 and now_et.minute >= 45) or now_et.hour >= 16
+                    # EOD at 4:00 PM ET (3:00 PM CT)
+                    is_eod = now_et.hour >= 16
                     
                     # Only close if explicitly marked as day trade
                     trade_type = pos.get('trade_type', 'swing')  # Default to swing if not specified

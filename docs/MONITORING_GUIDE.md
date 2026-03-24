@@ -12,7 +12,7 @@ Automated system that checks for initiated trades and sends alerts every 5-10 mi
 ✅ **Live P&L Updates**: Real-time profit/loss calculations  
 ✅ **Target Alerts**: Notifications when 1:2, 1:3, 1:4 targets hit  
 ✅ **Stop Loss Alerts**: Immediate warning if stop loss triggered  
-✅ **Exit Time Warnings**: Mandatory 2:50 PM CT exit reminders  
+✅ **Exit Time Warnings**: Mandatory 3:00 PM CT exit reminders  
 ✅ **Persistent Storage**: Saves positions to file (survives restarts)  
 
 ### Alert System
@@ -262,8 +262,8 @@ All alerts are logged to `trade_alerts.log`:
 [2025-12-17 11:10:00 AM] 🔔 ALERT #2 - P&L: +32.1%
 [2025-12-17 11:35:00 AM] 🎯 TARGET HIT! SPY 1:2 - Premium: $10.50
 [2025-12-17 12:15:00 PM] 🎯 TARGET HIT! SPY 1:3 - Premium: $15.75
-[2025-12-17 02:50:00 PM] ⏰ MANDATORY EXIT TIME! Close SPY immediately!
-[2025-12-17 02:52:00 PM] ✅ CLOSED: SPY - P&L: $1,280.00 (+123.6%)
+[2025-12-17 03:00:00 PM] ⏰ MANDATORY EXIT TIME! Close SPY immediately!
+[2025-12-17 03:02:00 PM] ✅ CLOSED: SPY - P&L: $1,280.00 (+123.6%)
 ```
 
 ---
@@ -319,7 +319,7 @@ ACTION: Close 33% (sell 0.66 contracts)
 Let rest run to 1:4
 ```
 
-**2:50 PM - Exit Time**
+**3:00 PM - Exit Time**
 ```
 ⏰ MANDATORY EXIT!
 Close remaining 0.68 contracts
@@ -378,9 +378,9 @@ python3 realtime_trade_monitor.py
 ## ⚠️ Important Notes
 
 ### Mandatory Exit Time
-- System warns at 2:50 PM CT (3:50 PM ET)
+- System warns at 3:00 PM CT (4:00 PM ET)
 - **MUST close all positions by then**
-- Options lose value rapidly after 3:50 PM
+- Options lose value rapidly after 4:00 PM ET
 - Never hold 1DTE options to expiration
 
 ### Premium Estimates
@@ -408,7 +408,7 @@ python3 realtime_trade_monitor.py
 2. **Check Alerts Regularly**: Don't ignore notifications
 3. **Take Partial Profits**: Close 33% at each target as recommended
 4. **Respect Stop Loss**: Exit immediately if triggered
-5. **Exit on Time**: Never ignore 2:50 PM warning
+5. **Exit on Time**: Never ignore 3:00 PM CT warning
 6. **Keep Log**: Review `trade_alerts.log` to learn
 7. **Test First**: Run demo before using with real trades
 
@@ -422,7 +422,7 @@ python3 realtime_trade_monitor.py
 | Alert System | ✅ | 5-10 minute notifications |
 | Target Detection | ✅ | Auto-detects target hits |
 | Stop Loss Monitoring | ✅ | Warns if stop triggered |
-| Exit Time Alerts | ✅ | Mandatory 2:50 PM warning |
+| Exit Time Alerts | ✅ | Mandatory 3:00 PM CT warning |
 | P&L Calculation | ✅ | Real-time profit/loss |
 | File Persistence | ✅ | Saves between sessions |
 | Log History | ✅ | Complete audit trail |

@@ -123,7 +123,7 @@ Use `ThreadPoolExecutor(max_workers=15)` for parallel ticker analysis. Add rate 
 stop_loss_options = entry_premium * 0.5   # 50% stop
 targets = [entry * 2, entry * 3, entry * 4]  # 1:2, 1:3, 1:4
 stop_loss_stock = entry - (ATR * 1.5)
-mandatory_exit = "3:45 PM ET"  # Options must close before expiry
+mandatory_exit = \"3:00 PM CT\"  # Options must close before expiry
 ```
 
 ## Testing

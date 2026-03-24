@@ -145,7 +145,7 @@ Max Loss: $99 per contract
 ### Exit Strategy:
 - **Take profits aggressively** on OTM calls
 - Trail stop after Target 1
-- **Never hold past 2:50 PM CT** (time decay accelerates)
+- **Never hold past 3:00 PM CT** (time decay accelerates)
 - Close immediately if stock turns against you
 
 ## 🧪 Live Examples

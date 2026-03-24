@@ -341,8 +341,8 @@ Signals: RSI, MACD, EMA crossovers, volume, ATR, and fundamentals. RSI >80 trigg
 | `trading.autonomous_deepseek_trader` | DeepSeek AI-powered fully autonomous trader (paper/live) |
 | `trading.autonomous_trading_agent` | Rule-based entry/exit with stop-loss and take-profit |
 | `trading.spy_qqq_options_trader` | SPY/QQQ daily options targeting 1:10 R:R |
-| `trading.auto_0dte_monitor` | Autonomous 0DTE PUT trader with monitoring until 2:50 PM CT |
-| `trading.live_0dte_trader` | Live 0DTE options execution until 3:50 PM ET |
+| `trading.auto_0dte_monitor` | Autonomous 0DTE PUT trader with monitoring until 3:00 PM CT |
+| `trading.live_0dte_trader` | Live 0DTE options execution until 4:00 PM ET |
 | `trading.execute_trade_setup` | Real-time options entry/exit setup generator |
 
 ### Risk Defaults
@@ -351,7 +351,7 @@ Signals: RSI, MACD, EMA crossovers, volume, ATR, and fundamentals. RSI >80 trigg
 stop_loss_options  = entry_premium * 0.50    # 50% stop
 take_profit_targets = [entry * 2, entry * 3, entry * 4]  # 1:2, 1:3, 1:4
 stop_loss_stock    = entry - (ATR * 1.5)
-mandatory_exit     = "3:45 PM ET"            # Options close before expiry
+mandatory_exit     = "3:00 PM CT"            # Options close before expiry
 ```
 
 ---

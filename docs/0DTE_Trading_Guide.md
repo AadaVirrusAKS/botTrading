@@ -16,8 +16,8 @@ This automated trading system handles **SPY & QQQ daily expiry (0DTE) options** 
 1. **Market Hours:** 9:30 AM - 4:00 PM ET
 2. **Best Entry Times:** 10:00 AM - 11:30 AM, 2:00 PM - 3:00 PM
 3. **Avoid Entry After:** 3:00 PM (too risky)
-4. **START CLOSING:** 3:00 PM (begin exit process)
-5. **FORCE CLOSE:** 3:45 PM (MANDATORY - all positions must be closed)
+4. **START CLOSING:** 3:00 PM CT (begin exit process)
+5. **FORCE CLOSE:** 3:00 PM CT / 4:00 PM ET (MANDATORY - all positions must be closed)
 6. **OPTIONS EXPIRE:** 4:00 PM (worthless if OTM)
 
 ### Why These Rules?
@@ -58,7 +58,7 @@ The scheduler automatically:
 - Waits until 10:00 AM (optimal entry time)
 - Executes trades
 - Monitors every 5 minutes
-- Closes all positions by 3:45 PM
+- Closes all positions by 3:00 PM CT
 - Stops at 4:00 PM market close
 
 ---
@@ -84,7 +84,7 @@ The scheduler automatically:
 ### Exit Rules:
 1. **Take Profit:** Premium reaches 10x entry (1000% gain)
 2. **Stop Loss:** Premium drops 50% from entry
-3. **Time Stop:** 3:45 PM - FORCE CLOSE ALL
+3. **Time Stop:** 3:00 PM CT - FORCE CLOSE ALL
 
 ---
 
@@ -146,7 +146,7 @@ Loss: $183 (50% loss)
 
 **Scenario C - Time Stop:**
 ```
-3:45 PM: SPY @ $687.50
+3:00 PM CT: SPY @ $687.50
 Premium: $4.20 (up 16%)
 FORCE CLOSE due to market close
 Profit: $57 (16% gain)
@@ -169,7 +169,8 @@ Profit: $57 (16% gain)
 3. **auto_trading_scheduler.py** - Automated scheduler
    - Runs all day with timing logic
    - Auto-executes at optimal times
-   - Force closes before 4:00 PM
+   - Closes all positions by 3:00 PM CT
+   - Stops at 4:00 PM market close
 
 4. **autonomous_trading_agent.py** - Stock trading (not options)
    - For multi-day swing trades
@@ -193,10 +194,10 @@ Profit: $57 (16% gain)
 1. **Start small** - 1 contract until you understand
 2. **Set alerts** - Use phone alerts for price levels
 3. **Never revenge trade** - If you lose, wait for next signal
-4. **Close by 3:30 PM** - Don't push it to 3:45 PM
+4. **Close by 3:00 PM CT** - Don't push it to market close
 
 ### Common Mistakes:
-- ❌ Holding past 3:45 PM hoping for miracle
+- ❌ Holding past 3:00 PM CT hoping for miracle
 - ❌ Buying when RSI is neutral (50) - no edge
 - ❌ Opening new positions after 2:00 PM
 - ❌ Not having stop loss discipline
@@ -254,9 +255,9 @@ chmod +x auto_trading_scheduler.py
 2. Check if you have open positions
 3. Manually close via your broker if needed
 
-### If You Miss 3:45 PM Deadline:
-1. **3:45-3:55 PM:** Close immediately at market price
-2. **3:55-4:00 PM:** Accept whatever price you can get
+### If You Miss 3:00 PM CT Deadline:
+1. **3:00-3:55 PM CT:** Close immediately at market price
+2. **3:55-4:00 PM ET:** Accept whatever price you can get
 3. **After 4:00 PM:** Options have expired (check broker)
 
 ### If Internet Goes Down:

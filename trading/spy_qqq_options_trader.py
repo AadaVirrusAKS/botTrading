@@ -504,9 +504,9 @@ class DailyOptionsTrader:
                 market_close_hour = 16  # 4:00 PM ET
                 market_close_warning = 15  # 3:00 PM ET - start closing positions
                 
-                # CRITICAL: Force close all positions after 3:45 PM (15.75 hours from 9:30 AM open)
-                # Market opens at 9:30 AM ET, so 3:45 PM = 6.25 hours of trading
-                if current_time.hour >= 15 and current_time.minute >= 45:
+                # CRITICAL: Force close all positions at 4:00 PM ET (3:00 PM CT)
+                # Market opens at 9:30 AM ET, market closes at 4:00 PM ET
+                if current_time.hour >= 16:
                     print(f"  ⏰ MARKET CLOSING - FORCE EXIT ALL POSITIONS!")
                     print(f"     Time: {current_time.strftime('%I:%M %p')} - Market closes at 4:00 PM")
                     positions_to_close.append((position_id, current_premium, 'MARKET_CLOSE'))

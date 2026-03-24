@@ -109,7 +109,7 @@ The system uses **OTM (Out-of-the-Money) calls** to keep premiums LOW and afford
 
 ### Entry Strategy
 1. **Timing**: 
-   - Generate prediction at 2:50 PM CT (3:50 PM ET) for next day
+   - Generate prediction at 3:00 PM CT (4:00 PM ET) for next day
    - Enter trades: 10:00 AM - 11:30 AM CT next day
    
 2. **Execution**:
@@ -128,7 +128,7 @@ The system uses **OTM (Out-of-the-Money) calls** to keep premiums LOW and afford
    - NO EXCEPTIONS - protect capital
 
 3. **Mandatory Exit**:
-   - **MUST** exit by 2:50 PM CT (3:50 PM ET)
+   - **MUST** exit by 3:00 PM CT (4:00 PM ET)
    - Close all positions regardless of profit/loss
    - Never hold next-day options overnight
 
@@ -224,7 +224,7 @@ Signals: RSI oversold, negative momentum
 - [ ] Confirm order execution
 - [ ] Set profit target alerts
 - [ ] Set stop loss alert
-- [ ] Set 2:50 PM CT calendar reminder
+- [ ] Set 3:00 PM CT calendar reminder
 
 ### During Trade
 - [ ] Monitor every 15-30 minutes
@@ -234,7 +234,7 @@ Signals: RSI oversold, negative momentum
 - [ ] Watch for stop loss triggers
 
 ### Exit
-- [ ] Close remaining position by 2:50 PM CT
+- [ ] Close remaining position by 3:00 PM CT
 - [ ] Confirm all positions are closed
 - [ ] Record trade results
 - [ ] Update trading journal
@@ -242,7 +242,7 @@ Signals: RSI oversold, negative momentum
 ## ⚠️ Critical Rules
 
 1. **Time Management**
-   - NEVER hold 1DTE options past 2:50 PM CT
+   - NEVER hold 1DTE options past 3:00 PM CT
    - Options lose value rapidly in final hour
    - Time decay accelerates exponentially
 

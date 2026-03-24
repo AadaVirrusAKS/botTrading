@@ -674,7 +674,7 @@ class UnifiedTradingSystem:
                         self.check_position(pos_id)
                 
                 # Check exit time
-                if datetime.now().time() >= dt_time(14, 50):
+                if datetime.now().time() >= dt_time(15, 0):
                     print("\n⏰ MANDATORY EXIT TIME!")
                     break
                 

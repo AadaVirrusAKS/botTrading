@@ -23,7 +23,7 @@ except ImportError:
 
 # -----------------------------
 # LIVE 0DTE OPTIONS TRADER WITH MONITORING
-# Executes trades and monitors until 2:50 PM CT (3:50 PM ET)
+# Executes trades and monitors until 3:00 PM CT (4:00 PM ET)
 # Target: 1:3 Risk/Reward Ratio
 # -----------------------------
 
@@ -34,8 +34,8 @@ class Live0DTETrader:
         self.qqq_trade = qqq_trade
         self.positions = []
         self.closed_positions = []
-        self.exit_time_ct = "2:50 PM"
-        self.exit_time_et = "3:50 PM"
+        self.exit_time_ct = "3:00 PM"
+        self.exit_time_et = "4:00 PM"
         
     def execute_trade(self, trade_setup):
         """Execute a trade based on setup"""
@@ -169,9 +169,9 @@ class Live0DTETrader:
         print(f"  Final P&L: ${pl:+.2f} ({pl_pct:+.1f}%)")
     
     def force_close_all(self):
-        """Force close all open positions at 2:50 PM CT"""
+        """Force close all open positions at 3:00 PM CT"""
         print(f"\n{'='*90}")
-        print(f"⏰ 2:50 PM CT REACHED - FORCE CLOSING ALL POSITIONS")
+        print(f"⏰ 3:00 PM CT REACHED - FORCE CLOSING ALL POSITIONS")
         print(f"{'='*90}")
         
         for position in self.positions:
@@ -208,11 +208,11 @@ class Live0DTETrader:
         print(f"\n{'='*90}")
     
     def should_exit(self):
-        """Check if we should exit (2:50 PM CT = 3:50 PM ET)"""
+        """Check if we should exit (3:00 PM CT = 4:00 PM ET)"""
         et_tz = pytz.timezone('US/Eastern')
         now = datetime.now(et_tz)
-        exit_hour = 15  # 3 PM
-        exit_minute = 50
+        exit_hour = 16  # 4 PM ET
+        exit_minute = 0
         
         if now.hour > exit_hour or (now.hour == exit_hour and now.minute >= exit_minute):
             return True
