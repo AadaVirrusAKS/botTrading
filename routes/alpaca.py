@@ -221,3 +221,93 @@ def alpaca_bot_pnl_map():
         return jsonify({'success': True, 'data': pnl_map})
     except Exception as e:
         return jsonify({'success': False, 'data': {}, 'error': str(e)})
+
+
+# =============================
+# REAL-TIME MARKET DATA
+# =============================
+@alpaca_bp.route('/api/alpaca/realtime/status')
+def alpaca_realtime_status():
+    """Check if Alpaca real-time data is available and streaming."""
+    try:
+        from services.alpaca_realtime import is_available, _stream_thread, _live_prices
+        streaming = _stream_thread is not None and _stream_thread.is_alive()
+        return jsonify({
+            'success': True,
+            'data': {
+                'available': is_available(),
+                'streaming': streaming,
+                'symbols_tracked': len(_live_prices),
+            }
+        })
+    except ImportError:
+        return jsonify({'success': True, 'data': {'available': False, 'streaming': False, 'symbols_tracked': 0}})
+
+
+@alpaca_bp.route('/api/alpaca/realtime/prices', methods=['POST'])
+def alpaca_realtime_prices():
+    """Get real-time prices for a list of symbols.
+
+    POST body: {"symbols": ["AAPL", "MSFT", ...]}
+    Returns real-time Alpaca prices when available, falls back to cached yfinance data.
+    """
+    req = request.get_json(force=True)
+    symbols = req.get('symbols', [])
+    if not symbols:
+        return jsonify({'success': False, 'error': 'No symbols provided'})
+
+    prices = {}
+    source = 'yfinance'
+
+    try:
+        from services.alpaca_realtime import is_available, get_live_prices, get_snapshot_prices
+        if is_available():
+            source = 'alpaca'
+            # Try stream cache first
+            prices = get_live_prices(symbols)
+            # Snapshot for any missing
+            missing = [s for s in symbols if s.upper() not in prices]
+            if missing:
+                snaps = get_snapshot_prices(missing)
+                prices.update(snaps)
+    except ImportError:
+        pass
+
+    # Fallback to yfinance for any still missing
+    still_missing = [s for s in symbols if s.upper() not in prices]
+    if still_missing:
+        from services.market_data import cached_batch_prices
+        yf_prices = cached_batch_prices(still_missing)
+        for sym, p in yf_prices.items():
+            if sym not in prices:
+                prices[sym] = p
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'prices': {k: round(v, 2) for k, v in prices.items()},
+            'source': source,
+            'timestamp': __import__('datetime').datetime.now().isoformat(),
+        }
+    })
+
+
+@alpaca_bp.route('/api/alpaca/realtime/subscribe', methods=['POST'])
+def alpaca_realtime_subscribe():
+    """Start streaming symbols via Alpaca WebSocket.
+
+    POST body: {"symbols": ["AAPL", "MSFT", ...]}
+    """
+    req = request.get_json(force=True)
+    symbols = req.get('symbols', [])
+    if not symbols:
+        return jsonify({'success': False, 'error': 'No symbols provided'})
+
+    try:
+        from services.alpaca_realtime import is_available, warmup
+        if not is_available():
+            return jsonify({'success': False, 'error': 'Alpaca not configured'})
+        warmup(symbols)
+        return jsonify({'success': True, 'data': {'subscribed': [s.upper() for s in symbols]}})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})

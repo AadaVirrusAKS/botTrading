@@ -324,6 +324,22 @@ def cached_get_price(symbol, period='1d', interval='1m', prepost=True, use_cache
             if (not use_cache) and age < _FORCE_LIVE_MIN_TTL:
                 return entry['price'], entry.get('hist')
     
+    # --- Alpaca real-time: try live/snapshot price first (near-zero latency) ---
+    try:
+        from services.alpaca_realtime import is_available as _alpaca_ok, get_live_price, get_snapshot_price
+        if _alpaca_ok():
+            # 1) Check in-memory stream cache (instant)
+            alpaca_price = get_live_price(symbol)
+            # 2) If no stream data, do a REST snapshot (one HTTP call)
+            if alpaca_price is None:
+                alpaca_price = get_snapshot_price(symbol)
+            if alpaca_price is not None:
+                with _price_cache_lock:
+                    _price_cache[cache_key] = {'price': alpaca_price, 'hist': None, 'ts': now}
+                return alpaca_price, None
+    except Exception:
+        pass  # Alpaca unavailable — fall through to yfinance
+
     # Skip if rate-limited (per-symbol or global)
     if _is_rate_limited(symbol):
         # Return stale cache entry if not too old
@@ -406,6 +422,31 @@ def cached_batch_prices(symbols, period='1d', interval='1m', prepost=True, use_c
                     uncached.append(sym)
             else:
                 uncached.append(sym)
+
+    # --- Alpaca real-time batch: try before yfinance ---
+    if uncached:
+        try:
+            from services.alpaca_realtime import is_available as _alpaca_ok, get_snapshot_prices, get_live_prices
+            if _alpaca_ok():
+                # 1) Check in-memory stream cache first (free, instant)
+                streamed = get_live_prices(uncached)
+                alpaca_now = datetime.now()
+                for sym, p in streamed.items():
+                    prices[sym] = p
+                    with _price_cache_lock:
+                        _price_cache[sym] = {'price': p, 'ts': alpaca_now}
+                still_need = [s for s in uncached if s not in prices]
+                # 2) REST snapshot for any remaining symbols
+                if still_need:
+                    snaps = get_snapshot_prices(still_need)
+                    snap_now = datetime.now()
+                    for sym, p in snaps.items():
+                        prices[sym] = p
+                        with _price_cache_lock:
+                            _price_cache[sym] = {'price': p, 'ts': snap_now}
+                uncached = [s for s in uncached if s not in prices]
+        except Exception:
+            pass  # Alpaca unavailable — fall through to yfinance
 
     # If globally rate-limited, don't make any API calls
     if _is_globally_rate_limited():
@@ -1282,6 +1323,47 @@ def _fetch_all_quotes_batch(symbols):
     if not uncached:
         return results   # everything served from cache
     
+    # 1b. Alpaca real-time: fill as many uncached symbols as possible before yfinance
+    try:
+        from services.alpaca_realtime import is_available as _alpaca_ok, get_snapshot_prices, get_live_prices
+        if _alpaca_ok():
+            alpaca_filled = 0
+            # Stream cache first (free, instant)
+            streamed = get_live_prices(uncached)
+            alpaca_now = datetime.now()
+            for sym, price in streamed.items():
+                quote_entry = {
+                    'symbol': sym, 'price': round(price, 2),
+                    'change': 0, 'change_percent': 0,
+                    'volume': 0, 'high': 0, 'low': 0, 'open': 0,
+                    'source': 'alpaca_stream',
+                }
+                results[sym] = quote_entry
+                quote_cache[sym] = (quote_entry, alpaca_now)
+                alpaca_filled += 1
+            still_need = [s for s in uncached if s not in results]
+            # REST snapshots for the rest
+            if still_need:
+                snaps = get_snapshot_prices(still_need)
+                snap_now = datetime.now()
+                for sym, price in snaps.items():
+                    quote_entry = {
+                        'symbol': sym, 'price': round(price, 2),
+                        'change': 0, 'change_percent': 0,
+                        'volume': 0, 'high': 0, 'low': 0, 'open': 0,
+                        'source': 'alpaca_snapshot',
+                    }
+                    results[sym] = quote_entry
+                    quote_cache[sym] = (quote_entry, snap_now)
+                    alpaca_filled += 1
+            if alpaca_filled:
+                print(f"[BatchQuotes] Alpaca real-time: {alpaca_filled}/{len(uncached)} symbols")
+            uncached = [s for s in uncached if s not in results]
+            if not uncached:
+                return results
+    except Exception:
+        pass  # Alpaca unavailable — fall through to yfinance
+
     # 2. If globally rate-limited, serve stale cache entries
     if _is_globally_rate_limited():
         print(f"[BatchQuotes] Globally rate-limited - serving stale cache for {len(uncached)} symbols")

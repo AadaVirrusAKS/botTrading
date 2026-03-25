@@ -667,3 +667,20 @@ body {
     from { opacity: 0; }
     to { opacity: 1; }
 }
+
+/* Real-time data source indicator */
+.data-source {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-left: 4px;
+}
+.data-source.realtime {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.1);
+}
+.data-source.delayed {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+}

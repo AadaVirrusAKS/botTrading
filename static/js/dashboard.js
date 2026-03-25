@@ -266,12 +266,20 @@ class TradingDashboard {
                 priceEl.classList.add('fade-in');
             }
             
-            if (changeEl) {
+            if (changeEl && quote.change !== undefined) {
                 const changeText = quote.change >= 0 ? 
                     `+${quote.change.toFixed(2)} (+${quote.changePct.toFixed(2)}%)` :
                     `${quote.change.toFixed(2)} (${quote.changePct.toFixed(2)}%)`;
                 changeEl.textContent = changeText;
                 changeEl.className = quote.change >= 0 ? 'change positive' : 'change negative';
+            }
+
+            // Show real-time source indicator
+            const sourceEl = el.querySelector('.data-source');
+            if (sourceEl && quote.source) {
+                const isRealtime = quote.source.startsWith('alpaca');
+                sourceEl.textContent = isRealtime ? '⚡ Live' : '📊 Delayed';
+                sourceEl.className = `data-source ${isRealtime ? 'realtime' : 'delayed'}`;
             }
         });
     }

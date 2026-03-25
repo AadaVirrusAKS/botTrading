@@ -148,7 +148,11 @@ def handle_disconnect():
 
 @socketio.on('subscribe_quotes')
 def handle_subscribe_quotes(data):
-    """Subscribe to real-time quotes for symbols - with rate limiting protection"""
+    """Subscribe to real-time quotes for symbols.
+    
+    When Alpaca is configured, uses near-zero-latency streaming (2-5s updates).
+    Otherwise falls back to yfinance polling (30s updates).
+    """
     symbols = data.get('symbols', [])
     client_sid = request.sid
 
@@ -159,31 +163,86 @@ def handle_subscribe_quotes(data):
     if client_sid in active_subscriptions:
         active_subscriptions[client_sid]['active'] = False
 
-    print(f"📊 Client {client_sid} subscribed to: {symbols}")
+    # Determine if Alpaca real-time is available
+    alpaca_available = False
+    try:
+        from services.alpaca_realtime import is_available, warmup, get_live_prices, subscribe_symbols, add_subscriber, remove_subscriber
+        alpaca_available = is_available()
+    except ImportError:
+        pass
+
     active_subscriptions[client_sid] = {'active': True}
 
-    def send_quote_updates():
-        update_interval = 30
-        while active_subscriptions.get(client_sid, {}).get('active', False):
-            quotes_map = _fetch_all_quotes_batch(symbols)
-            quotes = [quotes_map[s] for s in symbols if s in quotes_map]
+    if alpaca_available:
+        # --- Alpaca path: WebSocket streaming with fast push ---
+        upper_symbols = [s.upper() for s in symbols]
+        print(f"📊 Client {client_sid} subscribed (Alpaca real-time): {upper_symbols}")
+        warmup(upper_symbols)
 
-            if quotes:
-                try:
-                    socketio.emit('quote_update', {
-                        'timestamp': datetime.now().isoformat(),
-                        'quotes': quotes
-                    }, room=client_sid)
-                except:
-                    break
+        def _on_tick(sym, price_data):
+            """Called on every Alpaca trade tick for subscribed symbols."""
+            if sym not in upper_symbols:
+                return
+            if not active_subscriptions.get(client_sid, {}).get('active', False):
+                return
+            try:
+                socketio.emit('quote_update', {
+                    'timestamp': datetime.now().isoformat(),
+                    'quotes': [{'symbol': sym, 'price': round(price_data['price'], 2), 'source': 'alpaca_stream'}]
+                }, room=client_sid)
+            except Exception:
+                pass
 
-            time.sleep(update_interval)
+        sub_id = f"ws_{client_sid}"
+        add_subscriber(sub_id, _on_tick)
 
-        if client_sid in active_subscriptions:
-            del active_subscriptions[client_sid]
+        # Also send a periodic full snapshot (every 5s) so the UI stays in sync
+        def send_periodic_snapshots():
+            while active_subscriptions.get(client_sid, {}).get('active', False):
+                live = get_live_prices(upper_symbols)
+                quotes = [{'symbol': s, 'price': round(live[s], 2), 'source': 'alpaca_stream'}
+                          for s in upper_symbols if s in live]
+                if quotes:
+                    try:
+                        socketio.emit('quote_update', {
+                            'timestamp': datetime.now().isoformat(),
+                            'quotes': quotes
+                        }, room=client_sid)
+                    except Exception:
+                        break
+                time.sleep(5)
+            remove_subscriber(sub_id)
+            if client_sid in active_subscriptions:
+                del active_subscriptions[client_sid]
 
-    thread = threading.Thread(target=send_quote_updates, daemon=True)
-    thread.start()
+        thread = threading.Thread(target=send_periodic_snapshots, daemon=True)
+        thread.start()
+    else:
+        # --- yfinance fallback path: polling ---
+        print(f"📊 Client {client_sid} subscribed (yfinance polling): {symbols}")
+
+        def send_quote_updates():
+            update_interval = 30
+            while active_subscriptions.get(client_sid, {}).get('active', False):
+                quotes_map = _fetch_all_quotes_batch(symbols)
+                quotes = [quotes_map[s] for s in symbols if s in quotes_map]
+
+                if quotes:
+                    try:
+                        socketio.emit('quote_update', {
+                            'timestamp': datetime.now().isoformat(),
+                            'quotes': quotes
+                        }, room=client_sid)
+                    except Exception:
+                        break
+
+                time.sleep(update_interval)
+
+            if client_sid in active_subscriptions:
+                del active_subscriptions[client_sid]
+
+        thread = threading.Thread(target=send_quote_updates, daemon=True)
+        thread.start()
 
 # =============================
 # MAIN EXECUTION
@@ -236,6 +295,18 @@ def main():
         os.makedirs(_yf_cache, exist_ok=True)
     except Exception:
         pass
+
+    # --- Alpaca real-time warmup (non-blocking) ---
+    try:
+        from services.alpaca_realtime import is_available as _alpaca_ready, warmup as _alpaca_warmup
+        if _alpaca_ready():
+            _core_symbols = ['SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA']
+            _alpaca_warmup(_core_symbols)
+            print("✅ Alpaca real-time data active (streaming + snapshots)")
+        else:
+            print("ℹ️  Alpaca not configured — using yfinance for market data")
+    except Exception as _alp_err:
+        print(f"ℹ️  Alpaca real-time unavailable: {_alp_err}")
 
     # Verify yfinance can fetch data (non-blocking — don't let startup failures
     # poison the rate-limit state for the rest of the session)
