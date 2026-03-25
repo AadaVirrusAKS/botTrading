@@ -257,6 +257,81 @@ def get_latest_quotes(symbols: List[str]) -> Dict[str, dict]:
 
 
 # =============================
+# REST: OPTION SNAPSHOTS
+# =============================
+
+_option_client = None
+_option_client_lock = threading.Lock()
+
+
+def _get_option_client():
+    """Lazy singleton for Alpaca OptionHistoricalDataClient (REST)."""
+    global _option_client
+    with _option_client_lock:
+        if _option_client is not None:
+            return _option_client
+        api_key, secret_key = _get_credentials()
+        if not api_key or not secret_key:
+            return None
+        try:
+            from alpaca.data.historical.option import OptionHistoricalDataClient
+            _option_client = OptionHistoricalDataClient(api_key, secret_key)
+            return _option_client
+        except Exception as e:
+            logger.warning(f"[AlpacaRT] Failed to create option data client: {e}")
+            return None
+
+
+def get_option_snapshot_quotes(option_symbols: List[str]) -> Dict[str, dict]:
+    """Fetch real-time option bid/ask/last via Alpaca Option Snapshot API.
+
+    Args:
+        option_symbols: List of OCC-format option symbols
+                        e.g. ['TSLA260330P00390000', 'AAPL260402C00230000']
+
+    Returns:
+        {symbol: {'bid': float, 'ask': float, 'mid': float, 'last': float,
+                  'underlying': str}} for symbols that succeeded.
+    """
+    if not option_symbols:
+        return {}
+    client = _get_option_client()
+    if client is None:
+        return {}
+
+    try:
+        from alpaca.data.requests import OptionSnapshotRequest
+        unique = list(set(s.strip().upper() for s in option_symbols if s))
+        if not unique:
+            return {}
+        results = {}
+        BATCH = 100
+        for i in range(0, len(unique), BATCH):
+            chunk = unique[i:i + BATCH]
+            req = OptionSnapshotRequest(symbol_or_symbols=chunk)
+            snapshots = client.get_option_snapshot(req)
+            for sym, snap in snapshots.items():
+                try:
+                    bid = float(snap.latest_quote.bid_price) if snap.latest_quote else 0
+                    ask = float(snap.latest_quote.ask_price) if snap.latest_quote else 0
+                    last = float(snap.latest_trade.price) if snap.latest_trade else 0
+                    mid = round((bid + ask) / 2, 2) if bid > 0 and ask > 0 else 0
+
+                    results[sym] = {
+                        'bid': bid,
+                        'ask': ask,
+                        'mid': mid,
+                        'last': last,
+                    }
+                except Exception:
+                    pass
+        return results
+    except Exception as e:
+        logger.warning(f"[AlpacaRT] Option snapshot failed: {e}")
+        return {}
+
+
+# =============================
 # WEBSOCKET: LIVE STREAMING
 # =============================
 

@@ -19,6 +19,10 @@ from services.market_data import (
     _is_rate_limit_error, _mark_rate_limited, _mark_global_rate_limit,
     _is_expected_no_data_error
 )
+try:
+    from services.alpaca_realtime import get_option_snapshot_quotes
+except ImportError:
+    get_option_snapshot_quotes = None
 from config import DATA_DIR
 
 monitoring_bp = Blueprint("monitoring", __name__)
@@ -148,32 +152,54 @@ def active_positions():
                     strike = pos.get('strike', 0)
                     expiration = pos.get('expiration', '')
                     if strike > 0 and expiration:
-                        try:
-                            direction = pos.get('direction', 'CALL')
-                            
-                            # Get option chain for the position's expiration date
-                            opt_chain = cached_get_option_chain(pos['ticker'], expiration, use_cache=not force_live)
-                            if opt_chain is None:
-                                raise ValueError(f"No option chain for {expiration}")
-                            chain = opt_chain.calls if direction.upper() == 'CALL' else opt_chain.puts
-                            
-                            # Find the matching strike
-                            chain['strike_diff'] = abs(chain['strike'] - strike)
-                            best_match = chain.loc[chain['strike_diff'].idxmin()]
-                            
-                            # Use mid price for most accurate current value
-                            bid = float(best_match['bid']) if best_match['bid'] > 0 else 0
-                            ask = float(best_match['ask']) if best_match['ask'] > 0 else 0
-                            
-                            if bid > 0 and ask > 0:
-                                current_price = (bid + ask) / 2
-                                premium_source = 'LIVE'
-                            elif best_match['lastPrice'] > 0:
-                                current_price = float(best_match['lastPrice'])
-                                premium_source = 'LAST'
-                        except Exception as e:
-                            print(f"Could not fetch live premium for {pos['ticker']} ${strike} {direction} exp {expiration}: {e}")
-                            # Keep entry price as fallback
+                        # --- Try Alpaca real-time option snapshot first ---
+                        _alpaca_resolved = False
+                        occ_ticker = pos.get('option_ticker', '').strip().upper()
+                        if occ_ticker and get_option_snapshot_quotes is not None:
+                            try:
+                                aq = get_option_snapshot_quotes([occ_ticker])
+                                q = aq.get(occ_ticker)
+                                if q:
+                                    abid = q.get('bid', 0)
+                                    aask = q.get('ask', 0)
+                                    amid = q.get('mid', 0)
+                                    alast = q.get('last', 0)
+                                    aprice = amid if amid > 0 else (alast if alast > 0 else (aask if aask > 0 else abid))
+                                    if aprice > 0:
+                                        current_price = round(aprice, 2)
+                                        premium_source = 'ALPACA'
+                                        _alpaca_resolved = True
+                            except Exception:
+                                pass
+
+                        # --- Fallback: yfinance option chain ---
+                        if not _alpaca_resolved:
+                            try:
+                                direction = pos.get('direction', 'CALL')
+                                
+                                # Get option chain for the position's expiration date
+                                opt_chain = cached_get_option_chain(pos['ticker'], expiration, use_cache=not force_live)
+                                if opt_chain is None:
+                                    raise ValueError(f"No option chain for {expiration}")
+                                chain = opt_chain.calls if direction.upper() == 'CALL' else opt_chain.puts
+                                
+                                # Find the matching strike
+                                chain['strike_diff'] = abs(chain['strike'] - strike)
+                                best_match = chain.loc[chain['strike_diff'].idxmin()]
+                                
+                                # Use mid price for most accurate current value
+                                bid = float(best_match['bid']) if best_match['bid'] > 0 else 0
+                                ask = float(best_match['ask']) if best_match['ask'] > 0 else 0
+                                
+                                if bid > 0 and ask > 0:
+                                    current_price = (bid + ask) / 2
+                                    premium_source = 'LIVE'
+                                elif best_match['lastPrice'] > 0:
+                                    current_price = float(best_match['lastPrice'])
+                                    premium_source = 'LAST'
+                            except Exception as e:
+                                print(f"Could not fetch live premium for {pos['ticker']} ${strike} {direction} exp {expiration}: {e}")
+                                # Keep entry price as fallback
                     else:
                         print(f"⚠️  Skipping live premium for {pos['ticker']} - invalid strike: {strike} or expiration: {expiration}")
                 else:

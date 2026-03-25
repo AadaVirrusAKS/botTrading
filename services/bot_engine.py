@@ -22,6 +22,10 @@ from services.market_data import (
     _mark_global_rate_limit,
     _price_cache, _price_cache_lock
 )
+try:
+    from services.alpaca_realtime import get_option_snapshot_quotes
+except ImportError:
+    get_option_snapshot_quotes = None
 from services.symbols import resolve_symbol_or_name, is_valid_symbol_cached
 
 # ============================================================================
@@ -1007,12 +1011,62 @@ def update_positions_with_live_prices(positions, force_live=False):
             return contract_str
         return ''
 
+    # --- Alpaca real-time option quotes (batch, single API call) ---
+    # Collect all OCC option tickers across all positions for a single batch fetch.
+    _all_occ_tickers = {}  # {occ_ticker: [pos, ...]}
+    for symbol, opt_positions in option_by_symbol.items():
+        for pos in opt_positions:
+            occ = _normalize_option_ticker(
+                pos.get('option_ticker') or
+                pos.get('contract_symbol') or
+                pos.get('alpaca_symbol') or
+                _extract_option_ticker_from_contract(pos.get('contract', ''))
+            )
+            if occ:
+                _all_occ_tickers.setdefault(occ, []).append(pos)
+
+    alpaca_option_quotes = {}
+    if _all_occ_tickers and get_option_snapshot_quotes is not None:
+        try:
+            alpaca_option_quotes = get_option_snapshot_quotes(list(_all_occ_tickers.keys()))
+        except Exception as e:
+            _log_fetch_event('alpaca-option-snapshot-error', 'batch', f"Alpaca option snapshot: {e}", cooldown=120)
+
+    # Apply Alpaca quotes to matching positions first
+    _alpaca_resolved = set()  # position ids that got Alpaca data
+    for occ, matching_positions in _all_occ_tickers.items():
+        quote = alpaca_option_quotes.get(occ)
+        if not quote:
+            continue
+        bid = quote.get('bid', 0)
+        ask = quote.get('ask', 0)
+        mid = quote.get('mid', 0)
+        last = quote.get('last', 0)
+        price = mid if mid > 0 else (last if last > 0 else (ask if ask > 0 else bid))
+        if price <= 0:
+            continue
+        for pos in matching_positions:
+            pos['current_price'] = round(price, 2)
+            pos['current_bid'] = bid
+            pos['current_ask'] = ask
+            pos['last_price_update'] = now_iso
+            _mark_price_update(pos, 'updated', 'alpaca_option_snapshot')
+            _alpaca_resolved.add(id(pos))
+
+    # --- Fallback: yfinance option chain for positions not resolved by Alpaca ---
     for symbol, opt_positions in option_by_symbol.items():
         try:
             underlying_price = underlying_prices.get(symbol) 
             available_dates = cached_get_option_dates(symbol, force_live=True)
             
             for pos in opt_positions:
+                # Skip positions already resolved by Alpaca snapshot
+                if id(pos) in _alpaca_resolved:
+                    # Still set underlying price if available
+                    if underlying_price is not None:
+                        pos['underlying_price'] = underlying_price
+                    continue
+
                 expiry = pos.get('expiry', '')
                 strike = pos.get('strike', 0)
                 opt_type = str(pos.get('option_type', 'call') or 'call').lower()
@@ -1067,10 +1121,12 @@ def update_positions_with_live_prices(positions, force_live=False):
                 bid = float(row.get('bid', 0) or 0)
                 ask = float(row.get('ask', 0) or 0)
 
-                if last > 0:
-                    pos['current_price'] = last
-                elif bid > 0 and ask > 0:
+                # Prefer bid/ask mid-price (mark) over lastPrice — lastPrice
+                # can be stale (last trade) while bid/ask reflect current market.
+                if bid > 0 and ask > 0:
                     pos['current_price'] = round((bid + ask) / 2, 2)
+                elif last > 0:
+                    pos['current_price'] = last
                 elif ask > 0:
                     pos['current_price'] = ask
                 elif bid > 0:
@@ -1093,9 +1149,27 @@ def update_positions_with_live_prices(positions, force_live=False):
 
 def get_live_option_premium(symbol, expiry, strike, option_type='call', fallback=None, option_ticker=''):
     """Fetch a best-effort live option premium from option chain.
-    Always bypasses cache to get fresh premiums.
+    Tries Alpaca real-time snapshot first, then falls back to yfinance chain.
     Returns fallback when live premium is unavailable.
     """
+    # --- Try Alpaca real-time option snapshot first ---
+    normalized_ticker = str(option_ticker or '').strip().upper()
+    if normalized_ticker and get_option_snapshot_quotes is not None:
+        try:
+            quotes = get_option_snapshot_quotes([normalized_ticker])
+            q = quotes.get(normalized_ticker)
+            if q:
+                bid = q.get('bid', 0)
+                ask = q.get('ask', 0)
+                mid = q.get('mid', 0)
+                last = q.get('last', 0)
+                price = mid if mid > 0 else (last if last > 0 else (ask if ask > 0 else bid))
+                if price > 0:
+                    return round(price, 2)
+        except Exception:
+            pass
+
+    # --- Fallback: yfinance option chain ---
     try:
         available_dates = cached_get_option_dates(symbol, force_live=True)
         if not available_dates:
@@ -1131,10 +1205,12 @@ def get_live_option_premium(symbol, expiry, strike, option_type='call', fallback
         bid = float(row.get('bid', 0) or 0)
         ask = float(row.get('ask', 0) or 0)
 
-        if last > 0:
-            return last
+        # Prefer bid/ask mid-price (mark) over lastPrice — lastPrice
+        # can be stale (last trade) while bid/ask reflect current market.
         if bid > 0 and ask > 0:
             return round((bid + ask) / 2, 2)
+        if last > 0:
+            return last
         if ask > 0:
             return ask
         if bid > 0:
