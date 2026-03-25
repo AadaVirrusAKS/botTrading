@@ -11,11 +11,20 @@ Free tier gets IEX real-time data; paid tier gets SIP (full market).
 import os
 import threading
 import time
+import ssl
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Callable
 
 logger = logging.getLogger(__name__)
+
+# Fix macOS Python SSL: point OpenSSL at certifi's CA bundle
+# so Alpaca WebSocket/REST connections can verify certificates.
+try:
+    import certifi
+    os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+except ImportError:
+    pass
 
 # =============================
 # LAZY CLIENT MANAGEMENT
@@ -100,7 +109,13 @@ def get_snapshot_prices(symbols: List[str]) -> Dict[str, float]:
     try:
         from alpaca.data.requests import StockSnapshotRequest
         # Alpaca accepts up to ~200 symbols per snapshot request
-        unique = list(set(s.strip().upper() for s in symbols if s))
+        # Filter out index symbols (^GSPC, ^IXIC, etc.) — Alpaca only supports tradeable stocks/ETFs
+        unique = list(set(
+            s.strip().upper() for s in symbols
+            if s and not s.strip().startswith('^')
+        ))
+        if not unique:
+            return {}
         results = {}
         BATCH = 200
         for i in range(0, len(unique), BATCH):
@@ -148,7 +163,13 @@ def get_latest_quotes(symbols: List[str]) -> Dict[str, dict]:
 
     try:
         from alpaca.data.requests import StockLatestQuoteRequest
-        unique = list(set(s.strip().upper() for s in symbols if s))
+        # Filter out index symbols (^GSPC etc.)
+        unique = list(set(
+            s.strip().upper() for s in symbols
+            if s and not s.strip().startswith('^')
+        ))
+        if not unique:
+            return {}
         results = {}
         req = StockLatestQuoteRequest(symbol_or_symbols=unique)
         quotes = client.get_stock_latest_quote(req)
@@ -175,9 +196,14 @@ def get_latest_quotes(symbols: List[str]) -> Dict[str, dict]:
 # WEBSOCKET: LIVE STREAMING
 # =============================
 
+# Module-level handler references — set by _ensure_stream_running, used by subscribe_symbols
+_on_trade_handler = None
+_on_quote_handler = None
+
+
 def _ensure_stream_running():
     """Start the Alpaca WebSocket stream thread if not already running."""
-    global _stream, _stream_thread
+    global _stream, _stream_thread, _on_trade_handler, _on_quote_handler
     with _stream_lock:
         if _stream_thread is not None and _stream_thread.is_alive():
             return True
@@ -223,9 +249,16 @@ def _ensure_stream_running():
             _stream.subscribe_trades(_on_trade)
             _stream.subscribe_quotes(_on_quote)
 
+            # Store handlers at module level for subscribe_symbols
+            _on_trade_handler = _on_trade
+            _on_quote_handler = _on_quote
+
             def _run_stream():
                 try:
                     _stream.run()
+                except ssl.SSLCertVerificationError as e:
+                    logger.error(f"[AlpacaRT] SSL certificate error — WebSocket disabled: {e}")
+                    logger.error("[AlpacaRT] Fix: run '/Applications/Python 3.12/Install Certificates.command' or 'pip install certifi'")
                 except Exception as e:
                     logger.error(f"[AlpacaRT] Stream error: {e}")
 
@@ -244,8 +277,12 @@ def subscribe_symbols(symbols: List[str]):
         if not _ensure_stream_running():
             return False
     try:
-        _stream.subscribe_trades(*[s.upper() for s in symbols])
-        _stream.subscribe_quotes(*[s.upper() for s in symbols])
+        # Filter out index symbols (^GSPC etc.) — Alpaca only supports tradeable stocks/ETFs
+        clean = [s.upper() for s in symbols if s and not s.strip().startswith('^')]
+        if not clean:
+            return True
+        _stream.subscribe_trades(_on_trade_handler, *clean)
+        _stream.subscribe_quotes(_on_quote_handler, *clean)
         return True
     except Exception as e:
         logger.warning(f"[AlpacaRT] Subscribe failed: {e}")
@@ -257,8 +294,11 @@ def unsubscribe_symbols(symbols: List[str]):
     if not _stream:
         return
     try:
-        _stream.unsubscribe_trades(*[s.upper() for s in symbols])
-        _stream.unsubscribe_quotes(*[s.upper() for s in symbols])
+        clean = [s.upper() for s in symbols if s and not s.strip().startswith('^')]
+        if not clean:
+            return
+        _stream.unsubscribe_trades(*clean)
+        _stream.unsubscribe_quotes(*clean)
     except Exception:
         pass
 

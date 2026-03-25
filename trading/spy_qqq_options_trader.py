@@ -96,11 +96,11 @@ class DailyOptionsTrader:
         """Get real-time live price from Yahoo Finance"""
         try:
             if _USE_CACHED:
-                price, _ = cached_get_price(ticker)
+                price, _ = cached_get_price(ticker, use_cache=False)
                 if price:
                     return price
                 # Fallback to ticker info
-                info = cached_get_ticker_info(ticker) or {}
+                info = cached_get_ticker_info(ticker, force_live=True) or {}
                 return info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
 
             stock = yf.Ticker(ticker)
@@ -146,8 +146,8 @@ class DailyOptionsTrader:
             if _USE_CACHED:
                 if _is_globally_rate_limited():
                     return None
-                data_daily = cached_get_history(ticker, period='1mo', interval='1d')
-                data_intraday = cached_get_history(ticker, period='1d', interval='5m')
+                data_daily = cached_get_history(ticker, period='1mo', interval='1d', force_live=True)
+                data_intraday = cached_get_history(ticker, period='1d', interval='5m', force_live=True)
             else:
                 stock = yf.Ticker(ticker)
                 data_daily = stock.history(period='1mo', interval='1d')

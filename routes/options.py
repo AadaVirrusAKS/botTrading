@@ -14,6 +14,9 @@ import pandas as pd
 
 from services.utils import clean_nan_values, SECTOR_ETFS
 from services.symbols import resolve_symbol_or_name
+from config.master_stock_list import (
+    OPTIONS_ELIGIBLE_STOCKS, OPTIONS_ELIGIBLE_ETFS, get_options_eligible,
+)
 from services.market_data import (
     cached_get_history, cached_get_option_dates, cached_get_option_chain,
     cached_get_ticker_info, cached_get_price, _log_fetch_event, _is_rate_limited,
@@ -46,9 +49,9 @@ def options_analysis():
         else:
             # Use default tickers - include 0DTE eligible stocks
             if expiry_type == '0dte':
-                tickers = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD', 'MSFT', 'META', 'AMZN', 'GOOGL', 'IWM']
+                tickers = get_options_eligible(include_etfs=True)
             else:
-                tickers = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD', 'MSFT', 'META', 'AMZN', 'GOOGL']
+                tickers = list(OPTIONS_ELIGIBLE_STOCKS)
             cache_key = f'options-analysis-{expiry_type}'
         
         # Initialize cache entry if needed
@@ -171,23 +174,23 @@ def refresh_options():
 def options_pcr():
     """Get Put/Call Ratio for major stocks and ETFs - calculated from live options data"""
     try:
-        # Define symbols to analyze
-        stock_symbols = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN']
-        etf_symbols = ['SPY', 'QQQ', 'IWM', 'DIA', 'XLF']
+        # Define symbols to analyze - options-eligible stocks and ETFs
+        stock_symbols = list(OPTIONS_ELIGIBLE_STOCKS)[:30]  # Top 30 for PCR
+        etf_symbols = list(OPTIONS_ELIGIBLE_ETFS)[:10]
         
         def calculate_pcr(symbol):
             """Calculate Put/Call Ratio from options chain"""
             try:
-                # Get options expiration dates
-                expirations = cached_get_option_dates(symbol)
+                # Get options expiration dates (live)
+                expirations = cached_get_option_dates(symbol, force_live=True)
                 if not expirations or len(expirations) == 0:
                     return None
                 
                 # Use first expiration (nearest term)
                 expiry = expirations[0]
                 
-                # Get options chain
-                opt_chain = cached_get_option_chain(symbol, expiry)
+                # Get options chain (live - bypass cache for fresh premiums)
+                opt_chain = cached_get_option_chain(symbol, expiry, use_cache=False)
                 if opt_chain is None:
                     return None
                 calls = opt_chain.calls
@@ -273,14 +276,14 @@ def options_swing_trade():
         if custom_symbols:
             symbols = [s.strip().upper() for s in custom_symbols.split(',') if s.strip()][:15]
         else:
-            symbols = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'NVDA', 'AMD', 'MSFT', 'META', 'AMZN', 'GOOGL', 'IWM', 'DIA']
+            symbols = get_options_eligible(include_etfs=True)
         
         results = []
         
         for symbol in symbols:
             try:
-                # Get current stock price (check pre/post market first)
-                info = cached_get_ticker_info(symbol)
+                # Get current stock price (live - bypass cache for fresh data)
+                info = cached_get_ticker_info(symbol, force_live=True)
                 current_price = (info.get('preMarketPrice') or 
                                info.get('postMarketPrice') or 
                                info.get('currentPrice') or 
@@ -290,8 +293,8 @@ def options_swing_trade():
                 if not current_price or current_price <= 0:
                     continue
                 
-                # Get expiration dates
-                expirations = cached_get_option_dates(symbol)
+                # Get expiration dates (live)
+                expirations = cached_get_option_dates(symbol, force_live=True)
                 if not expirations:
                     continue
                 
@@ -329,8 +332,8 @@ def options_swing_trade():
                 # Use the first valid expiration
                 target_expiry, dte = valid_expirations[0]
                 
-                # Get options chain
-                opt_chain = cached_get_option_chain(symbol, target_expiry)
+                # Get options chain (live - bypass cache for fresh premiums)
+                opt_chain = cached_get_option_chain(symbol, target_expiry, use_cache=False)
                 if opt_chain is None:
                     continue
                 calls = opt_chain.calls.copy()
@@ -346,8 +349,8 @@ def options_swing_trade():
                     axis=1
                 )
                 
-                # Get historical data for scoring
-                hist = cached_get_history(symbol, period='1mo', interval='1d')
+                # Get historical data for scoring (live)
+                hist = cached_get_history(symbol, period='1mo', interval='1d', force_live=True)
                 if hist is not None and len(hist) >= 5:
                     recent_change = (hist['Close'].iloc[-1] / hist['Close'].iloc[-5] - 1) * 100
                 else:

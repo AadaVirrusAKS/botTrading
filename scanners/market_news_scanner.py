@@ -18,6 +18,15 @@ import warnings
 from config.master_stock_list import get_intraday_core_list
 warnings.filterwarnings('ignore')
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import (
+        cached_get_price, cached_get_history, cached_get_ticker_info, cached_batch_prices
+    )
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class MarketNewsScanner:
     def __init__(self):
         self.major_symbols = self.get_watchlist()
@@ -105,12 +114,15 @@ class MarketNewsScanner:
     def get_price_action(self, symbol, hours=24):
         """Get recent price action for context"""
         try:
-            stock = yf.Ticker(symbol)
-            
-            # Get intraday data if available
-            hist = stock.history(period='5d', interval='1h')
-            if hist.empty:
-                hist = stock.history(period='5d')
+            if _USE_CACHED:
+                hist = cached_get_history(symbol, period='5d', interval='1h')
+                if hist is None or hist.empty:
+                    hist = cached_get_history(symbol, period='5d', interval='1d')
+            else:
+                stock = yf.Ticker(symbol)
+                hist = stock.history(period='5d', interval='1h')
+                if hist.empty:
+                    hist = stock.history(period='5d')
             
             if hist.empty or len(hist) < 2:
                 return None
@@ -257,8 +269,11 @@ class MarketNewsScanner:
         
         for index in self.market_indices:
             try:
-                ticker = yf.Ticker(index)
-                hist = ticker.history(period='2d')
+                if _USE_CACHED:
+                    hist = cached_get_history(index, period='2d', interval='1d')
+                else:
+                    ticker = yf.Ticker(index)
+                    hist = ticker.history(period='2d')
                 
                 if not hist.empty and len(hist) >= 2:
                     current = hist['Close'].iloc[-1]
@@ -364,10 +379,11 @@ class MarketNewsScanner:
         
         for symbol in self.major_symbols[:50]:  # Check top 50 for speed
             try:
-                stock = yf.Ticker(symbol)
-                
-                # Get pre/post market data if available
-                info = stock.info
+                if _USE_CACHED:
+                    info = cached_get_ticker_info(symbol) or {}
+                else:
+                    stock = yf.Ticker(symbol)
+                    info = stock.info
                 regular_price = info.get('regularMarketPrice', 0)
                 prev_close = info.get('previousClose', 0)
                 

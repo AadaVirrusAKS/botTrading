@@ -329,7 +329,7 @@ def _get_broad_market_tickers():
 
 
 def calculate_market_breadth():
-    """Calculate market breadth for 1500+ US stocks using yf.download()"""
+    """Calculate market breadth for 1500+ US stocks using cached batch prices (Alpaca \u2192 yfinance)"""
     now = datetime.now()
 
     # Return cached data if valid
@@ -345,10 +345,10 @@ def calculate_market_breadth():
         return None
 
     try:
-        # Batch download - much faster than individual requests
-        # Process in chunks to avoid timeout on large lists
+        # Use cached_batch_prices which routes through Alpaca \u2192 yfinance
+        # For breadth we need today's change, so we still need 2-day data
         all_changes = pd.Series(dtype=float)
-        chunk_size = 300  # Smaller chunks to avoid rate limits
+        chunk_size = 300
         max_retries = 2
         for i in range(0, len(tickers), chunk_size):
             chunk = tickers[i:i + chunk_size]

@@ -78,9 +78,9 @@ class Live0DTETrader:
         
         # Get current price
         if _USE_CACHED:
-            price, _ = cached_get_price(ticker)
+            price, _ = cached_get_price(ticker, use_cache=False)
             if price is None:
-                info = cached_get_ticker_info(ticker) or {}
+                info = cached_get_ticker_info(ticker, force_live=True) or {}
                 price = info.get('currentPrice')
             current_price = price
         else:

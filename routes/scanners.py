@@ -21,6 +21,11 @@ from services.market_data import (
     _is_expected_no_data_error, fetch_quote_api_batch
 )
 from services.symbols import is_valid_symbol_cached, filter_valid_symbols, KNOWN_DELISTED
+from config.master_stock_list import (
+    get_options_eligible, get_regular_stocks, get_intraday_core_list,
+    get_master_stock_list, OPTIONS_ELIGIBLE_STOCKS, OPTIONS_ELIGIBLE_ETFS,
+    MASTER_ETF_UNIVERSE, REGULAR_ONLY_STOCKS,
+)
 
 # Import scanner modules
 from scanners.unified_trading_system import UnifiedTradingSystem
@@ -89,15 +94,9 @@ def unified_scanner():
                     print(f"🔄 Starting unified scanner in background...")
                     system = UnifiedTradingSystem()
                     
-                    # Limit stock universes to avoid rate limiting
-                    # NOTE: class uses stock_universe / etf_universe (not stock_symbols)
-                    system.stock_universe = [
-                        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD',
-                        'JPM', 'BAC', 'V', 'MA', 'WFC', 'GS',
-                        'UNH', 'JNJ', 'LLY', 'ABBV', 'MRK',
-                        'WMT', 'HD', 'COST', 'NKE', 'MCD'
-                    ]
-                    system.etf_universe = ['SPY', 'QQQ', 'IWM', 'DIA', 'XLF', 'XLK', 'XLE', 'XLV']
+                    # Use full options-eligible universe from master config
+                    system.stock_universe = list(OPTIONS_ELIGIBLE_STOCKS)
+                    system.etf_universe = list(OPTIONS_ELIGIBLE_ETFS)
                     
                     picks = system.get_top_5_picks()
                     # Clean NaN values for JSON serialization
@@ -166,14 +165,8 @@ def short_squeeze():
                     scanner = ShortSqueezeScanner()
                     # Reduce workers to avoid rate limiting (3 instead of 10)
                     # Focus on popular squeeze candidates to avoid API limits
-                    priority_symbols = [
-                        'GME', 'AMC', 'BB', 'KOSS', 'DJT',
-                        'HOOD', 'SOFI', 'PLTR', 'RIVN', 'LCID', 'NIO', 'TSLA',
-                        'NVDA', 'AMD', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN',
-                        'MARA', 'RIOT', 'BLNK'
-                    ]
-                    # Limit to priority symbols to avoid rate limits
-                    scanner.symbols = filter_valid_symbols(priority_symbols)
+                    # Use full options-eligible stocks (high volume, good for squeeze detection)
+                    scanner.symbols = filter_valid_symbols(OPTIONS_ELIGIBLE_STOCKS)
                     
                     # Use sequential processing (max_workers=1) to avoid rate limiting
                     # Batch processing: 5 stocks, then 10s wait
@@ -253,15 +246,10 @@ def weekly_screener():
                         from weekly_screener_top100 import WeeklyStockScreener
                         screener = WeeklyStockScreener()
                         
-                        # Limit stock universe to top 50 most liquid stocks
-                        limited_universe = [
-                            'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'ORCL', 'ADBE',
-                            'CRM', 'CSCO', 'AMD', 'INTC', 'QCOM', 'NFLX', 'TXN', 'INTU', 'NOW',
-                            'JPM', 'V', 'MA', 'BAC', 'WFC', 'GS', 'MS', 'SPGI', 'BLK',
-                            'LLY', 'UNH', 'JNJ', 'ABBV', 'MRK', 'TMO', 'ABT', 'AMGN', 'DHR', 'PFE',
-                            'WMT', 'HD', 'PG', 'COST', 'KO', 'MCD', 'PEP', 'NKE', 'TGT', 'SBUX'
-                        ]
-                        screener.stock_universe = filter_valid_symbols(limited_universe)
+                        # Use full master stock list for weekly screening
+                        screener.stock_universe = filter_valid_symbols(
+                            OPTIONS_ELIGIBLE_STOCKS + REGULAR_ONLY_STOCKS
+                        )
                         
                         # Reduce workers to avoid rate limiting
                         # Lower min_score to 3 (weekly scanner has different scoring: max ~15)
@@ -549,14 +537,8 @@ def triple_confirmation_scanner():
                     if TripleConfirmationScanner:
                         scanner = TripleConfirmationScanner()
                         
-                        # Limit to top liquid stocks to avoid rate limits
-                        limited_universe = [
-                            'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'AMD', 'INTC', 'CRM',
-                            'JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'V', 'MA', 'AXP',
-                            'UNH', 'JNJ', 'PFE', 'ABBV', 'TMO', 'MRK', 'LLY',
-                            'WMT', 'HD', 'NKE', 'MCD', 'SBUX', 'TGT', 'COST'
-                        ]
-                        scanner.universe = filter_valid_symbols(limited_universe)
+                        # Use full options-eligible universe for triple confirmation
+                        scanner.universe = filter_valid_symbols(OPTIONS_ELIGIBLE_STOCKS)
                         
                         scanner.scan_market()  # Populates scanner.results
                         
@@ -639,14 +621,10 @@ def triple_confirmation_intraday():
                     if TripleConfirmationIntraday:
                         scanner = TripleConfirmationIntraday()
                         
-                        # Limit to most active intraday stocks
-                        limited_universe = [
-                            'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'META', 'GOOGL', 'AMZN',
-                            'SPY', 'QQQ', 'IWM', 'DIA',
-                            'JPM', 'BAC', 'WFC', 'GS',
-                            'NFLX', 'PLTR', 'SOFI', 'RIVN', 'NIO'
-                        ]
-                        scanner.universe = filter_valid_symbols(limited_universe)
+                        # Use options-eligible stocks + ETFs for intraday signals
+                        scanner.universe = filter_valid_symbols(
+                            get_options_eligible(include_etfs=True)
+                        )
                         
                         scanner.scan_market()  # Populates scanner.results
                         
@@ -729,15 +707,10 @@ def triple_confirmation_positional():
                     if TripleConfirmationPositional:
                         scanner = TripleConfirmationPositional()
                         
-                        # Limit to stable blue-chip stocks for positional trades
-                        limited_universe = [
-                            'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'ORCL', 'ADBE', 'CRM',
-                            'JPM', 'BAC', 'WFC', 'V', 'MA', 'GS', 'MS',
-                            'UNH', 'JNJ', 'LLY', 'ABBV', 'MRK', 'PFE', 'TMO',
-                            'WMT', 'HD', 'COST', 'NKE', 'MCD', 'SBUX',
-                            'XOM', 'CVX', 'COP'
-                        ]
-                        scanner.universe = filter_valid_symbols(limited_universe)
+                        # Use full master list for positional trades (broader universe)
+                        scanner.universe = filter_valid_symbols(
+                            OPTIONS_ELIGIBLE_STOCKS + REGULAR_ONLY_STOCKS
+                        )
                         
                         scanner.scan_market()  # Populates scanner.results
                         

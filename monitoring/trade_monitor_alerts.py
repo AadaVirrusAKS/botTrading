@@ -17,6 +17,13 @@ import time
 import json
 from config import PROJECT_ROOT, DATA_DIR
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_price, cached_get_history, cached_get_ticker_info
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class TradeAlertMonitor:
     def __init__(self, alert_interval=5):
         """Initialize trade alert monitor
@@ -101,6 +108,12 @@ class TradeAlertMonitor:
     def get_live_price(self, ticker):
         """Get current live price"""
         try:
+            if _USE_CACHED:
+                price, _ = cached_get_price(ticker)
+                if price:
+                    return price
+                info = cached_get_ticker_info(ticker) or {}
+                return info.get('currentPrice') or info.get('regularMarketPrice')
             stock = yf.Ticker(ticker)
             info = stock.info
             price = info.get('currentPrice') or info.get('regularMarketPrice')
@@ -123,8 +136,11 @@ class TradeAlertMonitor:
         
         # Get historical data for ATR
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period='5d', interval='1d')
+            if _USE_CACHED:
+                hist = cached_get_history(ticker, period='5d', interval='1d')
+            else:
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period='5d', interval='1d')
             
             if len(hist) < 2:
                 return entry_premium

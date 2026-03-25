@@ -57,7 +57,7 @@ class TradeExecutor:
         # Avoid current week expiry if Thu/Fri (too close to expiration)
         try:
             if _USE_CACHED:
-                expirations = cached_get_option_dates(ticker)
+                expirations = cached_get_option_dates(ticker, force_live=True)
             elif stock_obj is None:
                 stock_obj = yf.Ticker(ticker)
                 expirations = stock_obj.options
@@ -105,10 +105,10 @@ class TradeExecutor:
         """Get current live price"""
         try:
             if _USE_CACHED:
-                price, _ = cached_get_price(ticker)
+                price, _ = cached_get_price(ticker, use_cache=False)
                 if price:
                     return price
-                info = cached_get_ticker_info(ticker) or {}
+                info = cached_get_ticker_info(ticker, force_live=True) or {}
                 return info.get('currentPrice') or info.get('regularMarketPrice')
 
             stock = yf.Ticker(ticker)
@@ -130,8 +130,8 @@ class TradeExecutor:
         """Calculate technical indicators"""
         try:
             if _USE_CACHED:
-                daily = cached_get_history(ticker, period='3mo', interval='1d')
-                hourly = cached_get_history(ticker, period='5d', interval='1h')
+                daily = cached_get_history(ticker, period='3mo', interval='1d', force_live=True)
+                hourly = cached_get_history(ticker, period='5d', interval='1h', force_live=True)
             else:
                 stock = yf.Ticker(ticker)
                 daily = stock.history(period='3mo', interval='1d')
@@ -330,7 +330,7 @@ class TradeExecutor:
         # Get actual option chain data for real premiums
         try:
             if _USE_CACHED:
-                expirations = cached_get_option_dates(ticker)
+                expirations = cached_get_option_dates(ticker, force_live=True)
             else:
                 stock = yf.Ticker(ticker)
                 expirations = list(stock.options) if stock.options else []
@@ -354,9 +354,9 @@ class TradeExecutor:
             
             print(f"\n📅 Using expiration: {target_expiration}")
             
-            # Fetch option chain
+            # Fetch option chain (live - bypass cache for fresh premiums)
             if _USE_CACHED:
-                opt_chain = cached_get_option_chain(ticker, target_expiration)
+                opt_chain = cached_get_option_chain(ticker, target_expiration, use_cache=False)
             else:
                 opt_chain = stock.option_chain(target_expiration)
             

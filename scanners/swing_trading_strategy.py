@@ -8,12 +8,22 @@ import plotly.graph_objects as go
 import yfinance as yf
 from config import PROJECT_ROOT, DATA_DIR
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_history
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # 1. Download real SPY historical data for backtesting
 # -----------------------------
 print('Downloading SPY data...')
-ticker = yf.Ticker('SPY')
-data = ticker.history(period='2y')  # Get 2 years of data
+if _USE_CACHED:
+    data = cached_get_history('SPY', period='2y', interval='1d')
+else:
+    ticker = yf.Ticker('SPY')
+    data = ticker.history(period='2y')  # Get 2 years of data
 data = data[['Close', 'Volume']]
 print(f'Downloaded {len(data)} days of SPY data from {data.index[0].date()} to {data.index[-1].date()}')
 

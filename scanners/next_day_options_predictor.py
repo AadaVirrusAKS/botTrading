@@ -52,7 +52,7 @@ class NextDayOptionsPredictor:
         # Try cached service layer first (has v8 API fallback, handles rate limits)
         try:
             from services.market_data import cached_batch_prices
-            prices = cached_batch_prices([ticker], period='5d', interval='5m', prepost=True)
+            prices = cached_batch_prices([ticker], period='5d', interval='5m', prepost=True, use_cache=False)
             if prices and ticker in prices and prices[ticker] is not None:
                 return float(prices[ticker])
         except ImportError:
@@ -91,7 +91,7 @@ class NextDayOptionsPredictor:
             # Try cached service layer first
             try:
                 from services.market_data import cached_get_option_dates, cached_get_option_chain
-                expirations = cached_get_option_dates(ticker)
+                expirations = cached_get_option_dates(ticker, force_live=True)
             except ImportError:
                 stock = yf.Ticker(ticker)
                 expirations = list(stock.options) if stock.options else []
@@ -143,10 +143,10 @@ class NextDayOptionsPredictor:
             closest_exp = min(expirations, 
                             key=lambda x: abs((datetime.strptime(x, '%Y-%m-%d') - target_date).days))
             
-            # Get option chain (try cached service layer first)
+            # Get option chain (try cached service layer first — live, bypass cache)
             try:
                 from services.market_data import cached_get_option_chain
-                opt_chain = cached_get_option_chain(ticker, closest_exp)
+                opt_chain = cached_get_option_chain(ticker, closest_exp, use_cache=False)
             except ImportError:
                 stock_obj = yf.Ticker(ticker)
                 opt_chain = stock_obj.option_chain(closest_exp)
@@ -239,11 +239,11 @@ class NextDayOptionsPredictor:
                 print(f"{'=' * 100}")
                 print(f"  💹 Current Price: ${current_price:.2f}")
             
-            # Get historical data for analysis (use cached service layer when available)
+            # Get historical data for analysis (use cached service layer with force_live)
             data_daily = None
             try:
                 from services.market_data import cached_get_history
-                data_daily = cached_get_history(ticker, period='3mo', interval='1d')
+                data_daily = cached_get_history(ticker, period='3mo', interval='1d', force_live=True)
             except ImportError:
                 pass  # Standalone mode
             except Exception:

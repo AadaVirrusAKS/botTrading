@@ -15,6 +15,13 @@ from datetime import datetime, timedelta
 import time
 import os
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_price, cached_get_history, cached_get_ticker_info
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 class RealtimeTradeMonitor:
     def __init__(self):
         """Initialize real-time trade monitor"""
@@ -32,19 +39,22 @@ class RealtimeTradeMonitor:
     def get_live_data(self, ticker):
         """Get live market data"""
         try:
-            stock = yf.Ticker(ticker)
-            
-            # Get current price
-            info = stock.info
-            current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-            
-            if not current_price:
-                hist = stock.history(period='1d', interval='1m')
-                if len(hist) > 0:
-                    current_price = hist['Close'].iloc[-1]
-            
-            # Get intraday data for momentum
-            intraday = stock.history(period='1d', interval='5m')
+            if _USE_CACHED:
+                info = cached_get_ticker_info(ticker) or {}
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                if not current_price:
+                    price_val, _ = cached_get_price(ticker)
+                    current_price = price_val
+                intraday = cached_get_history(ticker, period='1d', interval='5m')
+            else:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                if not current_price:
+                    hist = stock.history(period='1d', interval='1m')
+                    if len(hist) > 0:
+                        current_price = hist['Close'].iloc[-1]
+                intraday = stock.history(period='1d', interval='5m')
             
             if len(intraday) < 2:
                 return None

@@ -954,16 +954,18 @@ def prewarm_history_cache(symbols, period='5d', interval='5m'):
     return warmed
 
 
-def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
-    """Get historical data with caching. Returns DataFrame or None."""
+def cached_get_history(symbol, period='3mo', interval='1d', prepost=False, force_live=False):
+    """Get historical data with caching. Returns DataFrame or None.
+    force_live=True uses a 15s min-TTL instead of 5min, for options/trading that need fresh data."""
     cache_key = (symbol, period, interval)
     now = datetime.now()
     now_ts = time.time()
     
+    ttl = _FORCE_LIVE_MIN_TTL if force_live else _history_cache_ttl
     with _history_cache_lock:
         if cache_key in _history_cache:
             entry = _history_cache[cache_key]
-            if (now - entry['ts']).total_seconds() < _history_cache_ttl:
+            if (now - entry['ts']).total_seconds() < ttl:
                 return entry['data']
 
     # Determine max staleness based on data granularity
@@ -1030,14 +1032,16 @@ def cached_get_history(symbol, period='3mo', interval='1d', prepost=False):
     return None
 
 
-def cached_get_option_dates(symbol):
-    """Get available option expiration dates with caching. Returns list or []."""
+def cached_get_option_dates(symbol, force_live=False):
+    """Get available option expiration dates with caching. Returns list or [].
+    force_live=True uses a 5min TTL instead of 1hr."""
     now = datetime.now()
     
+    ttl = 300 if force_live else _options_dates_ttl  # 5min vs 1hr
     with _options_dates_lock:
         if symbol in _options_dates_cache:
             entry = _options_dates_cache[symbol]
-            if (now - entry['ts']).total_seconds() < _options_dates_ttl:
+            if (now - entry['ts']).total_seconds() < ttl:
                 return entry['dates']
     
     # When globally rate-limited, serve stale cache but still attempt the call
@@ -1156,14 +1160,16 @@ def cached_get_option_chain(symbol, expiry, use_cache=True):
     return None
 
 
-def cached_get_ticker_info(symbol):
-    """Get ticker.info with caching. Returns dict or {}."""
+def cached_get_ticker_info(symbol, force_live=False):
+    """Get ticker.info with caching. Returns dict or {}.
+    force_live=True uses a 15s min-TTL instead of 5min, for options/trading that need fresh data."""
     now = datetime.now()
     
+    ttl = _FORCE_LIVE_MIN_TTL if force_live else _ticker_info_ttl
     with _ticker_info_lock:
         if symbol in _ticker_info_cache:
             entry = _ticker_info_cache[symbol]
-            if (now - entry['ts']).total_seconds() < _ticker_info_ttl:
+            if (now - entry['ts']).total_seconds() < ttl:
                 return entry['info']
 
     # Skip upstream call while rate-limited (per-symbol or global)

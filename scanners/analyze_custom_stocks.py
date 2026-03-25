@@ -9,6 +9,13 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_history, cached_get_ticker_info
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # List of stocks to analyze (default list when running standalone)
 tickers = ['SPCE', 'WKHS', 'DECK', 'AMC', 'NAMX', 'ANTA', 'PEW', 'GEMI', 'DJT',
            'BRBI', 'HIMS', 'LAZR', 'BITO', 'FCHL', 'KALA', 'CNEY', 'UNH', 'RAND', 'CLX', 'LRN','ETH','FIS','PTON']
@@ -16,22 +23,33 @@ tickers = ['SPCE', 'WKHS', 'DECK', 'AMC', 'NAMX', 'ANTA', 'PEW', 'GEMI', 'DJT',
 def analyze_stock(ticker):
     """Analyze a single stock and return results"""
     try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period='1y')
-        
-        if len(data) < 50:
-            return None
-        
-        # Get company info
-        try:
-            info = stock.info
-            company_name = info.get('shortName', ticker)
-            sector = info.get('sector', 'N/A')
-            market_cap = info.get('marketCap', 0)
-        except:
-            company_name = ticker
-            sector = 'N/A'
-            market_cap = 0
+        if _USE_CACHED:
+            data = cached_get_history(ticker, period='1y', interval='1d')
+            if data is None or len(data) < 50:
+                return None
+            try:
+                info = cached_get_ticker_info(ticker) or {}
+                company_name = info.get('shortName', ticker)
+                sector = info.get('sector', 'N/A')
+                market_cap = info.get('marketCap', 0)
+            except:
+                company_name = ticker
+                sector = 'N/A'
+                market_cap = 0
+        else:
+            stock = yf.Ticker(ticker)
+            data = stock.history(period='1y')
+            if len(data) < 50:
+                return None
+            try:
+                info = stock.info
+                company_name = info.get('shortName', ticker)
+                sector = info.get('sector', 'N/A')
+                market_cap = info.get('marketCap', 0)
+            except:
+                company_name = ticker
+                sector = 'N/A'
+                market_cap = 0
         
         # Calculate indicators
         data['50EMA'] = data['Close'].ewm(span=50, adjust=False).mean()

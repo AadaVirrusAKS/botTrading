@@ -10,6 +10,13 @@ import warnings
 from config.master_stock_list import get_master_stock_list
 warnings.filterwarnings('ignore')
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_history, cached_get_ticker_info
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # -----------------------------
 # TOP 100 STOCKS WEEKLY SCREENER
 # Price Range: $50 - $200
@@ -110,10 +117,13 @@ class WeeklyStockScreener:
         """Analyze a single stock"""
         try:
             # Download daily data for better analysis
-            stock = yf.Ticker(ticker)
-            data = stock.history(period='1y', interval='1d')  # Changed to daily
+            if _USE_CACHED:
+                data = cached_get_history(ticker, period='1y', interval='1d')
+            else:
+                stock = yf.Ticker(ticker)
+                data = stock.history(period='1y', interval='1d')  # Changed to daily
             
-            if len(data) < 200:
+            if data is None or len(data) < 200:
                 return None
             
             # Calculate indicators
@@ -139,7 +149,10 @@ class WeeklyStockScreener:
             
             # Get company info
             try:
-                info = stock.info
+                if _USE_CACHED:
+                    info = cached_get_ticker_info(ticker) or {}
+                else:
+                    info = stock.info
                 company_name = info.get('shortName', ticker)
                 sector = info.get('sector', 'Unknown')
                 market_cap = info.get('marketCap', 0)

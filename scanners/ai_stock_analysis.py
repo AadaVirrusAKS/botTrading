@@ -26,6 +26,13 @@ from concurrent.futures import ThreadPoolExecutor
 import warnings
 warnings.filterwarnings('ignore')
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_history, cached_get_ticker_info
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 
 # ============================================================================
 # CANDLESTICK PATTERN RECOGNITION ENGINE
@@ -1085,9 +1092,12 @@ class StockHeatmapAnalyzer:
 
         def _analyze_one(symbol):
             try:
-                ticker = yf.Ticker(symbol)
-                df = ticker.history(period=period)
-                if df.empty or len(df) < 20:
+                if _USE_CACHED:
+                    df = cached_get_history(symbol, period=period, interval='1d')
+                else:
+                    ticker = yf.Ticker(symbol)
+                    df = ticker.history(period=period)
+                if df is None or df.empty or len(df) < 20:
                     return None
 
                 close = df['Close'].values.astype(float)
@@ -1164,8 +1174,11 @@ def run_ai_analysis(symbol, period='6mo', prediction_horizon=5, df=None, info=No
     try:
         if df is None:
             try:
-                ticker = yf.Ticker(symbol)
-                df = ticker.history(period=period)
+                if _USE_CACHED:
+                    df = cached_get_history(symbol, period=period, interval='1d')
+                else:
+                    ticker = yf.Ticker(symbol)
+                    df = ticker.history(period=period)
             except Exception as fetch_err:
                 if 'no such table' in str(fetch_err).lower():
                     # Corrupted yfinance cache — nuke and retry once
@@ -1177,8 +1190,11 @@ def run_ai_analysis(symbol, period='6mo', prediction_horizon=5, df=None, info=No
                         except OSError:
                             pass
                     print(f"🔄 Cleared corrupted yfinance cache, retrying {symbol}")
-                    ticker = yf.Ticker(symbol)
-                    df = ticker.history(period=period)
+                    if _USE_CACHED:
+                        df = cached_get_history(symbol, period=period, interval='1d')
+                    else:
+                        ticker = yf.Ticker(symbol)
+                        df = ticker.history(period=period)
                 else:
                     raise
 
@@ -1189,8 +1205,11 @@ def run_ai_analysis(symbol, period='6mo', prediction_horizon=5, df=None, info=No
         if info is None:
             info = {}
             try:
-                ticker = yf.Ticker(symbol)
-                info = ticker.info or {}
+                if _USE_CACHED:
+                    info = cached_get_ticker_info(symbol) or {}
+                else:
+                    ticker = yf.Ticker(symbol)
+                    info = ticker.info or {}
             except Exception:
                 pass
 

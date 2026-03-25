@@ -41,10 +41,10 @@ class Auto0DTEMonitor:
         """Get current live price"""
         try:
             if _USE_CACHED:
-                price, _ = cached_get_price(ticker)
+                price, _ = cached_get_price(ticker, use_cache=False)
                 if price:
                     return price
-                info = cached_get_ticker_info(ticker) or {}
+                info = cached_get_ticker_info(ticker, force_live=True) or {}
                 return info.get('currentPrice')
             stock = yf.Ticker(ticker)
             price = stock.info.get('currentPrice')
@@ -59,7 +59,7 @@ class Auto0DTEMonitor:
     def get_atr(self, ticker):
         """Calculate ATR"""
         if _USE_CACHED:
-            daily = cached_get_history(ticker, period='1mo', interval='1d')
+            daily = cached_get_history(ticker, period='1mo', interval='1d', force_live=True)
         else:
             stock = yf.Ticker(ticker)
             daily = stock.history(period='1mo', interval='1d')

@@ -92,14 +92,14 @@ class UnifiedTradingSystem:
                 # Skip if globally rate-limited
                 if _is_globally_rate_limited():
                     return None
-                info = cached_get_ticker_info(ticker) or {}
+                info = cached_get_ticker_info(ticker, force_live=True) or {}
                 current_price = info.get('currentPrice') or info.get('regularMarketPrice')
                 if not current_price:
-                    price, _ = cached_get_price(ticker)
+                    price, _ = cached_get_price(ticker, use_cache=False)
                     current_price = price
                 if not current_price:
                     return None
-                daily = cached_get_history(ticker, period='1y', interval='1d')
+                daily = cached_get_history(ticker, period='1y', interval='1d', force_live=True)
                 if daily is None or len(daily) < 20:
                     return None
             else:
@@ -340,7 +340,7 @@ class UnifiedTradingSystem:
         
         if _USE_CACHED:
             try:
-                dates = cached_get_option_dates(ticker)
+                dates = cached_get_option_dates(ticker, force_live=True)
                 if dates:
                     # Find nearest expiry (1DTE or next available)
                     today = datetime.now().date()
@@ -351,7 +351,7 @@ class UnifiedTradingSystem:
                             break
                 
                 if expiry_date:
-                    chain = cached_get_option_chain(ticker, expiry_date)
+                    chain = cached_get_option_chain(ticker, expiry_date, use_cache=False)
             except Exception as e:
                 print(f"  ⚠️ {ticker}: Option chain fetch failed: {e}")
         else:

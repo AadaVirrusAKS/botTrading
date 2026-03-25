@@ -9,6 +9,13 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
+# Use cached data layer (Alpaca real-time → yfinance fallback)
+try:
+    from services.market_data import cached_get_price, cached_get_history, cached_get_ticker_info
+    _USE_CACHED = True
+except ImportError:
+    _USE_CACHED = False
+
 # Load the trader instance from the main script
 # This script is meant to be run separately to monitor existing positions
 
@@ -45,26 +52,37 @@ def monitor_spy_qqq_positions():
         print(f"\n📈 Analyzing {ticker}...")
         
         try:
-            stock = yf.Ticker(ticker)
-            
-            # Get live price
-            info = stock.info
-            live_price = None
-            if 'currentPrice' in info and info['currentPrice']:
-                live_price = info['currentPrice']
-            elif 'regularMarketPrice' in info and info['regularMarketPrice']:
-                live_price = info['regularMarketPrice']
-            
-            if live_price is None:
-                intraday = stock.history(period='1d', interval='1m')
-                if len(intraday) > 0:
-                    live_price = intraday['Close'].iloc[-1]
-            
-            if live_price:
-                print(f"   💹 Current Price: ${live_price:.2f}")
+            if _USE_CACHED:
+                info = cached_get_ticker_info(ticker, force_live=True) or {}
+                live_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                if not live_price:
+                    live_price_val, _ = cached_get_price(ticker, use_cache=False)
+                    live_price = live_price_val
                 
-                # Get recent data for context
-                data = stock.history(period='5d', interval='1h')
+                if live_price:
+                    print(f"   💹 Current Price: ${live_price:.2f}")
+                    data = cached_get_history(ticker, period='5d', interval='1h', force_live=True)
+                else:
+                    data = None
+            else:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                live_price = None
+                if 'currentPrice' in info and info['currentPrice']:
+                    live_price = info['currentPrice']
+                elif 'regularMarketPrice' in info and info['regularMarketPrice']:
+                    live_price = info['regularMarketPrice']
+                
+                if live_price is None:
+                    intraday = stock.history(period='1d', interval='1m')
+                    if len(intraday) > 0:
+                        live_price = intraday['Close'].iloc[-1]
+                
+                if live_price:
+                    print(f"   💹 Current Price: ${live_price:.2f}")
+                    data = stock.history(period='5d', interval='1h')
+                else:
+                    data = None
                 if len(data) > 0:
                     recent_high = data['High'].tail(20).max()
                     recent_low = data['Low'].tail(20).min()
