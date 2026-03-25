@@ -48,7 +48,7 @@ _SCAN_IN_PROGRESS = threading.Lock()
 
 # Throttle: last time positions were refreshed with live prices during normal polling
 _LAST_POSITION_REFRESH = 0
-_POSITION_REFRESH_INTERVAL = 60  # seconds between auto-refreshes
+_POSITION_REFRESH_INTERVAL = 15  # seconds between auto-refreshes (live prices)
 
 
 def _poll_alpaca_fill_price(order_id, max_retries=20, delay=1.0):
@@ -211,10 +211,10 @@ def bot_status():
         _LAST_POSITION_REFRESH = time.time()
 
     elif positions and time.time() - _LAST_POSITION_REFRESH >= _POSITION_REFRESH_INTERVAL:
-        # Lightweight periodic refresh for option positions using cached chains.
-        # This keeps option premiums reasonably current without a manual refresh.
+        # Periodic refresh with live prices to keep positions current.
         try:
-            positions = update_positions_with_live_prices(positions, force_live=False)
+            positions = update_positions_with_live_prices(positions, force_live=True)
+            signals = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
             _LAST_POSITION_REFRESH = time.time()
 
             # Persist refreshed prices

@@ -1331,37 +1331,33 @@ def _fetch_all_quotes_batch(symbols):
     
     # 1b. Alpaca real-time: fill as many uncached symbols as possible before yfinance
     try:
-        from services.alpaca_realtime import is_available as _alpaca_ok, get_snapshot_prices, get_live_prices
+        from services.alpaca_realtime import is_available as _alpaca_ok, get_snapshot_quotes, get_live_prices
         if _alpaca_ok():
             alpaca_filled = 0
-            # Stream cache first (free, instant)
-            streamed = get_live_prices(uncached)
             alpaca_now = datetime.now()
-            for sym, price in streamed.items():
-                quote_entry = {
-                    'symbol': sym, 'price': round(price, 2),
-                    'change': 0, 'change_percent': 0,
-                    'volume': 0, 'high': 0, 'low': 0, 'open': 0,
-                    'source': 'alpaca_stream',
-                }
+
+            # REST snapshots with full OHLCV + change% (preferred — has prev_close data)
+            snap_quotes = get_snapshot_quotes(uncached)
+            for sym, quote_entry in snap_quotes.items():
                 results[sym] = quote_entry
                 quote_cache[sym] = (quote_entry, alpaca_now)
                 alpaca_filled += 1
+
+            # For any symbols not covered by snapshots, try stream cache (price only)
             still_need = [s for s in uncached if s not in results]
-            # REST snapshots for the rest
             if still_need:
-                snaps = get_snapshot_prices(still_need)
-                snap_now = datetime.now()
-                for sym, price in snaps.items():
+                streamed = get_live_prices(still_need)
+                for sym, price in streamed.items():
                     quote_entry = {
                         'symbol': sym, 'price': round(price, 2),
-                        'change': 0, 'change_percent': 0,
+                        'change': 0, 'changePct': 0,
                         'volume': 0, 'high': 0, 'low': 0, 'open': 0,
-                        'source': 'alpaca_snapshot',
+                        'source': 'alpaca_stream',
                     }
                     results[sym] = quote_entry
-                    quote_cache[sym] = (quote_entry, snap_now)
+                    quote_cache[sym] = (quote_entry, alpaca_now)
                     alpaca_filled += 1
+
             if alpaca_filled:
                 print(f"[BatchQuotes] Alpaca real-time: {alpaca_filled}/{len(uncached)} symbols")
             uncached = [s for s in uncached if s not in results]

@@ -150,6 +150,70 @@ def get_snapshot_price(symbol: str) -> Optional[float]:
     return prices.get(symbol.upper())
 
 
+def get_snapshot_quotes(symbols: List[str]) -> Dict[str, dict]:
+    """Fetch full snapshot quotes including change% for multiple symbols.
+
+    Returns {symbol: {'price', 'change', 'changePct', 'volume', 'high', 'low', 'open', ...}}.
+    Uses daily_bar + previous_daily_bar from Alpaca for accurate change calculations.
+    """
+    if not symbols:
+        return {}
+    client = _get_data_client()
+    if client is None:
+        return {}
+
+    try:
+        from alpaca.data.requests import StockSnapshotRequest
+        unique = list(set(
+            s.strip().upper() for s in symbols
+            if s and not s.strip().startswith('^')
+        ))
+        if not unique:
+            return {}
+        results = {}
+        BATCH = 200
+        for i in range(0, len(unique), BATCH):
+            chunk = unique[i:i + BATCH]
+            req = StockSnapshotRequest(symbol_or_symbols=chunk)
+            snapshots = client.get_stock_snapshot(req)
+            for sym, snap in snapshots.items():
+                try:
+                    price = float(snap.latest_trade.price) if snap.latest_trade else None
+                    if not price or price <= 0:
+                        continue
+
+                    # Use previous_daily_bar.close as the true previous close
+                    prev_close = None
+                    if snap.previous_daily_bar:
+                        prev_close = float(snap.previous_daily_bar.close)
+
+                    change = round(price - prev_close, 2) if prev_close else 0
+                    change_pct = round((change / prev_close) * 100, 2) if prev_close and prev_close > 0 else 0
+
+                    # Today's bar for OHLV
+                    daily = snap.daily_bar
+                    results[sym] = {
+                        'symbol': sym,
+                        'price': round(price, 2),
+                        'change': change,
+                        'changePct': change_pct,
+                        'volume': int(daily.volume) if daily and daily.volume else 0,
+                        'high': round(float(daily.high), 2) if daily and daily.high else 0,
+                        'low': round(float(daily.low), 2) if daily and daily.low else 0,
+                        'open': round(float(daily.open), 2) if daily and daily.open else 0,
+                        'prev_close': round(prev_close, 2) if prev_close else 0,
+                        'bid': float(snap.latest_quote.bid_price) if snap.latest_quote else None,
+                        'ask': float(snap.latest_quote.ask_price) if snap.latest_quote else None,
+                        'source': 'alpaca_snapshot',
+                    }
+                except Exception:
+                    pass
+        return results
+    except Exception as e:
+        logger.warning(f"[AlpacaRT] Snapshot quotes failed: {e}")
+        return {}
+
+
 def get_latest_quotes(symbols: List[str]) -> Dict[str, dict]:
     """Fetch latest bid/ask quotes for symbols.
 

@@ -916,13 +916,14 @@ def update_positions_with_live_prices(positions, force_live=False):
     """Update positions with current market prices.
     For stocks: batch fetch prices via cached_batch_prices (single API call).
     For options: fetch option premium from option chains.
-    When force_live=True, bypasses all caches to guarantee fresh data.
+    Always fetches live data (use_cache=False, force_live=True) to avoid stale trades.
     """
     if not positions:
         return positions
     
-    use_cache = not force_live
-    update_source = 'live' if force_live else 'cache_or_live'
+    # Always use live data for active positions — stale prices cause bad trades
+    use_cache = False
+    update_source = 'live'
     
     # Separate stock and option positions
     stock_positions = [p for p in positions if p.get('instrument_type', 'stock') != 'option']
@@ -946,7 +947,7 @@ def update_positions_with_live_prices(positions, force_live=False):
     # --- Update stock positions (BATCHED — single API call for all symbols) ---
     stock_symbols = list(set(p['symbol'] for p in stock_positions))
     if stock_symbols:
-        stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='5m', prepost=True, use_cache=use_cache)
+        stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='5m', prepost=True, use_cache=False)
         quote_api_prices = fetch_quote_api_batch(stock_symbols) if force_live else {}
         for pos in stock_positions:
             if pos['symbol'] in stock_prices:
@@ -958,13 +959,13 @@ def update_positions_with_live_prices(positions, force_live=False):
                 pos['last_price_update'] = now_iso
                 _mark_price_update(pos, 'updated', 'stock_quote_api_refreshed')
             else:
-                fallback_price, _ = cached_get_price(pos['symbol'], period='5d', interval='5m', prepost=True, use_cache=use_cache)
+                fallback_price, _ = cached_get_price(pos['symbol'], period='5d', interval='5m', prepost=True, use_cache=False)
                 if fallback_price is not None:
                     pos['current_price'] = float(fallback_price)
                     pos['last_price_update'] = now_iso
                     _mark_price_update(pos, 'updated', 'stock_quote_fallback_refreshed')
                 else:
-                    info = cached_get_ticker_info(pos['symbol'])
+                    info = cached_get_ticker_info(pos['symbol'], force_live=True)
                     info_price = None
                     if info:
                         info_price = info.get('regularMarketPrice') or info.get('currentPrice')
@@ -989,7 +990,7 @@ def update_positions_with_live_prices(positions, force_live=False):
     # Batch fetch underlying prices for all option symbols too
     option_symbols = list(option_by_symbol.keys())
     if option_symbols:
-        underlying_prices = cached_batch_prices(option_symbols, period='5d', interval='5m', prepost=True, use_cache=use_cache)
+        underlying_prices = cached_batch_prices(option_symbols, period='5d', interval='5m', prepost=True, use_cache=False)
     else:
         underlying_prices = {}
     
@@ -1009,7 +1010,7 @@ def update_positions_with_live_prices(positions, force_live=False):
     for symbol, opt_positions in option_by_symbol.items():
         try:
             underlying_price = underlying_prices.get(symbol) 
-            available_dates = cached_get_option_dates(symbol)
+            available_dates = cached_get_option_dates(symbol, force_live=True)
             
             for pos in opt_positions:
                 expiry = pos.get('expiry', '')
@@ -1035,7 +1036,7 @@ def update_positions_with_live_prices(positions, force_live=False):
                     _mark_price_update(pos, 'skipped', 'expiry_not_listed_for_symbol')
                     continue
 
-                chain = cached_get_option_chain(symbol, expiry, use_cache=use_cache)
+                chain = cached_get_option_chain(symbol, expiry, use_cache=False)
                 if not chain:
                     _mark_price_update(pos, 'skipped', 'option_chain_unavailable')
                     continue
@@ -1091,18 +1092,19 @@ def update_positions_with_live_prices(positions, force_live=False):
     return positions
 
 def get_live_option_premium(symbol, expiry, strike, option_type='call', fallback=None, option_ticker=''):
-    """Fetch a best-effort live option premium from cached option chain.
+    """Fetch a best-effort live option premium from option chain.
+    Always bypasses cache to get fresh premiums.
     Returns fallback when live premium is unavailable.
     """
     try:
-        available_dates = cached_get_option_dates(symbol)
+        available_dates = cached_get_option_dates(symbol, force_live=True)
         if not available_dates:
             return float(fallback) if fallback else None
 
         if not expiry or expiry not in available_dates:
             return float(fallback) if fallback else None
 
-        chain = cached_get_option_chain(symbol, expiry)
+        chain = cached_get_option_chain(symbol, expiry, use_cache=False)
         if not chain:
             return float(fallback) if fallback else None
 
@@ -1203,7 +1205,7 @@ def refresh_signal_entries_with_live_prices(signals, force_refresh=False):
             for sym in stock_symbols:
                 _price_cache.pop(sym, None)
 
-    stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='5m', prepost=True) if stock_symbols else {}
+    stock_prices = cached_batch_prices(stock_symbols, period='5d', interval='5m', prepost=True, use_cache=False) if stock_symbols else {}
 
     for signal in signals:
         instrument_type = signal.get('instrument_type', 'stock')
