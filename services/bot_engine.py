@@ -589,6 +589,10 @@ def execute_alpaca_exit(symbol, qty=None):
     try:
         from services.alpaca_service import close_position
         result = close_position(symbol, qty=float(qty) if qty else None)
+        # Check if position didn't exist (no_position means Alpaca has nothing to close)
+        if result.get('status') == 'no_position':
+            print(f"⚠️ ALPACA CLOSE SKIPPED: {symbol} — no position on Alpaca")
+            return {'success': False, 'error': result.get('error', 'No position on Alpaca')}
         print(f"📉 ALPACA CLOSE: {symbol} → {result.get('status', 'closed')}")
         return {'success': True, 'order': result}
     except Exception as e:

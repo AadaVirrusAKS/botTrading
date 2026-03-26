@@ -176,13 +176,30 @@ def get_positions() -> List[Dict]:
 
 
 def close_position(symbol: str, qty: Optional[float] = None) -> Dict:
-    """Close a position (fully or partially)."""
+    """Close a position (fully or partially). Verifies position exists to prevent accidental shorts."""
     client = _get_client()
+    
+    # Verify the position exists on Alpaca before selling
+    try:
+        position = client.get_open_position(symbol)
+        current_qty = float(position.qty)
+    except Exception:
+        # Position does not exist on Alpaca — do NOT submit a sell order
+        print(f"⚠️ ALPACA: No open position for {symbol} — skipping close to prevent accidental short")
+        return {'symbol': symbol, 'status': 'no_position', 'error': 'Position not found on Alpaca'}
+    
     if qty:
+        # Cap sell qty to actual position size to prevent accidental shorts
+        sell_qty = min(float(qty), current_qty)
+        if sell_qty <= 0:
+            print(f"⚠️ ALPACA: Position {symbol} has 0 qty — skipping close")
+            return {'symbol': symbol, 'status': 'no_position', 'error': 'Position qty is 0'}
+        if sell_qty < float(qty):
+            print(f"⚠️ ALPACA: Requested sell {qty} but only {current_qty} available for {symbol}, capping to {sell_qty}")
         # Partial close via market sell
         order_data = MarketOrderRequest(
             symbol=symbol,
-            qty=qty,
+            qty=sell_qty,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
         )

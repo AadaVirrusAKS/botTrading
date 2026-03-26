@@ -1690,6 +1690,13 @@ def _bot_auto_cycle_inner():
                             alpaca_partial = execute_alpaca_exit(close_sym, qty=sell_qty)
                             if alpaca_partial['success']:
                                 alpaca_partial_id = alpaca_partial.get('order', {}).get('id')
+                            else:
+                                alt_sym = pos.get('alpaca_symbol') or pos.get('option_ticker')
+                                if alt_sym and alt_sym != close_sym:
+                                    alpaca_partial = execute_alpaca_exit(alt_sym, qty=sell_qty)
+                                    if alpaca_partial['success']:
+                                        alpaca_partial_id = alpaca_partial.get('order', {}).get('id')
+                            if alpaca_partial_id:
                                 # Use Alpaca fill price as authoritative partial exit price
                                 fill_price = alpaca_partial.get('order', {}).get('filled_avg_price')
                                 if not fill_price and alpaca_partial_id:
@@ -1830,7 +1837,17 @@ def _bot_auto_cycle_inner():
                     alpaca_close = execute_alpaca_exit(close_sym, qty=quantity)
                     if alpaca_close['success']:
                         alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
-                        # Use Alpaca fill price as authoritative exit price
+                    else:
+                        # If primary close failed, retry with alternate symbol
+                        alt_sym = pos.get('alpaca_symbol') or pos.get('option_ticker')
+                        if alt_sym and alt_sym != close_sym:
+                            alpaca_close = execute_alpaca_exit(alt_sym, qty=quantity)
+                            if alpaca_close['success']:
+                                alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
+                        if not alpaca_close_order_id:
+                            print(f"⚠️ ALPACA CLOSE FAILED for {close_sym} — bot will record exit without Alpaca fill price")
+                    # Use Alpaca fill price as authoritative exit price
+                    if alpaca_close_order_id:
                         fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
                         if not fill_price and alpaca_close_order_id:
                             fill_price = _poll_alpaca_fill_price(alpaca_close_order_id)
@@ -2772,7 +2789,13 @@ def _bot_auto_cycle_inner():
                                 position['current_price'] = fill_price
                                 premium = fill_price
                         else:
-                            print(f"⚠️ Alpaca option order failed for {signal.get('contract')}, tracked locally only: {alpaca_result['error']}")
+                            print(f"⚠️ Alpaca option order failed for {signal.get('contract')}, SKIPPING position (no phantom trades): {alpaca_result['error']}")
+                            # Remove the position we just added — don't create phantom positions
+                            if position in account['positions']:
+                                account['positions'].remove(position)
+                            skipped_reasons.append(f"{signal['symbol']}: Alpaca entry failed - {alpaca_result['error']}")
+                            save_bot_state()
+                            continue  # Skip trade recording entirely
                     
                     trade = {
                         'symbol': signal['symbol'],
@@ -2893,7 +2916,13 @@ def _bot_auto_cycle_inner():
                                 position['current_price'] = fill_price
                                 price = fill_price
                         else:
-                            print(f"⚠️ Alpaca order failed for {signal['symbol']}, position tracked locally only: {alpaca_result['error']}")
+                            print(f"⚠️ Alpaca order failed for {signal['symbol']}, SKIPPING position (no phantom trades): {alpaca_result['error']}")
+                            # Remove the position we just added
+                            if position in account['positions']:
+                                account['positions'].remove(position)
+                            skipped_reasons.append(f"{signal['symbol']}: Alpaca entry failed - {alpaca_result['error']}")
+                            save_bot_state()
+                            continue  # Skip trade recording entirely
                     
                     trade = {
                         'symbol': signal['symbol'],
