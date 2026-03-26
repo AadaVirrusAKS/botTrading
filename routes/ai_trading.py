@@ -74,6 +74,12 @@ def _poll_alpaca_fill_price(order_id, max_retries=20, delay=1.0):
 @ai_trading_bp.route('/api/bot/status')
 def bot_status():
     """Get bot status and account info"""
+    # Auto-restart background engine if it died
+    try:
+        from routes.cache_admin import ensure_background_monitor_alive
+        ensure_background_monitor_alive()
+    except Exception:
+        pass
     # Try to acquire the lock with a timeout so the UI never hangs indefinitely
     lock_acquired = BOT_STATE_LOCK.acquire(timeout=5)
     if not lock_acquired:
@@ -210,34 +216,10 @@ def bot_status():
 
         _LAST_POSITION_REFRESH = time.time()
 
-    elif positions and time.time() - _LAST_POSITION_REFRESH >= _POSITION_REFRESH_INTERVAL:
-        # Periodic refresh with live prices to keep positions current.
-        try:
-            positions = update_positions_with_live_prices(positions, force_live=True)
-            signals = refresh_signal_entries_with_live_prices(signals, force_refresh=True)
-            _LAST_POSITION_REFRESH = time.time()
-
-            # Persist refreshed prices
-            with BOT_STATE_LOCK:
-                load_bot_state()
-                account_mode_latest = bot_state['account_mode']
-                account_latest = bot_state['demo_account'] if account_mode_latest == 'demo' else bot_state['real_account']
-                stored_positions = account_latest.get('positions', [])
-                for idx, updated_pos in enumerate(positions):
-                    if idx >= len(stored_positions):
-                        break
-                    stored_pos = stored_positions[idx]
-                    if (
-                        stored_pos.get('symbol') != updated_pos.get('symbol')
-                        or stored_pos.get('timestamp') != updated_pos.get('timestamp')
-                    ):
-                        continue
-                    for field in ('current_price', 'current_bid', 'current_ask', 'underlying_price', 'last_price_update', 'last_checked'):
-                        if field in updated_pos and stored_pos.get(field) != updated_pos.get(field):
-                            stored_pos[field] = updated_pos.get(field)
-                save_bot_state()
-        except Exception as e:
-            print(f"⚠️ Periodic position refresh error: {e}")
+    # NOTE: Periodic refresh removed — auto_cycle STEP 1 (background engine,
+    # every ~10s) is the single source of truth for position pricing.  Having
+    # bot_status also re-fetch prices caused P&L oscillation because two
+    # independent Alpaca/yfinance calls returned slightly different quotes.
 
     # Calculate total unrealized P&L
     total_pnl = 0
@@ -1117,6 +1099,18 @@ def bot_auto_cycle():
         })
     try:
         return _bot_auto_cycle_inner()
+    except Exception as e:
+        import traceback
+        print(f"\n❌ AUTO_CYCLE CRASH: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'message': f'Auto-cycle error: {type(e).__name__}: {e}',
+            'signals': bot_state.get('signals', []),
+            'trades_executed': [],
+            'exits_triggered': [],
+            'skipped_scan': True
+        })
     finally:
         _SCAN_IN_PROGRESS.release()
 
@@ -1181,16 +1175,41 @@ def _bot_auto_cycle_inner():
             if info_price is not None:
                 live_stock_prices[sym] = float(info_price)
         
-        # Fetch live option premiums for option positions (cached chains)
+        # Fetch live option premiums for option positions
+        # Try Alpaca real-time option snapshots first (single batch call)
         option_premiums = {}  # keyed by (symbol, expiry, strike, opt_type)
         option_positions_by_symbol = {}
+        _occ_to_key = {}  # map OCC ticker → (symbol, expiry, strike, opt_type)
         for pos in positions:
             if pos.get('instrument_type') == 'option':
                 sym = pos['symbol']
                 if sym not in option_positions_by_symbol:
                     option_positions_by_symbol[sym] = []
                 option_positions_by_symbol[sym].append(pos)
-        
+                occ = (pos.get('option_ticker') or pos.get('alpaca_symbol') or '').strip().upper()
+                if occ:
+                    key = (sym, pos.get('expiry', ''), pos.get('strike', 0), pos.get('option_type', 'call'))
+                    _occ_to_key[occ] = key
+
+        # Batch Alpaca option snapshot
+        try:
+            from services.alpaca_realtime import get_option_snapshot_quotes
+            if _occ_to_key and get_option_snapshot_quotes is not None:
+                alpaca_quotes = get_option_snapshot_quotes(list(_occ_to_key.keys()))
+                for occ, key in _occ_to_key.items():
+                    q = alpaca_quotes.get(occ)
+                    if q:
+                        mid = q.get('mid', 0)
+                        last = q.get('last', 0)
+                        ask = q.get('ask', 0)
+                        bid = q.get('bid', 0)
+                        price = mid if mid > 0 else (last if last > 0 else (ask if ask > 0 else bid))
+                        if price > 0:
+                            option_premiums[key] = round(price, 2)
+        except Exception:
+            pass
+
+        # Fallback: yfinance chain for positions not resolved by Alpaca
         for symbol, opt_positions in option_positions_by_symbol.items():
             try:
                 available_dates = cached_get_option_dates(symbol)
@@ -1198,6 +1217,9 @@ def _bot_auto_cycle_inner():
                     expiry = pos.get('expiry', '')
                     strike = pos.get('strike', 0)
                     opt_type = pos.get('option_type', 'call')
+                    key = (symbol, expiry, strike, opt_type)
+                    if key in option_premiums:
+                        continue  # Already got from Alpaca
                     
                     matched_expiry = expiry if expiry in available_dates else None
                     if not matched_expiry:
@@ -1217,9 +1239,9 @@ def _bot_auto_cycle_inner():
                                     last = float(row.get('lastPrice', 0))
                                     bid = float(row.get('bid', 0))
                                     ask = float(row.get('ask', 0))
-                                    premium = last if last > 0 else (round((bid + ask) / 2, 2) if bid > 0 and ask > 0 else 0)
+                                    # Prefer bid/ask mid over lastPrice
+                                    premium = round((bid + ask) / 2, 2) if bid > 0 and ask > 0 else (last if last > 0 else 0)
                                     if premium > 0:
-                                        key = (symbol, expiry, strike, opt_type)
                                         option_premiums[key] = premium
             except Exception as e:
                 if not _is_expected_no_data_error(e):
@@ -2417,16 +2439,23 @@ def _bot_auto_cycle_inner():
                 if spy_hist is not None and len(spy_hist) >= 3:
                     spy_close = spy_hist['Close'].dropna()
                     if len(spy_close) >= 3:
+                        # Use LIVE intraday price instead of stale daily bar close.
+                        # Daily bars may not update until after-hours, causing the
+                        # regime to be based on yesterday's close even when the
+                        # market is up today.
+                        spy_live, _ = cached_get_price('SPY', period='5d', interval='5m', prepost=True, use_cache=False)
+                        spy_latest = float(spy_live) if spy_live else float(spy_close.iloc[-1])
+
+                        # SMA calculations use daily closes (stable reference)
                         spy_sma3 = spy_close.rolling(3).mean().iloc[-1]
-                        # FIX 4: Use dual SMA (3-day + 10-day) for more stable regime detection
                         spy_sma10 = spy_close.rolling(min(10, len(spy_close))).mean().iloc[-1]
-                        spy_latest = float(spy_close.iloc[-1])
                         spy_prev = float(spy_close.iloc[-2])
-                        # Bearish: price below BOTH 3-day and 10-day SMA AND last close was down
+
+                        # Bearish: live price below BOTH SMAs AND last daily close was down
                         if spy_latest < spy_sma3 and spy_latest < spy_sma10 and spy_latest < spy_prev:
                             _market_regime = 'bearish'
                             print(f"🐻 Market regime: BEARISH (SPY ${spy_latest:.2f} < SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f}) — CALL entries will be blocked")
-                        # Bullish: price above BOTH 3-day and 10-day SMA AND last close was up
+                        # Bullish: live price above BOTH SMAs AND last daily close was up
                         elif spy_latest > spy_sma3 and spy_latest > spy_sma10 and spy_latest > spy_prev:
                             _market_regime = 'bullish'
                             print(f"🐂 Market regime: BULLISH (SPY ${spy_latest:.2f} > SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f}) — PUT entries will be blocked")

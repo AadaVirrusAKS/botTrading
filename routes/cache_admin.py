@@ -103,6 +103,9 @@ _bg_monitor_running = False
 _bg_monitor_thread = None
 _bg_app = None  # Flask app reference, set by start_background_monitor()
 _BG_INTERVAL = 10  # seconds — matches the frontend auto-cycle rate
+_BG_HEARTBEAT_INTERVAL = 300  # Log heartbeat every 5 minutes
+_bg_last_heartbeat = 0
+_bg_consecutive_errors = 0
 
 def _background_position_monitor():
     """Server-side bot engine that runs the full auto_cycle independently of the browser.
@@ -114,8 +117,9 @@ def _background_position_monitor():
     
     The browser tab is optional — it just displays what the server is already doing.
     """
-    global _bg_monitor_running
+    global _bg_monitor_running, _bg_last_heartbeat, _bg_consecutive_errors
     _bg_monitor_running = True
+    _bg_consecutive_errors = 0
     print(f"🔄 Background bot engine started ({_BG_INTERVAL}s interval) — trades execute even with no browser open")
     
     # Delay first cycle so the initial page load + scan don't compete
@@ -125,6 +129,12 @@ def _background_position_monitor():
     while _bg_monitor_running:
         try:
             time.sleep(_BG_INTERVAL)
+            
+            # Periodic heartbeat so we can tell the engine is alive
+            now_ts = time.time()
+            if now_ts - _bg_last_heartbeat >= _BG_HEARTBEAT_INTERVAL:
+                _bg_last_heartbeat = now_ts
+                print(f"💓 BG Engine heartbeat: running={bot_state.get('running')}, errors={_bg_consecutive_errors}")
             
             # Only run if bot is active (quick in-memory check, no disk read)
             if not bot_state.get('running', False):
@@ -156,18 +166,32 @@ def _background_position_monitor():
                                    content_type='application/json',
                                    data='{}')
                 if resp.status_code == 200:
+                    _bg_consecutive_errors = 0
                     data = resp.get_json()
                     exits = data.get('exits_triggered', [])
                     trades = data.get('trades_executed', [])
                     if exits or trades:
                         print(f"🔄 BG Engine: {len(exits)} exits, {len(trades)} trades executed")
-                elif resp.status_code != 200:
+                else:
+                    _bg_consecutive_errors += 1
                     # Don't spam logs for expected "bot not running" responses
                     data = resp.get_json() or {}
-                    if 'not running' not in data.get('message', ''):
-                        print(f"⚠️ BG Engine: auto_cycle returned {resp.status_code}")
-        except Exception as e:
-            print(f"⚠️ BG Engine error: {e}")
+                    msg = data.get('message', '')
+                    if 'not running' not in msg:
+                        print(f"⚠️ BG Engine: auto_cycle returned {resp.status_code}: {msg[:120]}")
+        except BaseException as e:
+            _bg_consecutive_errors += 1
+            print(f"⚠️ BG Engine error ({type(e).__name__}): {e}")
+            if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                print("🛑 BG Engine: SystemExit/KeyboardInterrupt — stopping")
+                _bg_monitor_running = False
+                return
+            # If too many consecutive errors, slow down to avoid CPU spin
+            if _bg_consecutive_errors >= 10:
+                print(f"⚠️ BG Engine: {_bg_consecutive_errors} consecutive errors — slowing to 60s")
+                time.sleep(50)  # Extra delay on top of _BG_INTERVAL
+    
+    print("🛑 BG Engine: loop exited (_bg_monitor_running=False)")
 
 def start_background_monitor(app=None):
     """Start the background position monitor thread if not already running.
@@ -184,8 +208,22 @@ def start_background_monitor(app=None):
         print('⚠️ BG Engine: No Flask app provided — background monitor not started')
         return
     _bg_monitor_running = True
-    _bg_monitor_thread = threading.Thread(target=_background_position_monitor, daemon=True)
+    _bg_monitor_thread = threading.Thread(target=_background_position_monitor, daemon=True, name='BotBGEngine')
     _bg_monitor_thread.start()
+
+def ensure_background_monitor_alive():
+    """Restart the background engine if it died. Called from health checks."""
+    global _bg_monitor_thread, _bg_monitor_running
+    if _bg_app is None:
+        return False
+    if _bg_monitor_thread and _bg_monitor_thread.is_alive():
+        return True
+    # Thread died — restart it
+    print("🔄 BG Engine: Thread died — auto-restarting...")
+    _bg_monitor_running = True
+    _bg_monitor_thread = threading.Thread(target=_background_position_monitor, daemon=True, name='BotBGEngine')
+    _bg_monitor_thread.start()
+    return True
 
 def stop_background_monitor():
     """Stop the background monitor gracefully."""
