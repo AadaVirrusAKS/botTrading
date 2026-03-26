@@ -1042,7 +1042,15 @@ def update_positions_with_live_prices(positions, force_live=False):
         ask = quote.get('ask', 0)
         mid = quote.get('mid', 0)
         last = quote.get('last', 0)
-        price = mid if mid > 0 else (last if last > 0 else (ask if ask > 0 else bid))
+        # SAFETY: Only use Alpaca price when live bid/ask quotes exist.
+        # When bid=0 AND ask=0, 'last' may be from a previous session (stale)
+        # and causes false stop-loss triggers.
+        if bid > 0 and ask > 0:
+            price = mid  # bid+ask midpoint
+        elif bid > 0 or ask > 0:
+            price = ask if ask > 0 else bid
+        else:
+            price = 0  # no active quotes — skip to yfinance fallback
         if price <= 0:
             continue
         for pos in matching_positions:
@@ -1163,7 +1171,14 @@ def get_live_option_premium(symbol, expiry, strike, option_type='call', fallback
                 ask = q.get('ask', 0)
                 mid = q.get('mid', 0)
                 last = q.get('last', 0)
-                price = mid if mid > 0 else (last if last > 0 else (ask if ask > 0 else bid))
+                # SAFETY: Only use Alpaca price when live bid/ask quotes exist.
+                # When bid=0 AND ask=0, 'last' may be stale (previous session).
+                if bid > 0 and ask > 0:
+                    price = mid
+                elif bid > 0 or ask > 0:
+                    price = ask if ask > 0 else bid
+                else:
+                    price = 0
                 if price > 0:
                     return round(price, 2)
         except Exception:

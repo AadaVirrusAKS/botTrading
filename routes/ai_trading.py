@@ -1203,7 +1203,15 @@ def _bot_auto_cycle_inner():
                         last = q.get('last', 0)
                         ask = q.get('ask', 0)
                         bid = q.get('bid', 0)
-                        price = mid if mid > 0 else (last if last > 0 else (ask if ask > 0 else bid))
+                        # SAFETY: Only use Alpaca price when live bid/ask quotes exist.
+                        # When bid=0 AND ask=0, the 'last' trade price may be from a
+                        # previous session (stale) and causes false stop-loss triggers.
+                        if bid > 0 and ask > 0:
+                            price = mid  # bid+ask midpoint (most accurate)
+                        elif bid > 0 or ask > 0:
+                            price = ask if ask > 0 else bid  # one-sided quote
+                        else:
+                            price = 0  # no active quotes — skip, use yfinance fallback
                         if price > 0:
                             option_premiums[key] = round(price, 2)
         except Exception:
@@ -3391,8 +3399,16 @@ def bot_close_position():
             stock_price = target_pos['current_price']
         
         if is_option:
-            # For options: use current_price (premium) for P&L, multiply by 100
-            price = target_pos['current_price']  # Current premium
+            # For options: fetch live premium, don't rely on stale current_price
+            live_premium = get_live_option_premium(
+                symbol,
+                target_pos.get('expiry', ''),
+                target_pos.get('strike', 0),
+                target_pos.get('option_type', 'call'),
+                fallback=target_pos['current_price'],
+                option_ticker=target_pos.get('option_ticker', '')
+            )
+            price = live_premium if live_premium and live_premium > 0 else target_pos['current_price']
             pnl = (price - target_pos['entry_price']) * target_pos['quantity'] * 100
         else:
             price = stock_price
@@ -3408,12 +3424,20 @@ def bot_close_position():
             alpaca_close = execute_alpaca_exit(close_sym, qty=target_pos['quantity'])
             if alpaca_close['success']:
                 alpaca_close_id = alpaca_close.get('order', {}).get('id')
-                # Log Alpaca fill for reference (bot price is authoritative)
+                # Use Alpaca fill price as authoritative exit price
                 fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
                 if not fill_price and alpaca_close_id:
                     fill_price = _poll_alpaca_fill_price(alpaca_close_id)
                 if fill_price:
                     print(f"📋 ALPACA FILL (exit): {close_sym} filled @ ${fill_price:.2f} (bot price: ${price:.2f})")
+                    price = fill_price
+                    # Recalculate P&L with Alpaca fill price
+                    if is_option:
+                        pnl = (price - target_pos['entry_price']) * target_pos['quantity'] * 100
+                    elif target_pos['side'] == 'LONG':
+                        pnl = (price - target_pos['entry_price']) * target_pos['quantity']
+                    else:
+                        pnl = (target_pos['entry_price'] - price) * target_pos['quantity']
         
         trade = {
             'symbol': symbol,
@@ -3465,7 +3489,16 @@ def bot_close_all():
             stock_price = batch_prices.get(pos['symbol'], pos['current_price'])
             
             if is_option:
-                price = pos['current_price']  # Option premium
+                # Fetch live option premium instead of relying on stale current_price
+                live_premium = get_live_option_premium(
+                    pos['symbol'],
+                    pos.get('expiry', ''),
+                    pos.get('strike', 0),
+                    pos.get('option_type', 'call'),
+                    fallback=pos['current_price'],
+                    option_ticker=pos.get('option_ticker', '')
+                )
+                price = live_premium if live_premium and live_premium > 0 else pos['current_price']
             else:
                 price = stock_price
             
@@ -3482,12 +3515,18 @@ def bot_close_all():
                     alpaca_close = execute_alpaca_exit(close_sym, qty=pos['quantity'])
                     if alpaca_close['success']:
                         alpaca_close_id = alpaca_close.get('order', {}).get('id')
-                        # Log Alpaca fill for reference (bot price is authoritative)
+                        # Use Alpaca fill price as authoritative exit price
                         fill_price = alpaca_close.get('order', {}).get('filled_avg_price')
                         if not fill_price and alpaca_close_id:
                             fill_price = _poll_alpaca_fill_price(alpaca_close_id)
                         if fill_price:
                             print(f"📋 ALPACA FILL (close-all): {close_sym} filled @ ${fill_price:.2f} (bot price: ${price:.2f})")
+                            price = fill_price
+                            # Recalculate P&L with actual fill price
+                            if pos.get('side', 'LONG') == 'LONG':
+                                pnl = (price - pos['entry_price']) * pos['quantity'] * multiplier
+                            else:
+                                pnl = (pos['entry_price'] - price) * pos['quantity'] * multiplier
                     else:
                         print(f"⚠️ ALPACA close failed for {close_sym}: {alpaca_close.get('error')}")
                 except Exception as e:
