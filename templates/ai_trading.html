@@ -661,13 +661,15 @@
         }
         
         .trend-badge.bullish {
-            background: rgba(16, 185, 129, 0.2);
-            color: #10b981;
+            background: rgba(16, 185, 129, 0.25);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
         }
         
         .trend-badge.bearish {
-            background: rgba(239, 68, 68, 0.2);
-            color: #ef4444;
+            background: rgba(239, 68, 68, 0.25);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
         }
         
         .trend-badge.neutral {
@@ -744,8 +746,10 @@
         .scan-table tbody tr:hover {
             background: rgba(99, 102, 241, 0.06);
         }
-        .scan-table tbody tr.bull-row { border-left: 3px solid #10b981; }
-        .scan-table tbody tr.bear-row { border-left: 3px solid #ef4444; }
+        .scan-table tbody tr.bull-row { border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.04); }
+        .scan-table tbody tr.bear-row { border-left: 3px solid #ef4444; background: rgba(239, 68, 68, 0.04); }
+        .scan-table tbody tr.bull-row .sym-cell { color: #34d399; }
+        .scan-table tbody tr.bear-row .sym-cell { color: #f87171; }
         .scan-table .sym-cell { font-weight: 700; font-size: 14px; }
         .scan-table .price-cell { font-weight: 600; }
 
@@ -1850,8 +1854,17 @@
         async function refreshStatus(forceLive = false) {
             try {
             statusRefreshCount += 1;
-            const periodicForceLive = (statusRefreshCount % 2 === 0); // ~every 10s at 5s polling
-            const useForceLive = forceLive || periodicForceLive;
+            // Only use force_live when explicitly requested (user clicks Refresh).
+            // When bot is running, auto_cycle (every ~10s) is the single source of
+            // truth for position pricing.  Mixing force_live polls with auto_cycle
+            // caused P&L oscillation because the two code paths returned slightly
+            // different quotes from different data sources.
+            // When bot is stopped but positions exist, do a slow periodic force
+            // refresh (~every 60s) so prices don't go completely stale.
+            let useForceLive = forceLive;
+            if (!useForceLive && !botRunning && statusRefreshCount % 12 === 0) {
+                useForceLive = true;  // ~60s at 5s polling when bot stopped
+            }
             const response = await resilientFetch(`/api/bot/status?_ts=${Date.now()}${useForceLive ? '&force_live=1' : ''}`, { cache: 'no-store' }, { timeoutMs: 25000, retries: 1, label: 'refreshStatus' });
                 const data = await response.json();
                 
