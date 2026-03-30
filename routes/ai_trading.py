@@ -88,6 +88,10 @@ def bot_status():
         account_mode = bot_state.get('account_mode', 'demo')
         account = bot_state.get('demo_account', {}) if account_mode == 'demo' else bot_state.get('real_account', {})
         positions = [pos.copy() for pos in account.get('positions', [])]
+        # Stamp last_checked so UI shows system is alive even on stale response
+        _stale_now = datetime.now().isoformat()
+        for pos in positions:
+            pos['last_checked'] = _stale_now
         total_pnl = 0
         for pos in positions:
             entry = pos.get('entry_price', 0)
@@ -220,6 +224,12 @@ def bot_status():
     # every ~10s) is the single source of truth for position pricing.  Having
     # bot_status also re-fetch prices caused P&L oscillation because two
     # independent Alpaca/yfinance calls returned slightly different quotes.
+
+    # Always stamp last_checked so the UI shows the system is alive,
+    # even when we didn't do a live price fetch this poll.
+    now_iso = datetime.now().isoformat()
+    for pos in positions:
+        pos['last_checked'] = now_iso
 
     # Calculate total unrealized P&L
     total_pnl = 0
@@ -1158,8 +1168,9 @@ def _bot_auto_cycle_inner():
         position_symbols = list(set(p['symbol'] for p in positions))
         live_stock_prices = {}
         
-        # Batch fetch live stock prices (single API call via cache)
-        live_stock_prices = cached_batch_prices(position_symbols, period='5d', interval='5m', prepost=True)
+        # Batch fetch live stock prices — use_cache=False so positions always
+        # get fresh prices (still throttled by _FORCE_LIVE_MIN_TTL=15s internally)
+        live_stock_prices = cached_batch_prices(position_symbols, period='5d', interval='5m', prepost=True, use_cache=False)
         missing_symbols = [s for s in position_symbols if s not in live_stock_prices]
         if missing_symbols:
             quote_api_prices = fetch_quote_api_batch(missing_symbols)
@@ -1323,21 +1334,29 @@ def _bot_auto_cycle_inner():
         for pos in positions:
             symbol = pos['symbol']
             is_option = pos.get('instrument_type') == 'option'
+            # Always stamp last_checked so UI shows auto_cycle is alive
+            pos['last_checked'] = _cycle_now_iso
             
             if is_option:
                 key = (symbol, pos.get('expiry', ''), pos.get('strike', 0), pos.get('option_type', 'call'))
                 if key not in option_premiums:
+                    pos['price_update_status'] = 'skipped'
+                    pos['price_update_reason'] = 'no_option_quote'
                     continue
                 current_price = option_premiums[key]
                 pos['current_price'] = current_price  # Update for display
                 pos['last_price_update'] = _cycle_now_iso
+                pos['price_update_status'] = 'updated'
                 _any_price_updated = True
             else:
                 if symbol not in live_stock_prices:
+                    pos['price_update_status'] = 'skipped'
+                    pos['price_update_reason'] = 'no_stock_quote'
                     continue
                 current_price = live_stock_prices[symbol]
                 pos['current_price'] = current_price
                 pos['last_price_update'] = _cycle_now_iso
+                pos['price_update_status'] = 'updated'
                 _any_price_updated = True
                 
             entry_price = pos.get('entry_price') or 0
@@ -1917,8 +1936,8 @@ def _bot_auto_cycle_inner():
                 save_bot_state()
         
         # Save state if any price/SL/target updates were made (even if exits occurred)
-        # This ensures current_price values are persisted so the UI shows fresh prices
-        elif dynamic_any_updated or _any_price_updated:
+        # This ensures current_price and last_checked values are persisted
+        elif dynamic_any_updated or _any_price_updated or positions:
             with BOT_STATE_LOCK:
                 save_bot_state()
     
@@ -2303,7 +2322,20 @@ def _bot_auto_cycle_inner():
             with BOT_STATE_LOCK:
                 load_bot_state()
                 acct_live = bot_state['demo_account'] if account_mode == 'demo' else bot_state['real_account']
-                return float(recalculate_balance(acct_live))
+                internal_balance = float(recalculate_balance(acct_live))
+            # When Alpaca execution is enabled, also check Alpaca's actual buying power
+            # and use the LOWER of internal balance vs Alpaca buying power
+            if is_alpaca_execution_enabled():
+                try:
+                    from services.alpaca_service import get_account as get_alpaca_account
+                    alpaca_acct = get_alpaca_account()
+                    alpaca_bp = float(alpaca_acct.get('buying_power', 0))
+                    if alpaca_bp < internal_balance:
+                        print(f"⚠️ Alpaca buying power ${alpaca_bp:.2f} < internal balance ${internal_balance:.2f} — using Alpaca BP")
+                    return min(internal_balance, alpaca_bp)
+                except Exception as e:
+                    print(f"⚠️ Could not fetch Alpaca buying power: {e} — using internal balance")
+            return internal_balance
 
         def _reserve_execution_slot(exec_key):
             now_ts = time.time()
@@ -3065,6 +3097,12 @@ def bot_trade():
                         position['entry_price'] = fill_price
                         position['current_price'] = fill_price
                         price = fill_price
+                else:
+                    # Alpaca order failed — remove position to avoid phantom trades
+                    if position in account['positions']:
+                        account['positions'].remove(position)
+                    save_bot_state()
+                    return jsonify({'success': False, 'error': f'Alpaca order failed: {alpaca_result["error"]}'}), 400
 
             # Log trade
             trade = {
@@ -3335,6 +3373,10 @@ def bot_trade_option():
                     print(f"📋 ALPACA FILL (entry): {contract} filled @ ${fill_price:.2f} (bot price: ${premium:.2f})")
                     position['entry_price'] = fill_price
                     position['current_price'] = fill_price
+            else:
+                # Alpaca order failed — don't create phantom position
+                save_bot_state()
+                return jsonify({'success': False, 'error': f'Alpaca order failed: {alpaca_result["error"]}'}), 400
 
         account['positions'].append(position)
 

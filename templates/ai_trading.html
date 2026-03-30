@@ -1862,8 +1862,8 @@
             // When bot is stopped but positions exist, do a slow periodic force
             // refresh (~every 60s) so prices don't go completely stale.
             let useForceLive = forceLive;
-            if (!useForceLive && !botRunning && statusRefreshCount % 12 === 0) {
-                useForceLive = true;  // ~60s at 5s polling when bot stopped
+            if (!useForceLive && !botRunning && statusRefreshCount % 4 === 0) {
+                useForceLive = true;  // ~20s at 5s polling when bot stopped
             }
             const response = await resilientFetch(`/api/bot/status?_ts=${Date.now()}${useForceLive ? '&force_live=1' : ''}`, { cache: 'no-store' }, { timeoutMs: 25000, retries: 1, label: 'refreshStatus' });
                 const data = await response.json();

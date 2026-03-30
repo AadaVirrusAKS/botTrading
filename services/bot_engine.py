@@ -561,10 +561,21 @@ def is_alpaca_execution_enabled():
 def execute_alpaca_entry(symbol, qty, side, order_type='market', stop_loss=None, take_profit=None):
     """
     Execute a BUY/SELL entry order on Alpaca paper trading.
+    Checks buying power before submitting.
     Returns dict with 'success', 'order', and 'error' keys.
     """
     try:
-        from services.alpaca_service import place_order
+        from services.alpaca_service import place_order, get_account
+        # Check buying power before submitting order
+        try:
+            acct_info = get_account()
+            buying_power = acct_info.get('buying_power', 0)
+            if buying_power <= 0:
+                msg = f"Alpaca buying power is ${buying_power:.2f} — no cash available"
+                print(f"🚫 ALPACA ORDER BLOCKED: {symbol} - {msg}")
+                return {'success': False, 'error': msg}
+        except Exception as bp_err:
+            print(f"⚠️ Could not check Alpaca buying power: {bp_err} — proceeding with order")
         alpaca_side = 'buy' if side == 'LONG' else 'sell'
         result = place_order(
             symbol=symbol,

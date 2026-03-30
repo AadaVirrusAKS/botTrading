@@ -360,8 +360,8 @@
             const origLoad = window.dashboard.loadActivePositions.bind(window.dashboard);
             window.dashboard.loadActivePositions = async function(forceRefresh = false) {
                 await origLoad(forceRefresh);
-                // Check if active positions section has any items
-                const posCount = document.querySelectorAll('.position-card:not(.closed)').length;
+                // Check if active positions section has any items (rendered as <tr> rows in tbody)
+                const posCount = document.querySelectorAll('#positions-list tbody tr').length;
                 const hadPositions = hasActivePositions;
                 hasActivePositions = posCount > 0;
                 if (hadPositions !== hasActivePositions) startMonitorPolling(); // adjust poll rate
