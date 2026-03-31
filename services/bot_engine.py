@@ -69,6 +69,7 @@ bot_state = {
     },
     'real_account': {
         'balance': 0,
+        'initial_balance': 0,
         'positions': [],
         'trades': []
     }
@@ -164,6 +165,7 @@ def init_user_bot_state(user_id):
         },
         'real_account': {
             'balance': 0,
+            'initial_balance': 0,
             'positions': [],
             'trades': []
         }
@@ -493,6 +495,11 @@ def load_bot_state():
         bot_state['settings']['reentry_cooldown_minutes'] = 10
     if 'max_loss_per_trade' not in bot_state['settings']:
         bot_state['settings']['max_loss_per_trade'] = 500
+    # Backfill initial_balance for real_account (prevents recalculate_balance from defaulting to $10k)
+    real_acct = bot_state.get('real_account', {})
+    if 'initial_balance' not in real_acct:
+        real_acct['initial_balance'] = 0
+        _needs_save = True
     # Migrate: backfill 'source' field on existing positions
     _needs_save = False
     for acct_key in ('demo_account', 'real_account'):

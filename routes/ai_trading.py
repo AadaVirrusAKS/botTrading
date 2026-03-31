@@ -458,12 +458,29 @@ def bot_switch_account():
     with BOT_STATE_LOCK:
         load_bot_state()  # Load existing state first
         bot_state['account_mode'] = account_mode
+        # Safety: disable auto_trade when switching to real account
+        # Real account requires Alpaca to be configured for actual execution;
+        # without it the bot would trade against an empty $0 balance.
+        warning = None
+        if account_mode == 'real' and bot_state.get('auto_trade'):
+            real_acct = bot_state.get('real_account', {})
+            real_balance = float(real_acct.get('balance', 0))
+            alpaca_enabled = bot_state.get('alpaca_execution', False)
+            if real_balance <= 0 and not alpaca_enabled:
+                bot_state['auto_trade'] = False
+                warning = 'Auto-trade disabled — real account has $0 balance and Alpaca is not configured'
+                print(f"⚠️ {warning}")
         save_bot_state()
+    
+    msg = f'Switched to {account_mode} account'
+    if warning:
+        msg += f'. {warning}'
     
     return jsonify({
         'success': True,
-        'message': f'Switched to {account_mode} account',
-        'account_mode': account_mode
+        'message': msg,
+        'account_mode': account_mode,
+        'auto_trade': bot_state.get('auto_trade', False)
     })
 
 @ai_trading_bp.route('/api/bot/test_trade', methods=['POST'])
