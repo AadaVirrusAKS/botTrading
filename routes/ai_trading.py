@@ -1425,7 +1425,23 @@ def _bot_auto_cycle_inner():
             # - Options: wider ATR (5-8% of premium), min 15min hold before trailing activates
             # - Tiered: trailing widens as profit grows (let runners run)
             # - Trend-aware: if underlying is trending in our favor, use widest trailing
-            if not dynamic_updated and not _in_grace_period:
+            #
+            # GUARD: Don't adjust trailing stops for swing trades outside market hours
+            # After-hours prices are unreliable and can ratchet stops to bad levels
+            _skip_trailing_after_hours = False
+            if pos.get('trade_type', 'swing') == 'swing':
+                try:
+                    import pytz
+                    _et_tz2 = pytz.timezone('US/Eastern')
+                    _now_et2 = datetime.now(_et_tz2)
+                    _et_h2, _et_m2 = _now_et2.hour, _now_et2.minute
+                    _mkt_open = (_et_h2 > 9 or (_et_h2 == 9 and _et_m2 >= 30)) and _et_h2 < 16 and _now_et2.weekday() < 5
+                    if not _mkt_open:
+                        _skip_trailing_after_hours = True
+                except Exception:
+                    pass
+
+            if not dynamic_updated and not _in_grace_period and not _skip_trailing_after_hours:
                 trailing_mode = str(bot_state['settings'].get('trailing_stop', 'atr')).strip()
                 if not trailing_mode:
                     trailing_mode = 'atr'
@@ -1441,6 +1457,20 @@ def _bot_auto_cycle_inner():
                     min_profit_to_trail = 0.03   # 3% minimum before trailing (was 0.5%)
                 else:
                     min_profit_to_trail = 0.005  # 0.5% for stocks (unchanged)
+
+                # ---- BREAKEVEN STOP PROTECTION ----
+                # When an option is in profit (>=3%) but the trailing math can't
+                # clear entry_price (because trailing_width > profit), move stop
+                # to breakeven so winners never turn into losers.
+                if is_option and entry_price > 0 and _hold_minutes >= _min_hold:
+                    if side == 'LONG':
+                        _curr_profit_pct = (current_price - entry_price) / entry_price
+                    else:
+                        _curr_profit_pct = (entry_price - current_price) / entry_price
+                    if _curr_profit_pct >= min_profit_to_trail and stop_loss < entry_price:
+                        pos['stop_loss'] = entry_price
+                        stop_loss = entry_price
+                        print(f"🛡️ BREAKEVEN STOP: {pos.get('contract', symbol)} — profit +{_curr_profit_pct*100:.1f}%, moving SL to entry ${entry_price:.2f}")
 
                 # For SWING trades: use high/low watermark instead of current_price
                 is_swing = pos.get('trade_type', 'swing') == 'swing'
@@ -1507,12 +1537,12 @@ def _bot_auto_cycle_inner():
                         # Today's IWM/ORCL/JPM all went from +2-5% to -10% because
                         # the 3.5x ATR trailing was too wide for thin profits.
                         if is_option and profit_pct < 0.05:
-                            # Very small option profit: trail at breakeven + small buffer
-                            # This ensures we don't turn winners into losers
-                            atr_multiplier = 2.0
+                            # Very small option profit: tight trail to protect gains
+                            # With 6% ATR, 1.0x = 6% width — just enough to clear entry
+                            atr_multiplier = 1.0
                         elif profit_pct < 0.10:
-                            # <10% profit: give room to breathe
-                            atr_multiplier = 3.0 if is_option else 2.5
+                            # <10% profit: moderate room
+                            atr_multiplier = 1.5 if is_option else 2.5
                         elif profit_pct < 0.25:
                             # 10-25% profit: medium trailing
                             atr_multiplier = 2.5 if is_option else 2.0
@@ -1551,13 +1581,19 @@ def _bot_auto_cycle_inner():
                             base_trailing_pct = 0.05
 
                         # Tier the fixed % based on profit
+                        # FIX: Old 8% min trailing was wider than most small profits,
+                        # making it impossible for trailing to clear entry_price.
+                        # Now: small profit → tight trail to lock breakeven+;
+                        # larger profit → wider trail to let runners run.
                         if is_option:
-                            if profit_pct < 0.10:
-                                trailing_pct = max(base_trailing_pct, 0.08)  # 8% min for options
+                            if profit_pct < 0.05:
+                                trailing_pct = max(base_trailing_pct, 0.025)  # 2.5% — tight, protect small gains
+                            elif profit_pct < 0.10:
+                                trailing_pct = max(base_trailing_pct, 0.04)   # 4% — moderate
                             elif profit_pct < 0.25:
-                                trailing_pct = max(base_trailing_pct, 0.06)
+                                trailing_pct = max(base_trailing_pct, 0.05)   # 5%
                             else:
-                                trailing_pct = max(base_trailing_pct, 0.05)
+                                trailing_pct = max(base_trailing_pct, 0.05)   # 5% for big runners
                         else:
                             trailing_pct = base_trailing_pct
 
@@ -1624,7 +1660,7 @@ def _bot_auto_cycle_inner():
             # ===== MAX LOSS % GUARD FOR OPTIONS =====
             # Prevents catastrophic option losses (e.g., -50% GOOGL calls)
             if not exit_reason and is_option and entry_price > 0:
-                max_option_loss_pct = float(bot_state['settings'].get('max_option_loss_pct', 30)) / 100
+                max_option_loss_pct = float(bot_state['settings'].get('max_option_loss_pct', 20)) / 100
                 if side == 'LONG':
                     option_loss_pct = (entry_price - current_price) / entry_price
                 else:
@@ -1697,7 +1733,8 @@ def _bot_auto_cycle_inner():
             
             # ===== PARTIAL PROFIT-TAKING =====
             # When target is hit: sell 50% at Target 1, move stop to breakeven, let rest run to Target 2
-            if not exit_reason and bot_state['settings'].get('partial_profit_taking', True):
+            # Skip for swing trades outside market hours
+            if not exit_reason and not _skip_trailing_after_hours and bot_state['settings'].get('partial_profit_taking', True):
                 target_2 = pos.get('target_2', 0)
                 partial_sold = pos.get('_partial_sold', False)
                 
@@ -1813,7 +1850,22 @@ def _bot_auto_cycle_inner():
             
             # Check exit conditions based on position side (full exit)
             # Skip exit checks during grace period — let the trade develop before evaluating
-            if not exit_reason and not _in_grace_period:
+            # Skip exit checks for SWING trades outside market hours (9:30 AM - 4:00 PM ET)
+            # Price data after hours is unreliable and can trigger false trailing stops
+            _skip_exit_after_hours = False
+            if pos.get('trade_type', 'swing') == 'swing':
+                try:
+                    import pytz
+                    _et_tz = pytz.timezone('US/Eastern')
+                    _now_et = datetime.now(_et_tz)
+                    _et_h, _et_m = _now_et.hour, _now_et.minute
+                    _in_market_hours = (_et_h > 9 or (_et_h == 9 and _et_m >= 30)) and _et_h < 16 and _now_et.weekday() < 5
+                    if not _in_market_hours:
+                        _skip_exit_after_hours = True
+                except Exception:
+                    pass
+
+            if not exit_reason and not _in_grace_period and not _skip_exit_after_hours:
                 if side == 'LONG':
                     if stop_loss > 0 and current_price <= stop_loss:
                         exit_reason = 'TRAILING_STOP' if _stop_is_trailing else 'STOP_LOSS'

@@ -8,6 +8,7 @@ Provides near-zero-latency stock prices via Alpaca's Data API:
 Requires alpaca-py SDK (already in requirements.txt) and valid Alpaca credentials.
 Free tier gets IEX real-time data; paid tier gets SIP (full market).
 """
+import atexit
 import os
 import threading
 import time
@@ -340,74 +341,119 @@ _on_trade_handler = None
 _on_quote_handler = None
 
 
+def stop_stream():
+    """Close the existing Alpaca WebSocket stream so the connection slot is freed."""
+    global _stream, _stream_thread
+    with _stream_lock:
+        if _stream is not None:
+            try:
+                _stream.stop()
+            except Exception:
+                pass
+            _stream = None
+        _stream_thread = None
+
+atexit.register(stop_stream)
+
+
 def _ensure_stream_running():
-    """Start the Alpaca WebSocket stream thread if not already running."""
+    """Start the Alpaca WebSocket stream thread if not already running.
+
+    Retries up to 3 times with a back-off when the connection limit is exceeded
+    (stale connections from a previous process may take a few seconds to expire).
+    """
     global _stream, _stream_thread, _on_trade_handler, _on_quote_handler
+
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5  # seconds
+
     with _stream_lock:
         if _stream_thread is not None and _stream_thread.is_alive():
             return True
         api_key, secret_key = _get_credentials()
         if not api_key or not secret_key:
             return False
-        try:
-            from alpaca.data.live import StockDataStream
-            _stream = StockDataStream(api_key, secret_key)
 
-            async def _on_trade(trade):
-                sym = trade.symbol
-                price = float(trade.price)
-                now = datetime.now()
-                with _live_prices_lock:
-                    _live_prices[sym] = {
-                        'price': price,
-                        'ts': now,
-                        'bid': _live_prices.get(sym, {}).get('bid'),
-                        'ask': _live_prices.get(sym, {}).get('ask'),
-                        'source': 'alpaca_stream',
-                    }
-                # Notify subscribers
-                with _subscribers_lock:
-                    for cb in list(_subscribers.values()):
-                        try:
-                            cb(sym, {'price': price, 'ts': now})
-                        except Exception:
-                            pass
+        async def _on_trade(trade):
+            sym = trade.symbol
+            price = float(trade.price)
+            now = datetime.now()
+            with _live_prices_lock:
+                _live_prices[sym] = {
+                    'price': price,
+                    'ts': now,
+                    'bid': _live_prices.get(sym, {}).get('bid'),
+                    'ask': _live_prices.get(sym, {}).get('ask'),
+                    'source': 'alpaca_stream',
+                }
+            # Notify subscribers
+            with _subscribers_lock:
+                for cb in list(_subscribers.values()):
+                    try:
+                        cb(sym, {'price': price, 'ts': now})
+                    except Exception:
+                        pass
 
-            async def _on_quote(quote):
-                sym = quote.symbol
-                bid = float(quote.bid_price) if quote.bid_price else None
-                ask = float(quote.ask_price) if quote.ask_price else None
-                with _live_prices_lock:
-                    entry = _live_prices.get(sym, {})
-                    entry['bid'] = bid
-                    entry['ask'] = ask
-                    if bid and ask:
-                        entry['mid'] = round((bid + ask) / 2, 4)
-                    _live_prices[sym] = entry
+        async def _on_quote(quote):
+            sym = quote.symbol
+            bid = float(quote.bid_price) if quote.bid_price else None
+            ask = float(quote.ask_price) if quote.ask_price else None
+            with _live_prices_lock:
+                entry = _live_prices.get(sym, {})
+                entry['bid'] = bid
+                entry['ask'] = ask
+                if bid and ask:
+                    entry['mid'] = round((bid + ask) / 2, 4)
+                _live_prices[sym] = entry
 
-            _stream.subscribe_trades(_on_trade)
-            _stream.subscribe_quotes(_on_quote)
+        _on_trade_handler = _on_trade
+        _on_quote_handler = _on_quote
 
-            # Store handlers at module level for subscribe_symbols
-            _on_trade_handler = _on_trade
-            _on_quote_handler = _on_quote
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                from alpaca.data.live import StockDataStream
+                _stream = StockDataStream(api_key, secret_key)
 
-            def _run_stream():
-                try:
-                    _stream.run()
-                except ssl.SSLCertVerificationError as e:
-                    logger.error(f"[AlpacaRT] SSL certificate error — WebSocket disabled: {e}")
-                    logger.error("[AlpacaRT] Fix: run '/Applications/Python 3.12/Install Certificates.command' or 'pip install certifi'")
-                except Exception as e:
-                    logger.error(f"[AlpacaRT] Stream error: {e}")
+                _stream.subscribe_trades(_on_trade)
+                _stream.subscribe_quotes(_on_quote)
 
-            _stream_thread = threading.Thread(target=_run_stream, daemon=True, name="alpaca-stream")
-            _stream_thread.start()
-            logger.info("[AlpacaRT] WebSocket stream started")
-            return True
-        except Exception as e:
-            logger.error(f"[AlpacaRT] Failed to start stream: {e}")
-            return False
+                def _run_stream():
+                    try:
+                        _stream.run()
+                    except ssl.SSLCertVerificationError as e:
+                        logger.error(f"[AlpacaRT] SSL certificate error — WebSocket disabled: {e}")
+                        logger.error("[AlpacaRT] Fix: run '/Applications/Python 3.12/Install Certificates.command' or 'pip install certifi'")
+                    except ValueError as e:
+                        if "connection limit" in str(e).lower():
+                            logger.warning(f"[AlpacaRT] Connection limit exceeded — stale connection may still be open")
+                        else:
+                            logger.error(f"[AlpacaRT] Stream error: {e}")
+                    except Exception as e:
+                        logger.error(f"[AlpacaRT] Stream error: {e}")
+
+                _stream_thread = threading.Thread(target=_run_stream, daemon=True, name="alpaca-stream")
+                _stream_thread.start()
+
+                # Give the thread a moment to connect; if it dies immediately it hit the limit
+                time.sleep(1.5)
+                if _stream_thread.is_alive():
+                    logger.info("[AlpacaRT] WebSocket stream started")
+                    return True
+                else:
+                    logger.warning(f"[AlpacaRT] Stream died on attempt {attempt}/{MAX_RETRIES}, retrying in {RETRY_DELAY}s…")
+                    _stream = None
+                    _stream_thread = None
+                    if attempt < MAX_RETRIES:
+                        time.sleep(RETRY_DELAY)
+            except Exception as e:
+                logger.error(f"[AlpacaRT] Failed to start stream (attempt {attempt}): {e}")
+                _stream = None
+                _stream_thread = None
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY)
+
+        logger.error("[AlpacaRT] Could not start WebSocket after retries — falling back to REST polling")
+        return False
 
 
 def subscribe_symbols(symbols: List[str]):
