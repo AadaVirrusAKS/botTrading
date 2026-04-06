@@ -35,7 +35,8 @@ from services.bot_engine import (
     get_live_option_premium, is_zero_dte_or_expired,
     get_min_option_dte_days, get_option_dte, is_option_expiry_blocked,
     refresh_signal_entries_with_live_prices, WATCHLISTS,
-    is_alpaca_execution_enabled, execute_alpaca_entry, execute_alpaca_exit
+    is_alpaca_execution_enabled, execute_alpaca_entry, execute_alpaca_exit,
+    _ensure_occ_symbol
 )
 from services.symbols import is_valid_symbol_cached, filter_valid_symbols, resolve_symbol_or_name, KNOWN_DELISTED
 from config import DATA_DIR
@@ -1932,6 +1933,11 @@ def _bot_auto_cycle_inner():
                             alpaca_close = execute_alpaca_exit(alt_sym, qty=quantity)
                             if alpaca_close['success']:
                                 alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
+                        # Last resort: try full close without qty (uses Alpaca's close_position API)
+                        if not alpaca_close_order_id:
+                            alpaca_close = execute_alpaca_exit(close_sym)
+                            if alpaca_close['success']:
+                                alpaca_close_order_id = alpaca_close.get('order', {}).get('id')
                         if not alpaca_close_order_id:
                             print(f"⚠️ ALPACA CLOSE FAILED for {close_sym} — bot will record exit without Alpaca fill price")
                     # Use Alpaca fill price as authoritative exit price
@@ -3425,7 +3431,10 @@ def bot_trade_option():
 
         # Execute on Alpaca if enabled
         alpaca_order_id = None
-        alpaca_sym = option_ticker or contract or symbol
+        alpaca_sym = _ensure_occ_symbol(
+            option_ticker or contract or '',
+            underlying=symbol, expiry=expiry, strike=strike, option_type=option_type
+        )
         if is_alpaca_execution_enabled():
             alpaca_result = execute_alpaca_entry(
                 alpaca_sym, contracts, 'LONG'
@@ -3560,7 +3569,17 @@ def bot_close_position():
         # Close on Alpaca if this position has an Alpaca order
         alpaca_close_id = None
         if is_alpaca_execution_enabled() and target_pos.get('alpaca_order_id'):
-            close_sym = target_pos.get('option_ticker') or target_pos.get('alpaca_symbol') or target_pos.get('contract') or symbol
+            raw_close = target_pos.get('option_ticker') or target_pos.get('alpaca_symbol') or target_pos.get('contract') or symbol
+            if is_option:
+                close_sym = _ensure_occ_symbol(
+                    raw_close,
+                    underlying=symbol,
+                    expiry=target_pos.get('expiry', ''),
+                    strike=target_pos.get('strike', 0),
+                    option_type=target_pos.get('option_type', 'call')
+                )
+            else:
+                close_sym = raw_close
             alpaca_close = execute_alpaca_exit(close_sym, qty=target_pos['quantity'])
             if alpaca_close['success']:
                 alpaca_close_id = alpaca_close.get('order', {}).get('id')

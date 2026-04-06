@@ -565,6 +565,43 @@ def is_alpaca_execution_enabled():
         return False
 
 
+def build_occ_symbol(underlying: str, expiry: str, strike: float, option_type: str) -> str:
+    """
+    Build an OCC-format option symbol for Alpaca.
+    Example: ADBE, 2026-04-10, 240, call -> ADBE260410C00240000
+    """
+    underlying = underlying.strip().upper()
+    # Parse expiry from YYYY-MM-DD or similar formats
+    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y%m%d'):
+        try:
+            exp_date = datetime.strptime(expiry.strip(), fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        raise ValueError(f"Cannot parse expiry date: {expiry}")
+    date_str = exp_date.strftime('%y%m%d')
+    cp = 'C' if option_type.lower().startswith('c') else 'P'
+    strike_int = int(round(float(strike) * 1000))
+    strike_str = f"{strike_int:08d}"
+    return f"{underlying:<6}{date_str}{cp}{strike_str}".replace(' ', '')
+
+
+def _ensure_occ_symbol(symbol: str, underlying: str = '', expiry: str = '',
+                       strike: float = 0, option_type: str = 'call') -> str:
+    """
+    Return a valid OCC symbol. If *symbol* already looks like OCC format, return
+    it as-is. Otherwise build one from the component fields.
+    """
+    sym = (symbol or '').strip().upper()
+    # OCC symbols are 10+ chars with no spaces/$ and end with digits
+    if sym and len(sym) >= 10 and '$' not in sym and ' ' not in sym and sym[-1].isdigit():
+        return sym
+    if underlying and expiry and strike:
+        return build_occ_symbol(underlying, expiry, strike, option_type)
+    return sym  # fallback — may still fail at Alpaca but avoids crash
+
+
 def execute_alpaca_entry(symbol, qty, side, order_type='market', stop_loss=None, take_profit=None):
     """
     Execute a BUY/SELL entry order on Alpaca paper trading.

@@ -183,32 +183,63 @@ def close_position(symbol: str, qty: Optional[float] = None) -> Dict:
     try:
         position = client.get_open_position(symbol)
         current_qty = float(position.qty)
+        position_side = str(getattr(position, 'side', 'long')).lower()
     except Exception:
         # Position does not exist on Alpaca — do NOT submit a sell order
         print(f"⚠️ ALPACA: No open position for {symbol} — skipping close to prevent accidental short")
         return {'symbol': symbol, 'status': 'no_position', 'error': 'Position not found on Alpaca'}
     
-    if qty:
-        # Cap sell qty to actual position size to prevent accidental shorts
+    # Cancel any pending orders for this symbol first (bracket order legs, etc.)
+    # Without this, bracket SL/TP legs block or conflict with close orders.
+    try:
+        open_orders = client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=200))
+        for o in open_orders:
+            if str(o.symbol).upper() == symbol.upper():
+                try:
+                    client.cancel_order_by_id(str(o.id))
+                    print(f"🗑️ ALPACA: Cancelled pending order {o.id} for {symbol} (type={o.type}, side={o.side})")
+                except Exception:
+                    pass  # Order may already be filled/cancelled
+    except Exception as e:
+        print(f"⚠️ ALPACA: Error cancelling pending orders for {symbol}: {e}")
+
+    is_full_close = (qty is None) or (float(qty) >= current_qty)
+
+    if is_full_close:
+        # Full close — use Alpaca's close_position API which handles everything cleanly
+        try:
+            client.close_position(symbol)
+            return {'symbol': symbol, 'status': 'closed'}
+        except Exception as e:
+            print(f"⚠️ ALPACA: close_position failed for {symbol}: {e}, trying market order fallback")
+            # Fallback to manual sell
+            close_side = OrderSide.SELL if 'long' in position_side else OrderSide.BUY
+            order_data = MarketOrderRequest(
+                symbol=symbol,
+                qty=current_qty,
+                side=close_side,
+                time_in_force=TimeInForce.DAY,
+            )
+            order = client.submit_order(order_data)
+            return _format_order(order)
+    else:
+        # Partial close
         sell_qty = min(float(qty), current_qty)
         if sell_qty <= 0:
             print(f"⚠️ ALPACA: Position {symbol} has 0 qty — skipping close")
             return {'symbol': symbol, 'status': 'no_position', 'error': 'Position qty is 0'}
         if sell_qty < float(qty):
             print(f"⚠️ ALPACA: Requested sell {qty} but only {current_qty} available for {symbol}, capping to {sell_qty}")
-        # Partial close via market sell
+        # Use correct side: SELL to close longs, BUY to close shorts
+        close_side = OrderSide.SELL if 'long' in position_side else OrderSide.BUY
         order_data = MarketOrderRequest(
             symbol=symbol,
             qty=sell_qty,
-            side=OrderSide.SELL,
+            side=close_side,
             time_in_force=TimeInForce.DAY,
         )
         order = client.submit_order(order_data)
         return _format_order(order)
-    else:
-        # Full close
-        client.close_position(symbol)
-        return {'symbol': symbol, 'status': 'closed'}
 
 
 def close_all_positions() -> Dict:

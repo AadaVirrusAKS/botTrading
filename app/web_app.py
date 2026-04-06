@@ -298,7 +298,9 @@ def main():
 
     # --- Alpaca real-time warmup (non-blocking) ---
     try:
-        from services.alpaca_realtime import is_available as _alpaca_ready, warmup as _alpaca_warmup
+        from services.alpaca_realtime import is_available as _alpaca_ready, warmup as _alpaca_warmup, stop_stream as _alpaca_stop
+        # Stop any stale WebSocket from a previous process before reconnecting
+        _alpaca_stop()
         if _alpaca_ready():
             _core_symbols = ['SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA']
             _alpaca_warmup(_core_symbols)

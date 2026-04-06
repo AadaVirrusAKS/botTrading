@@ -84,6 +84,13 @@ def _get_data_client():
             return None
 
 
+def _reset_data_client():
+    """Force-recreate the REST data client (e.g. after SSL errors poison the connection pool)."""
+    global _data_client
+    with _data_client_lock:
+        _data_client = None
+
+
 def reset_client():
     """Reset the cached data client (e.g. after credential change)."""
     global _data_client
@@ -119,10 +126,28 @@ def get_snapshot_prices(symbols: List[str]) -> Dict[str, float]:
             return {}
         results = {}
         BATCH = 200
+        MAX_RETRIES = 2
         for i in range(0, len(unique), BATCH):
             chunk = unique[i:i + BATCH]
             req = StockSnapshotRequest(symbol_or_symbols=chunk)
-            snapshots = client.get_stock_snapshot(req)
+            snapshots = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    snapshots = client.get_stock_snapshot(req)
+                    break
+                except Exception as retry_err:
+                    err_str = str(retry_err).lower()
+                    if 'ssl' in err_str or 'eof' in err_str or 'connection' in err_str:
+                        logger.warning(f"[AlpacaRT] Snapshot SSL/connection error (attempt {attempt}/{MAX_RETRIES}), resetting client: {retry_err}")
+                        _reset_data_client()
+                        client = _get_data_client()
+                        if client is None:
+                            break
+                        time.sleep(1)
+                    else:
+                        raise
+            if snapshots is None:
+                continue
             for sym, snap in snapshots.items():
                 try:
                     price = float(snap.latest_trade.price) if snap.latest_trade else None
@@ -173,10 +198,28 @@ def get_snapshot_quotes(symbols: List[str]) -> Dict[str, dict]:
             return {}
         results = {}
         BATCH = 200
+        MAX_RETRIES = 2
         for i in range(0, len(unique), BATCH):
             chunk = unique[i:i + BATCH]
             req = StockSnapshotRequest(symbol_or_symbols=chunk)
-            snapshots = client.get_stock_snapshot(req)
+            snapshots = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    snapshots = client.get_stock_snapshot(req)
+                    break
+                except Exception as retry_err:
+                    err_str = str(retry_err).lower()
+                    if 'ssl' in err_str or 'eof' in err_str or 'connection' in err_str:
+                        logger.warning(f"[AlpacaRT] Snapshot quotes SSL/connection error (attempt {attempt}/{MAX_RETRIES}), resetting client: {retry_err}")
+                        _reset_data_client()
+                        client = _get_data_client()
+                        if client is None:
+                            break
+                        time.sleep(1)
+                    else:
+                        raise
+            if snapshots is None:
+                continue
             for sym, snap in snapshots.items():
                 try:
                     price = float(snap.latest_trade.price) if snap.latest_trade else None
@@ -237,7 +280,25 @@ def get_latest_quotes(symbols: List[str]) -> Dict[str, dict]:
             return {}
         results = {}
         req = StockLatestQuoteRequest(symbol_or_symbols=unique)
-        quotes = client.get_stock_latest_quote(req)
+        quotes = None
+        MAX_RETRIES = 2
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                quotes = client.get_stock_latest_quote(req)
+                break
+            except Exception as retry_err:
+                err_str = str(retry_err).lower()
+                if 'ssl' in err_str or 'eof' in err_str or 'connection' in err_str:
+                    logger.warning(f"[AlpacaRT] Latest quotes SSL/connection error (attempt {attempt}/{MAX_RETRIES}), resetting client")
+                    _reset_data_client()
+                    client = _get_data_client()
+                    if client is None:
+                        return {}
+                    time.sleep(1)
+                else:
+                    raise
+        if quotes is None:
+            return {}
         for sym, q in quotes.items():
             try:
                 bid = float(q.bid_price) if q.bid_price else 0
@@ -283,6 +344,13 @@ def _get_option_client():
             return None
 
 
+def _reset_option_client():
+    """Force-recreate the option REST client after SSL errors."""
+    global _option_client
+    with _option_client_lock:
+        _option_client = None
+
+
 def get_option_snapshot_quotes(option_symbols: List[str]) -> Dict[str, dict]:
     """Fetch real-time option bid/ask/last via Alpaca Option Snapshot API.
 
@@ -307,10 +375,28 @@ def get_option_snapshot_quotes(option_symbols: List[str]) -> Dict[str, dict]:
             return {}
         results = {}
         BATCH = 100
+        MAX_RETRIES = 2
         for i in range(0, len(unique), BATCH):
             chunk = unique[i:i + BATCH]
             req = OptionSnapshotRequest(symbol_or_symbols=chunk)
-            snapshots = client.get_option_snapshot(req)
+            snapshots = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    snapshots = client.get_option_snapshot(req)
+                    break
+                except Exception as retry_err:
+                    err_str = str(retry_err).lower()
+                    if 'ssl' in err_str or 'eof' in err_str or 'connection' in err_str:
+                        logger.warning(f"[AlpacaRT] Option snapshot SSL/connection error (attempt {attempt}/{MAX_RETRIES}), resetting client: {retry_err}")
+                        _reset_option_client()
+                        client = _get_option_client()
+                        if client is None:
+                            break
+                        time.sleep(1)
+                    else:
+                        raise
+            if snapshots is None:
+                continue
             for sym, snap in snapshots.items():
                 try:
                     bid = float(snap.latest_quote.bid_price) if snap.latest_quote else 0
@@ -365,11 +451,19 @@ def _ensure_stream_running():
     global _stream, _stream_thread, _on_trade_handler, _on_quote_handler
 
     MAX_RETRIES = 3
-    RETRY_DELAY = 5  # seconds
+    RETRY_DELAY = 10  # seconds — Alpaca may take up to 30s to release stale connections
 
     with _stream_lock:
         if _stream_thread is not None and _stream_thread.is_alive():
             return True
+        # Clean up any stale stream object before reconnecting
+        if _stream is not None:
+            try:
+                _stream.stop()
+            except Exception:
+                pass
+            _stream = None
+            _stream_thread = None
         api_key, secret_key = _get_credentials()
         if not api_key or not secret_key:
             return False
@@ -425,7 +519,7 @@ def _ensure_stream_running():
                         logger.error("[AlpacaRT] Fix: run '/Applications/Python 3.12/Install Certificates.command' or 'pip install certifi'")
                     except ValueError as e:
                         if "connection limit" in str(e).lower():
-                            logger.warning(f"[AlpacaRT] Connection limit exceeded — stale connection may still be open")
+                            logger.warning(f"[AlpacaRT] Connection limit exceeded — stale connection may still be open. Will retry.")
                         else:
                             logger.error(f"[AlpacaRT] Stream error: {e}")
                     except Exception as e:
