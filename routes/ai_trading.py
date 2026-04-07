@@ -1448,7 +1448,7 @@ def _bot_auto_cycle_inner():
                     trailing_mode = 'atr'
 
                 # ---- MINIMUM HOLD TIME: Don't trail for first N minutes ----
-                _MIN_HOLD_MINUTES_OPTIONS = 15   # Options need time to develop
+                _MIN_HOLD_MINUTES_OPTIONS = 30   # Options need time to develop (was 15 - too tight)
                 _MIN_HOLD_MINUTES_STOCKS = 5     # Stocks can trail sooner
                 _min_hold = _MIN_HOLD_MINUTES_OPTIONS if is_option else _MIN_HOLD_MINUTES_STOCKS
                 _hold_minutes = _pos_age_seconds / 60.0
@@ -1538,15 +1538,15 @@ def _bot_auto_cycle_inner():
                         # Today's IWM/ORCL/JPM all went from +2-5% to -10% because
                         # the 3.5x ATR trailing was too wide for thin profits.
                         if is_option and profit_pct < 0.05:
-                            # Very small option profit: tight trail to protect gains
-                            # With 6% ATR, 1.0x = 6% width — just enough to clear entry
-                            atr_multiplier = 1.0
+                            # Very small option profit: give room to develop
+                            # With 6% ATR, 2.0x = 12% width — room for normal pullbacks
+                            atr_multiplier = 2.0
                         elif profit_pct < 0.10:
-                            # <10% profit: moderate room
-                            atr_multiplier = 1.5 if is_option else 2.5
+                            # <10% profit: moderate room for options
+                            atr_multiplier = 2.5 if is_option else 2.5
                         elif profit_pct < 0.25:
                             # 10-25% profit: medium trailing
-                            atr_multiplier = 2.5 if is_option else 2.0
+                            atr_multiplier = 3.0 if is_option else 2.0
                         elif profit_pct < 0.50:
                             # 25-50% profit: start tightening to lock gains
                             atr_multiplier = 2.0 if is_option else 1.8
@@ -1588,11 +1588,11 @@ def _bot_auto_cycle_inner():
                         # larger profit → wider trail to let runners run.
                         if is_option:
                             if profit_pct < 0.05:
-                                trailing_pct = max(base_trailing_pct, 0.025)  # 2.5% — tight, protect small gains
+                                trailing_pct = max(base_trailing_pct, 0.08)  # 8% — room for volatility
                             elif profit_pct < 0.10:
-                                trailing_pct = max(base_trailing_pct, 0.04)   # 4% — moderate
+                                trailing_pct = max(base_trailing_pct, 0.07)   # 7% — moderate
                             elif profit_pct < 0.25:
-                                trailing_pct = max(base_trailing_pct, 0.05)   # 5%
+                                trailing_pct = max(base_trailing_pct, 0.06)   # 6%
                             else:
                                 trailing_pct = max(base_trailing_pct, 0.05)   # 5% for big runners
                         else:
@@ -1660,8 +1660,9 @@ def _bot_auto_cycle_inner():
             
             # ===== MAX LOSS % GUARD FOR OPTIONS =====
             # Prevents catastrophic option losses (e.g., -50% GOOGL calls)
+            # Increased from 20% to 30% — options are volatile, need room
             if not exit_reason and is_option and entry_price > 0:
-                max_option_loss_pct = float(bot_state['settings'].get('max_option_loss_pct', 20)) / 100
+                max_option_loss_pct = float(bot_state['settings'].get('max_option_loss_pct', 30)) / 100
                 if side == 'LONG':
                     option_loss_pct = (entry_price - current_price) / entry_price
                 else:
@@ -2563,18 +2564,27 @@ def _bot_auto_cycle_inner():
                     execution_signals = []
 
         # ===== MARKET REGIME FILTER =====
-        # Check SPY trend to avoid trading CALLs in bearish conditions
+        # Check SPY trend + VIX + intraday direction to avoid trading against the flow
         _market_regime = 'neutral'  # default: allow all
+        _vix_level = 0
+        _spy_intraday_change = 0
         if bot_state['settings'].get('market_regime_filter', True):
+            # Check VIX first - elevated VIX = cautious environment
+            try:
+                vix_price, _ = cached_get_price('^VIX', period='1d', interval='1m', prepost=True)
+                _vix_level = float(vix_price) if vix_price else 0
+                if _vix_level > 22:  # Lowered from 24 - be more cautious
+                    _market_regime = 'high_vix'
+                    print(f"⚠️ ELEVATED VIX ({_vix_level:.1f} > 22) — Cautious mode, prefer PUTs over CALLs")
+            except Exception as e:
+                print(f"⚠️ VIX fetch failed: {e}")
+            
             try:
                 spy_hist = cached_get_history('SPY', period='1mo', interval='1d')
                 if spy_hist is not None and len(spy_hist) >= 3:
                     spy_close = spy_hist['Close'].dropna()
                     if len(spy_close) >= 3:
-                        # Use LIVE intraday price instead of stale daily bar close.
-                        # Daily bars may not update until after-hours, causing the
-                        # regime to be based on yesterday's close even when the
-                        # market is up today.
+                        # Use LIVE intraday price
                         spy_live, _ = cached_get_price('SPY', period='5d', interval='5m', prepost=True, use_cache=False)
                         spy_latest = float(spy_live) if spy_live else float(spy_close.iloc[-1])
 
@@ -2582,17 +2592,32 @@ def _bot_auto_cycle_inner():
                         spy_sma3 = spy_close.rolling(3).mean().iloc[-1]
                         spy_sma10 = spy_close.rolling(min(10, len(spy_close))).mean().iloc[-1]
                         spy_prev = float(spy_close.iloc[-2])
-
-                        # Bearish: live price below BOTH SMAs AND last daily close was down
-                        if spy_latest < spy_sma3 and spy_latest < spy_sma10 and spy_latest < spy_prev:
-                            _market_regime = 'bearish'
-                            print(f"🐻 Market regime: BEARISH (SPY ${spy_latest:.2f} < SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f}) — CALL entries will be blocked")
-                        # Bullish: live price above BOTH SMAs AND last daily close was up
-                        elif spy_latest > spy_sma3 and spy_latest > spy_sma10 and spy_latest > spy_prev:
-                            _market_regime = 'bullish'
-                            print(f"🐂 Market regime: BULLISH (SPY ${spy_latest:.2f} > SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f}) — PUT entries will be blocked")
+                        spy_open_today = float(spy_close.iloc[-1])  # Previous close = today's reference
+                        
+                        # Calculate INTRADAY change (from prev close to current price)
+                        _spy_intraday_change = ((spy_latest - spy_open_today) / spy_open_today) * 100 if spy_open_today > 0 else 0
+                        
+                        # INTRADAY DIRECTION OVERRIDE
+                        # If SPY is DOWN >0.5% today, market is selling regardless of SMA position
+                        if _spy_intraday_change < -0.5:
+                            if _market_regime != 'high_vix':  # Don't override VIX warning
+                                _market_regime = 'selling'
+                            print(f"📉 SPY DOWN {_spy_intraday_change:.2f}% TODAY — Market is selling, CALLs risky")
+                        elif _spy_intraday_change > 0.5:
+                            # Only go bullish if VIX is low AND SPY is up today
+                            if _vix_level < 20:
+                                _market_regime = 'bullish'
+                                print(f"🐂 Market regime: BULLISH (SPY +{_spy_intraday_change:.2f}% today, VIX {_vix_level:.1f}) — PUT entries will be blocked")
+                            else:
+                                print(f"⚖️ SPY up +{_spy_intraday_change:.2f}% but VIX elevated ({_vix_level:.1f}) — staying NEUTRAL")
                         else:
-                            print(f"⚖️ Market regime: NEUTRAL (SPY ${spy_latest:.2f}, SMA3 ${spy_sma3:.2f}, SMA10 ${spy_sma10:.2f})")
+                            # Choppy/flat day - use SMA position but be cautious
+                            if _market_regime == 'neutral':
+                                if spy_latest < spy_sma3 and spy_latest < spy_sma10:
+                                    _market_regime = 'bearish'
+                                    print(f"🐻 Market regime: BEARISH (SPY ${spy_latest:.2f} < SMA3 ${spy_sma3:.2f}) — CALL entries will be blocked")
+                                else:
+                                    print(f"⚖️ Market regime: NEUTRAL (SPY ${spy_latest:.2f}, today {_spy_intraday_change:+.2f}%, VIX {_vix_level:.1f})")
             except Exception as e:
                 print(f"⚠️ Market regime check failed: {e} — allowing all directions")
 
@@ -2701,15 +2726,19 @@ def _bot_auto_cycle_inner():
 
             # ===== MARKET REGIME FILTER (direction gating) =====
             signal_direction = signal.get('option_type', signal.get('action', '')).lower()
-            if _market_regime == 'bearish' and signal_direction in ('call', 'BUY'):
-                # In bearish regime, block CALL/BUY entries
+            
+            # Block CALLs in bearish/selling/high_vix conditions
+            if _market_regime in ('bearish', 'selling', 'high_vix') and signal_direction in ('call', 'BUY'):
                 if is_option_signal and signal.get('option_type', '').lower() == 'call':
-                    skipped_reasons.append(f"{sym}: CALL blocked — bearish market regime (SPY trending down)")
+                    skipped_reasons.append(f"{sym}: CALL blocked — {_market_regime} regime (VIX={_vix_level:.1f}, SPY {_spy_intraday_change:+.1f}%)")
+                    print(f"🐻 Skipping {signal.get('contract', sym)}: CALL blocked in {_market_regime} market")
                     continue
+            
+            # Only block PUTs if clearly bullish (SPY up AND VIX low)
             elif _market_regime == 'bullish' and signal_direction == 'put':
-                # In bullish regime, block PUT entries
                 if is_option_signal and signal.get('option_type', '').lower() == 'put':
-                    skipped_reasons.append(f"{sym}: PUT blocked — bullish market regime (SPY trending up)")
+                    skipped_reasons.append(f"{sym}: PUT blocked — bullish regime (VIX={_vix_level:.1f} low, SPY +{_spy_intraday_change:.1f}%)")
+                    print(f"🐂 Skipping {signal.get('contract', sym)}: PUT blocked in bullish market")
                     continue
             
             # Check cooldown after stop loss (30 min)
