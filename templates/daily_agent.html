@@ -187,8 +187,25 @@
                 const resp = await fetch('/api/agent/analyze', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({date: date})
+                    body: JSON.stringify({date: date}),
+                    credentials: 'same-origin'
                 });
+                // Check if we were redirected to login
+                if (resp.redirected || resp.url.includes('/login')) {
+                    document.getElementById('statusLine').textContent = '❌ Session expired. Please refresh and log in again.';
+                    btn.disabled = false;
+                    btn.classList.remove('loading');
+                    btn.textContent = 'Run Analysis';
+                    return;
+                }
+                const contentType = resp.headers.get('content-type') || '';
+                if (!contentType.includes('application/json')) {
+                    document.getElementById('statusLine').textContent = '❌ Unexpected response. Please refresh and try again.';
+                    btn.disabled = false;
+                    btn.classList.remove('loading');
+                    btn.textContent = 'Run Analysis';
+                    return;
+                }
                 const data = await resp.json();
                 if (data.success) {
                     renderReport(data);
@@ -198,6 +215,7 @@
                     document.getElementById('statusLine').textContent = '❌ Error: ' + (data.error || 'Unknown');
                 }
             } catch(e) {
+                console.error('runAnalysis error:', e);
                 document.getElementById('statusLine').textContent = '❌ Request failed: ' + e.message;
             }
             btn.disabled = false;

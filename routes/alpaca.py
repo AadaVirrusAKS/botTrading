@@ -203,7 +203,11 @@ def alpaca_bot_pnl_map():
     """Return {alpaca_order_id: pnl} from bot trades so Alpaca page shows bot P&L."""
     try:
         from config import DATA_DIR
-        state_file = os.path.join(DATA_DIR, 'ai_bot_state.json')
+        # Use the same state file as ai_trading.py (bot_state_user_1.json)
+        state_file = os.path.join(DATA_DIR, 'bot_state_user_1.json')
+        if not os.path.exists(state_file):
+            # Fallback to old file
+            state_file = os.path.join(DATA_DIR, 'ai_bot_state.json')
         if not os.path.exists(state_file):
             return jsonify({'success': True, 'data': {}})
 

@@ -1455,52 +1455,11 @@ def _bot_auto_cycle_inner():
                 _hold_minutes = _pos_age_seconds / 60.0
 
                 # ---- MIN PROFIT THRESHOLD: Higher for options to avoid micro-exits ----
+                # RESTORED: 3% threshold was working well before recent changes
                 if is_option:
                     min_profit_to_trail = 0.03   # 3% minimum before trailing
                 else:
                     min_profit_to_trail = 0.005  # 0.5% for stocks
-
-                # ---- HIGH WATERMARK TRACKING FOR OPTIONS ----
-                # Track highest price seen to trail from peak, not current price
-                _watermark_key = pos.get('contract', symbol)
-                if is_option:
-                    if _watermark_key not in swing_high_watermarks:
-                        swing_high_watermarks[_watermark_key] = current_price
-                    else:
-                        swing_high_watermarks[_watermark_key] = max(swing_high_watermarks[_watermark_key], current_price)
-                    _option_high = swing_high_watermarks[_watermark_key]
-                    # Calculate profit from HIGH not current
-                    if side == 'LONG':
-                        _high_profit_pct = (_option_high - entry_price) / entry_price if entry_price > 0 else 0
-                    else:
-                        _high_profit_pct = (entry_price - _option_high) / entry_price if entry_price > 0 else 0
-                else:
-                    _option_high = current_price
-                    _high_profit_pct = 0
-
-                # ---- BIG PROFIT LOCK: Immediate protection for large gains ----
-                # If profit ever exceeded $300+, lock in at least breakeven (NO hold time requirement)
-                if is_option and entry_price > 0:
-                    _unrealized_high = (_option_high - entry_price) * quantity * 100 if side == 'LONG' else (entry_price - _option_high) * quantity * 100
-                    if _unrealized_high >= 300 and stop_loss < entry_price:
-                        # Big profit seen! Move stop to AT LEAST breakeven immediately
-                        pos['stop_loss'] = entry_price
-                        stop_loss = entry_price
-                        print(f"💰 BIG PROFIT LOCK: {pos.get('contract', symbol)} — saw +${_unrealized_high:.0f} profit, locking stop at breakeven ${entry_price:.2f}")
-
-                # ---- BREAKEVEN STOP PROTECTION ----
-                # When an option is in profit (>=3%) but the trailing math can't
-                # clear entry_price (because trailing_width > profit), move stop
-                # to breakeven so winners never turn into losers.
-                if is_option and entry_price > 0 and _hold_minutes >= _min_hold:
-                    if side == 'LONG':
-                        _curr_profit_pct = (current_price - entry_price) / entry_price
-                    else:
-                        _curr_profit_pct = (entry_price - current_price) / entry_price
-                    if _curr_profit_pct >= min_profit_to_trail and stop_loss < entry_price:
-                        pos['stop_loss'] = entry_price
-                        stop_loss = entry_price
-                        print(f"🛡️ BREAKEVEN STOP: {pos.get('contract', symbol)} — profit +{_curr_profit_pct*100:.1f}%, moving SL to entry ${entry_price:.2f}")
 
                 # For SWING trades: use high/low watermark instead of current_price
                 is_swing = pos.get('trade_type', 'swing') == 'swing'
@@ -1515,11 +1474,6 @@ def _bot_auto_cycle_inner():
                         trail_reference_price = min(trail_reference_price, current_price)
                         if trail_reference_price < current_price:
                             print(f"📊 {symbol} SWING: Using low watermark ${trail_reference_price:.2f} for trailing (current: ${current_price:.2f})")
-                elif is_option:
-                    # Use HIGH WATERMARK for options to trail from peak
-                    trail_reference_price = _option_high
-                    if _option_high > current_price * 1.02:  # Only log if watermark is >2% higher
-                        print(f"📊 {pos.get('contract', symbol)}: Using high watermark ${_option_high:.2f} for trailing (current: ${current_price:.2f})")
                 else:
                     trail_reference_price = current_price
 
@@ -1572,15 +1526,15 @@ def _bot_auto_cycle_inner():
                         # Today's IWM/ORCL/JPM all went from +2-5% to -10% because
                         # the 3.5x ATR trailing was too wide for thin profits.
                         if is_option and profit_pct < 0.05:
-                            # Very small option profit: give room to develop
-                            # With 6% ATR, 2.0x = 12% width — room for normal pullbacks
+                            # Very small option profit: trail at breakeven + small buffer
+                            # This ensures we don't turn winners into losers
                             atr_multiplier = 2.0
                         elif profit_pct < 0.10:
-                            # <10% profit: moderate room for options
-                            atr_multiplier = 2.5 if is_option else 2.5
+                            # <10% profit: give room to breathe
+                            atr_multiplier = 3.0 if is_option else 2.5
                         elif profit_pct < 0.25:
                             # 10-25% profit: medium trailing
-                            atr_multiplier = 3.0 if is_option else 2.0
+                            atr_multiplier = 2.5 if is_option else 2.0
                         elif profit_pct < 0.50:
                             # 25-50% profit: start tightening to lock gains
                             atr_multiplier = 2.0 if is_option else 1.8
@@ -3618,6 +3572,7 @@ def bot_close_position():
     instrument_type = req.get('instrument_type', 'stock')  # 'stock' or 'option'
     contract = req.get('contract', '')  # Option contract name for matching
     source = req.get('source', '')  # 'manual' or 'bot' - helps match correct position
+    user_provided_price = req.get('price')  # Frontend can pass live price it's displaying
     
     with BOT_STATE_LOCK:
         load_bot_state()  # Load existing state first
@@ -3654,32 +3609,47 @@ def bot_close_position():
         is_option = target_pos.get('instrument_type') == 'option'
         display_name = target_pos.get('contract', symbol) if is_option else symbol
         
-        # Get current price
-        try:
-            stock_price, _ = cached_get_price(symbol, period='1d', interval='1m', prepost=True)
-            if stock_price is None:
-                stock_price = target_pos['current_price']
-        except:
-            stock_price = target_pos['current_price']
+        # Get current price - prefer user-provided price (from UI live display) over API lookups
+        # which can return stale/delayed data
+        price = None
+        if user_provided_price is not None:
+            try:
+                price = float(user_provided_price)
+                if price <= 0:
+                    price = None
+            except (ValueError, TypeError):
+                price = None
         
-        if is_option:
-            # For options: fetch live premium, don't rely on stale current_price
-            live_premium = get_live_option_premium(
-                symbol,
-                target_pos.get('expiry', ''),
-                target_pos.get('strike', 0),
-                target_pos.get('option_type', 'call'),
-                fallback=target_pos['current_price'],
-                option_ticker=target_pos.get('option_ticker', '')
-            )
-            price = live_premium if live_premium and live_premium > 0 else target_pos['current_price']
-            pnl = (price - target_pos['entry_price']) * target_pos['quantity'] * 100
-        else:
-            price = stock_price
-            if target_pos['side'] == 'LONG':
-                pnl = (price - target_pos['entry_price']) * target_pos['quantity']
+        if price is None:
+            # Fallback to API lookup
+            try:
+                stock_price, _ = cached_get_price(symbol, period='1d', interval='1m', prepost=True)
+                if stock_price is None:
+                    stock_price = target_pos['current_price']
+            except:
+                stock_price = target_pos['current_price']
+            
+            if is_option:
+                # For options: fetch live premium, don't rely on stale current_price
+                live_premium = get_live_option_premium(
+                    symbol,
+                    target_pos.get('expiry', ''),
+                    target_pos.get('strike', 0),
+                    target_pos.get('option_type', 'call'),
+                    fallback=target_pos['current_price'],
+                    option_ticker=target_pos.get('option_ticker', '')
+                )
+                price = live_premium if live_premium and live_premium > 0 else target_pos['current_price']
             else:
-                pnl = (target_pos['entry_price'] - price) * target_pos['quantity']
+                price = stock_price
+        
+        # Calculate P&L
+        if is_option:
+            pnl = (price - target_pos['entry_price']) * target_pos['quantity'] * 100
+        elif target_pos['side'] == 'LONG':
+            pnl = (price - target_pos['entry_price']) * target_pos['quantity']
+        else:
+            pnl = (target_pos['entry_price'] - price) * target_pos['quantity']
         
         # Close on Alpaca if this position has an Alpaca order
         alpaca_close_id = None

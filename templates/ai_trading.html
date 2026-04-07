@@ -2372,7 +2372,7 @@
                         </td>
                         <td>
                             <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" 
-                                    onclick="closePosition('${pos.symbol}', '${pos.instrument_type || 'stock'}', '${(pos.contract || '').replace(/'/g, "\\'")}', '${pos.source || 'manual'}')">${isOption ? 'Close Option' : 'Close'}</button>
+                                    onclick="closePosition('${pos.symbol}', '${pos.instrument_type || 'stock'}', '${(pos.contract || '').replace(/'/g, "\\'")}', ${currentNum}, '${pos.source || 'manual'}')">${isOption ? 'Close Option' : 'Close'}</button>
                         </td>
                     </tr>
                 `;
@@ -2674,8 +2674,8 @@
                     </div>
                     <div style="color: var(--text-secondary); font-size: 12px;">
                         ${rt.completed ? 
-                            `Closed: ${new Date(rt.exitTime).toLocaleString()}` : 
-                            `Opened: ${new Date(rt.entryTime).toLocaleString()}`
+                            (rt.exitTime ? `Closed: ${new Date(rt.exitTime).toLocaleString()}` : `Closed: ${new Date(rt.entryTime).toLocaleString()}`) : 
+                            (rt.entryTime ? `Opened: ${new Date(rt.entryTime).toLocaleString()}` : '')
                         }
                     </div>
                 </div>
@@ -2883,15 +2883,20 @@
         }
         
         // Close position (handles both stocks and options)
-        async function closePosition(symbol, instrumentType = 'stock', contract = '', source = '') {
+        async function closePosition(symbol, instrumentType = 'stock', contract = '', currentPrice = null, source = '') {
             const displayName = instrumentType === 'option' ? (contract || symbol) : symbol;
             if (!confirm(`Close ${instrumentType === 'option' ? 'option' : 'stock'} position: ${displayName}?`)) return;
             
             try {
+                // Pass current price displayed in UI to ensure accurate P&L recording
+                const payload = { symbol, account_mode: accountMode, instrument_type: instrumentType, contract: contract, source: source };
+                if (currentPrice !== null && currentPrice > 0) {
+                    payload.price = currentPrice;
+                }
                 const response = await fetch('/api/bot/close', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbol, account_mode: accountMode, instrument_type: instrumentType, contract: contract, source: source })
+                    body: JSON.stringify(payload)
                 });
                 
                 const data = await response.json();

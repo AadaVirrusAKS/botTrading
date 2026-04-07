@@ -23,16 +23,21 @@ from zoneinfo import ZoneInfo
 
 from config import DATA_DIR
 REPORT_DIR = os.path.join(DATA_DIR, 'daily_analysis_reports')
-BOT_STATE_FILE = os.path.join(DATA_DIR, 'ai_bot_state.json')
+# Use the same state file as ai_trading.py (bot_state_user_1.json)
+BOT_STATE_FILE = os.path.join(DATA_DIR, 'bot_state_user_1.json')
+_BOT_STATE_FILE_FALLBACK = os.path.join(DATA_DIR, 'ai_bot_state.json')
 
 _agent_lock = threading.Lock()
 
 
 def _load_bot_state():
     """Load the bot state from disk."""
-    if not os.path.exists(BOT_STATE_FILE):
+    state_file = BOT_STATE_FILE
+    if not os.path.exists(state_file):
+        state_file = _BOT_STATE_FILE_FALLBACK
+    if not os.path.exists(state_file):
         return None
-    with open(BOT_STATE_FILE) as f:
+    with open(state_file) as f:
         return json.load(f)
 
 
