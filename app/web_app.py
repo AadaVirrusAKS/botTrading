@@ -251,6 +251,9 @@ def main():
     """Start the trading dashboard web server."""
     import webbrowser
     import atexit
+    import shutil as _shutil
+    import subprocess as _sp
+    import signal
 
     from services.market_data import _log_fetch_event, YF_CACHE_DIR
     from routes.cache_admin import start_background_monitor, stop_background_monitor
@@ -258,7 +261,103 @@ def main():
     print("\n" + "="*100)
     print("🚀 US MARKET TRADING DASHBOARD - Starting Web Server")
     print("="*100)
-    print("\n📊 Dashboard Features:")
+    
+    # =============================
+    # CLEANUP: Kill old processes and clear all caches
+    # =============================
+    print("\n🧹 Cleaning up old processes and caches...")
+    
+    PORT = int(os.environ.get('PORT', 5000))
+    
+    # Kill any stale process on the port
+    try:
+        result = _sp.run(['lsof', '-ti', f':{PORT}'], capture_output=True, text=True)
+        if result.stdout.strip():
+            for pid in result.stdout.strip().split('\n'):
+                pid = pid.strip()
+                if pid and pid != str(os.getpid()):
+                    print(f"   ⚠️  Killing stale process {pid} on port {PORT}")
+                    os.kill(int(pid), signal.SIGKILL)
+            time.sleep(1)
+    except Exception:
+        pass
+    
+    # Kill any old web_app.py processes (except current one)
+    try:
+        result = _sp.run(['pgrep', '-f', 'web_app.py'], capture_output=True, text=True)
+        if result.stdout.strip():
+            current_pid = str(os.getpid())
+            for pid in result.stdout.strip().split('\n'):
+                pid = pid.strip()
+                if pid and pid != current_pid:
+                    print(f"   ⚠️  Killing old web_app.py process {pid}")
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            time.sleep(0.5)
+    except Exception:
+        pass
+    
+    # Clear yfinance cache (corrupted SQLite, stale cookies)
+    try:
+        _yf_cache = YF_CACHE_DIR
+        if os.path.exists(_yf_cache):
+            _shutil.rmtree(_yf_cache)
+        os.makedirs(_yf_cache, exist_ok=True)
+        
+        # Also clear system yfinance caches
+        import pathlib
+        for cache_path in [
+            pathlib.Path.home() / '.cache' / 'py-yfinance',
+            pathlib.Path.home() / 'Library' / 'Caches' / 'py-yfinance',
+        ]:
+            if cache_path.exists():
+                _shutil.rmtree(cache_path)
+        print("   ✅ Cleared yfinance cache")
+    except Exception as e:
+        print(f"   ⚠️  yfinance cache clear failed: {e}")
+    
+    # Clear dashboard cache folder
+    try:
+        dashboard_cache = os.path.join(PROJECT_ROOT, '.dashboard_cache')
+        if os.path.exists(dashboard_cache):
+            _shutil.rmtree(dashboard_cache)
+            os.makedirs(dashboard_cache, exist_ok=True)
+            print("   ✅ Cleared .dashboard_cache")
+    except Exception as e:
+        print(f"   ⚠️  dashboard cache clear failed: {e}")
+    
+    # Clear all in-memory market data caches
+    try:
+        from services.market_data import (
+            _price_cache, _history_cache, _chain_cache, 
+            _options_dates_cache, _ticker_info_cache, _fetch_log_cache,
+            quote_cache, clear_rate_limit_blocks
+        )
+        _price_cache.clear()
+        _history_cache.clear()
+        _chain_cache.clear()
+        _options_dates_cache.clear()
+        _ticker_info_cache.clear()
+        _fetch_log_cache.clear()
+        quote_cache.clear()
+        clear_rate_limit_blocks()
+        print("   ✅ Cleared all in-memory caches")
+    except Exception as e:
+        print(f"   ⚠️  Memory cache clear failed: {e}")
+    
+    # Clear scanner cache if exists
+    try:
+        from routes.scanners import scanner_cache
+        scanner_cache.clear()
+        print("   ✅ Cleared scanner cache")
+    except Exception:
+        pass
+    
+    print("🧹 Cleanup complete!\n")
+    
+    print("📊 Dashboard Features:")
     print("   ✅ Real-time market indices & sector performance")
     print("   ✅ Top gainers/losers scanner")
     print("   ✅ Integrated trading system scanners")
@@ -266,35 +365,6 @@ def main():
     print("   ✅ WebSocket real-time updates")
     print("   ✅ Options analysis with next-day predictions")
     print("   ✅ Custom stock analysis with buy/sell signals")
-
-    PORT = int(os.environ.get('PORT', 5000))
-
-    # Kill any stale process on the port before starting
-    import subprocess as _sp
-    import signal
-    try:
-        result = _sp.run(['lsof', '-ti', f':{PORT}'], capture_output=True, text=True)
-        if result.stdout.strip():
-            for pid in result.stdout.strip().split('\n'):
-                pid = pid.strip()
-                if pid and pid != str(os.getpid()):
-                    print(f"⚠️  Killing stale process {pid} on port {PORT}")
-                    os.kill(int(pid), signal.SIGKILL)
-            import time as _time
-            _time.sleep(1)
-    except Exception:
-        pass
-
-    # Clear stale yfinance cookie/crumb cache to prevent 429 rate-limit loops
-    try:
-        import shutil as _shutil
-        _yf_cache = YF_CACHE_DIR
-        if os.path.exists(_yf_cache):
-            _shutil.rmtree(_yf_cache)
-            print("🔄 Cleared stale yfinance cookie cache")
-        os.makedirs(_yf_cache, exist_ok=True)
-    except Exception:
-        pass
 
     # --- Alpaca real-time warmup (non-blocking) ---
     try:

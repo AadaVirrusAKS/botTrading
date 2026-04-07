@@ -1448,16 +1448,45 @@ def _bot_auto_cycle_inner():
                     trailing_mode = 'atr'
 
                 # ---- MINIMUM HOLD TIME: Don't trail for first N minutes ----
-                _MIN_HOLD_MINUTES_OPTIONS = 30   # Options need time to develop (was 15 - too tight)
+                # Reduced from 30 to 15 for options - missed too many profit spikes
+                _MIN_HOLD_MINUTES_OPTIONS = 15   # Options: 15 min before trailing
                 _MIN_HOLD_MINUTES_STOCKS = 5     # Stocks can trail sooner
                 _min_hold = _MIN_HOLD_MINUTES_OPTIONS if is_option else _MIN_HOLD_MINUTES_STOCKS
                 _hold_minutes = _pos_age_seconds / 60.0
 
                 # ---- MIN PROFIT THRESHOLD: Higher for options to avoid micro-exits ----
                 if is_option:
-                    min_profit_to_trail = 0.03   # 3% minimum before trailing (was 0.5%)
+                    min_profit_to_trail = 0.03   # 3% minimum before trailing
                 else:
-                    min_profit_to_trail = 0.005  # 0.5% for stocks (unchanged)
+                    min_profit_to_trail = 0.005  # 0.5% for stocks
+
+                # ---- HIGH WATERMARK TRACKING FOR OPTIONS ----
+                # Track highest price seen to trail from peak, not current price
+                _watermark_key = pos.get('contract', symbol)
+                if is_option:
+                    if _watermark_key not in swing_high_watermarks:
+                        swing_high_watermarks[_watermark_key] = current_price
+                    else:
+                        swing_high_watermarks[_watermark_key] = max(swing_high_watermarks[_watermark_key], current_price)
+                    _option_high = swing_high_watermarks[_watermark_key]
+                    # Calculate profit from HIGH not current
+                    if side == 'LONG':
+                        _high_profit_pct = (_option_high - entry_price) / entry_price if entry_price > 0 else 0
+                    else:
+                        _high_profit_pct = (entry_price - _option_high) / entry_price if entry_price > 0 else 0
+                else:
+                    _option_high = current_price
+                    _high_profit_pct = 0
+
+                # ---- BIG PROFIT LOCK: Immediate protection for large gains ----
+                # If profit ever exceeded $300+, lock in at least breakeven (NO hold time requirement)
+                if is_option and entry_price > 0:
+                    _unrealized_high = (_option_high - entry_price) * quantity * 100 if side == 'LONG' else (entry_price - _option_high) * quantity * 100
+                    if _unrealized_high >= 300 and stop_loss < entry_price:
+                        # Big profit seen! Move stop to AT LEAST breakeven immediately
+                        pos['stop_loss'] = entry_price
+                        stop_loss = entry_price
+                        print(f"💰 BIG PROFIT LOCK: {pos.get('contract', symbol)} — saw +${_unrealized_high:.0f} profit, locking stop at breakeven ${entry_price:.2f}")
 
                 # ---- BREAKEVEN STOP PROTECTION ----
                 # When an option is in profit (>=3%) but the trailing math can't
@@ -1486,6 +1515,11 @@ def _bot_auto_cycle_inner():
                         trail_reference_price = min(trail_reference_price, current_price)
                         if trail_reference_price < current_price:
                             print(f"📊 {symbol} SWING: Using low watermark ${trail_reference_price:.2f} for trailing (current: ${current_price:.2f})")
+                elif is_option:
+                    # Use HIGH WATERMARK for options to trail from peak
+                    trail_reference_price = _option_high
+                    if _option_high > current_price * 1.02:  # Only log if watermark is >2% higher
+                        print(f"📊 {pos.get('contract', symbol)}: Using high watermark ${_option_high:.2f} for trailing (current: ${current_price:.2f})")
                 else:
                     trail_reference_price = current_price
 
@@ -1625,35 +1659,64 @@ def _bot_auto_cycle_inner():
             exit_price = current_price
             
             # ===== FIX 2: SIGNAL REVERSAL DETECTION =====
-            # Only close on reversal if the OPPOSITE signal is STRONG (score >= 12, confidence >= 90).
-            # Weak reversals (score 7-11) are noise — they caused huge losses on PLTR/COIN/AMD.
-            # Also require the position to be held at least 60 min before honoring reversals.
+            # Only close on reversal if the OPPOSITE signal is MUCH STRONGER than original entry.
+            # Requirements:
+            #   1. Reversal signal score >= 13 (very strong)
+            #   2. Reversal confidence >= 93%
+            #   3. Reversal score must be >= 3 points higher than original entry score
+            #   4. Position held at least 90 minutes (avoid choppy market whipsaws)
+            #   5. Position must be in a LOSS (if profitable, let trailing stop handle it)
             cached_signals = bot_state.get('signals', [])
             if not exit_reason and not _in_grace_period and is_option and cached_signals:
-                _REVERSAL_MIN_SCORE = 12       # Only trust very strong reversal signals
-                _REVERSAL_MIN_CONFIDENCE = 90  # Very high confidence required
-                _REVERSAL_MIN_HOLD_MINUTES = 60  # Don't flip on positions held < 1 hour
+                _REVERSAL_MIN_SCORE = 13       # Higher bar: only trust very strong reversal signals
+                _REVERSAL_MIN_CONFIDENCE = 93  # Very high confidence required
+                _REVERSAL_MIN_HOLD_MINUTES = 90  # Don't flip on positions held < 1.5 hours
+                _REVERSAL_MIN_SCORE_DIFF = 3   # Reversal must be 3+ points stronger than entry
                 pos_opt_type = pos.get('option_type', '').lower()
+                
+                # Get position's original entry score (if available)
+                _entry_score = pos.get('_entry_score', 10)  # Default 10 if not stored
+                
+                # Check if position is currently in profit
+                if entry_price > 0:
+                    if side == 'LONG':
+                        _pos_profit_pct = (current_price - entry_price) / entry_price
+                    else:
+                        _pos_profit_pct = (entry_price - current_price) / entry_price
+                else:
+                    _pos_profit_pct = 0
+                _is_in_loss = _pos_profit_pct < -0.02  # Must be down >2% to consider reversal
+                
                 for sig in cached_signals:
                     if sig.get('symbol') == symbol:
                         sig_direction = sig.get('direction', '').upper()
                         sig_score = int(sig.get('score', 0))
                         sig_conf = int(sig.get('confidence', 0))
                         _held_long_enough = _pos_age_seconds >= (_REVERSAL_MIN_HOLD_MINUTES * 60)
-                        _strong_reversal = sig_score >= _REVERSAL_MIN_SCORE and sig_conf >= _REVERSAL_MIN_CONFIDENCE
-                        if pos_opt_type == 'call' and sig_direction == 'BEARISH' and _strong_reversal and _held_long_enough:
+                        _score_difference = sig_score - _entry_score
+                        _strong_reversal = (sig_score >= _REVERSAL_MIN_SCORE and 
+                                           sig_conf >= _REVERSAL_MIN_CONFIDENCE and
+                                           _score_difference >= _REVERSAL_MIN_SCORE_DIFF)
+                        
+                        if pos_opt_type == 'call' and sig_direction == 'BEARISH' and _strong_reversal and _held_long_enough and _is_in_loss:
                             exit_reason = 'SIGNAL_REVERSAL'
                             exit_price = current_price
-                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding CALL but scanner now BEARISH (score={sig_score}, conf={sig_conf}%)")
+                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding CALL but scanner now BEARISH (score={sig_score} vs entry {_entry_score}, +{_score_difference} diff, conf={sig_conf}%, loss={_pos_profit_pct*100:.1f}%)")
                             break
-                        elif pos_opt_type == 'put' and sig_direction == 'BULLISH' and _strong_reversal and _held_long_enough:
+                        elif pos_opt_type == 'put' and sig_direction == 'BULLISH' and _strong_reversal and _held_long_enough and _is_in_loss:
                             exit_reason = 'SIGNAL_REVERSAL'
                             exit_price = current_price
-                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding PUT but scanner now BULLISH (score={sig_score}, conf={sig_conf}%)")
+                            print(f"🔄 SIGNAL REVERSAL: {pos.get('contract', symbol)} — holding PUT but scanner now BULLISH (score={sig_score} vs entry {_entry_score}, +{_score_difference} diff, conf={sig_conf}%, loss={_pos_profit_pct*100:.1f}%)")
                             break
                         elif (pos_opt_type == 'call' and sig_direction == 'BEARISH') or (pos_opt_type == 'put' and sig_direction == 'BULLISH'):
-                            # Weak reversal — log but don't close
-                            print(f"⚠️ Weak reversal signal for {pos.get('contract', symbol)} (score={sig_score}, conf={sig_conf}%, held={_pos_age_seconds//60:.0f}m) — HOLDING")
+                            # Reversal conditions not fully met — log why
+                            _reasons = []
+                            if sig_score < _REVERSAL_MIN_SCORE: _reasons.append(f"score {sig_score}<{_REVERSAL_MIN_SCORE}")
+                            if sig_conf < _REVERSAL_MIN_CONFIDENCE: _reasons.append(f"conf {sig_conf}<{_REVERSAL_MIN_CONFIDENCE}")
+                            if _score_difference < _REVERSAL_MIN_SCORE_DIFF: _reasons.append(f"diff {_score_difference}<{_REVERSAL_MIN_SCORE_DIFF}")
+                            if not _held_long_enough: _reasons.append(f"held {_pos_age_seconds//60:.0f}m<{_REVERSAL_MIN_HOLD_MINUTES}m")
+                            if not _is_in_loss: _reasons.append(f"in profit {_pos_profit_pct*100:+.1f}%")
+                            print(f"⚠️ Reversal blocked for {pos.get('contract', symbol)}: {', '.join(_reasons)} — HOLDING")
             
             # Track whether stop was trailed into profit (for exit reason labeling)
             _stop_is_trailing = (stop_loss > entry_price) if side == 'LONG' else (0 < stop_loss < entry_price)
@@ -2570,14 +2633,35 @@ def _bot_auto_cycle_inner():
         _spy_intraday_change = 0
         if bot_state['settings'].get('market_regime_filter', True):
             # Check VIX first - elevated VIX = cautious environment
+            # Note: VIX is an index, Alpaca doesn't support it. Use yfinance directly.
             try:
-                vix_price, _ = cached_get_price('^VIX', period='1d', interval='1m', prepost=True)
-                _vix_level = float(vix_price) if vix_price else 0
-                if _vix_level > 22:  # Lowered from 24 - be more cautious
+                import yfinance as yf
+                import requests
+                import tempfile
+                import os
+                
+                # Completely bypass yfinance cache by setting a fresh temp cache dir
+                _vix_cache_dir = os.path.join(tempfile.gettempdir(), f'yf_vix_{os.getpid()}')
+                os.makedirs(_vix_cache_dir, exist_ok=True)
+                yf.set_tz_cache_location(_vix_cache_dir)
+                
+                # Use a fresh session without yfinance's problematic cache
+                session = requests.Session()
+                session.headers.update({'User-Agent': 'Mozilla/5.0'})
+                vix_ticker = yf.Ticker('^VIX', session=session)
+                # Try to get VIX data with cache disabled
+                vix_hist = vix_ticker.history(period='5d', interval='1d')
+                if vix_hist is not None and not vix_hist.empty:
+                    _vix_level = float(vix_hist['Close'].iloc[-1])
+                
+                if _vix_level > 22:  # Elevated VIX = be cautious
                     _market_regime = 'high_vix'
                     print(f"⚠️ ELEVATED VIX ({_vix_level:.1f} > 22) — Cautious mode, prefer PUTs over CALLs")
+                elif _vix_level > 0:
+                    print(f"📊 VIX: {_vix_level:.1f}")
             except Exception as e:
-                print(f"⚠️ VIX fetch failed: {e}")
+                # If VIX fetch fails, continue without it - not critical
+                print(f"⚠️ VIX fetch skipped: {str(e)[:50]}")
             
             try:
                 spy_hist = cached_get_history('SPY', period='1mo', interval='1d')
@@ -2899,7 +2983,9 @@ def _bot_auto_cycle_inner():
                         'auto_trade': True,
                         'source': 'bot',
                         'trade_type': option_trade_type,
-                        '_cached_atr': _cached_atr
+                        '_cached_atr': _cached_atr,
+                        '_entry_score': signal.get('score', 10),  # Store entry score for reversal comparison
+                        '_entry_confidence': signal.get('confidence', 80)
                     }
                     account['positions'].append(position)
                     

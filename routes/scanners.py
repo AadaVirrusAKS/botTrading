@@ -87,10 +87,16 @@ def unified_scanner():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting unified scanner in background...")
                     system = UnifiedTradingSystem()
                     
@@ -108,7 +114,8 @@ def unified_scanner():
                     print(f"❌ Unified scanner error: {e}")
                     # Don't cache empty error results - leave data as None so next request retries
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -157,10 +164,16 @@ def short_squeeze():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting short squeeze scanner in background...")
                     scanner = ShortSqueezeScanner()
                     # Reduce workers to avoid rate limiting (3 instead of 10)
@@ -187,7 +200,8 @@ def short_squeeze():
                     print(f"❌ Short squeeze scanner error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -236,10 +250,16 @@ def weekly_screener():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting weekly screener in background...")
                     
                     try:
@@ -275,7 +295,8 @@ def weekly_screener():
                     print(f"❌ Weekly screener error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -324,10 +345,16 @@ def quality_stocks():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting quality stocks scanner in background...")
                     scanner = BeatenDownQualityScanner()
                     
@@ -352,7 +379,8 @@ def quality_stocks():
                     print(f"❌ Quality stocks scanner error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -401,10 +429,16 @@ def golden_cross_scanner():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting golden cross scanner in background...")
                     
                     try:
@@ -479,7 +513,8 @@ def golden_cross_scanner():
                     import traceback
                     traceback.print_exc()
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -528,10 +563,16 @@ def triple_confirmation_scanner():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting triple confirmation scanner in background...")
                     
                     if TripleConfirmationScanner:
@@ -563,7 +604,8 @@ def triple_confirmation_scanner():
                     print(f"❌ Triple confirmation scanner error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -612,10 +654,16 @@ def triple_confirmation_intraday():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting triple confirmation intraday scanner in background...")
                     
                     if TripleConfirmationIntraday:
@@ -649,7 +697,8 @@ def triple_confirmation_intraday():
                     print(f"❌ Triple confirmation intraday error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -698,10 +747,16 @@ def triple_confirmation_positional():
         
         # Start background scan if not already running
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print(f"🔄 Starting triple confirmation positional scanner in background...")
                     
                     if TripleConfirmationPositional:
@@ -735,7 +790,8 @@ def triple_confirmation_positional():
                     print(f"❌ Triple confirmation positional error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -809,12 +865,17 @@ def triple_confirmation_all():
                     'cached': True
                 })
         
+        # Initialize cache BEFORE thread starts for thread safety
+        scanner_cache[cache_key] = {
+            'data': cache_entry.get('data'),
+            'timestamp': cache_entry.get('timestamp'),
+            'running': True,
+            'run_started': datetime.now()
+        }
+        
         # Run all three scanners in background
         def run_all_scans():
             try:
-                scanner_cache[cache_key]['running'] = True
-                scanner_cache[cache_key]['run_started'] = datetime.now()
-                
                 # Run all three scanners
                 swing_scanner = TripleConfirmationScanner()
                 intraday_scanner = TripleConfirmationIntraday()
@@ -877,7 +938,8 @@ def triple_confirmation_all():
                 print(f"Error in triple confirmation all: {e}")
                 # Don't cache empty error results
             finally:
-                scanner_cache[cache_key]['running'] = False
+                if cache_key in scanner_cache:
+                    scanner_cache[cache_key]['running'] = False
         
         threading.Thread(target=run_all_scans, daemon=True).start()
         
@@ -959,10 +1021,16 @@ def volume_spike_scanner():
         
         # Start background scan
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread to avoid KeyError
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print("🔄 Volume spike scanner starting...")
                     
                     results = []
@@ -1066,7 +1134,9 @@ def volume_spike_scanner():
                     print(f"❌ Volume spike scanner error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    # Safe access - key may have been cleared during scan
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
@@ -1185,10 +1255,16 @@ def etf_scanner():
         
         # Start background scan
         if not cache_entry['running']:
+            # Initialize cache entry BEFORE starting thread
+            scanner_cache[cache_key] = {
+                'data': cache_entry.get('data'),
+                'timestamp': cache_entry.get('timestamp'),
+                'running': True,
+                'run_started': datetime.now()
+            }
+            
             def run_scan():
                 try:
-                    scanner_cache[cache_key]['running'] = True
-                    scanner_cache[cache_key]['run_started'] = datetime.now()
                     print("🔄 ETF Scanner starting...")
                     
                     results = []
@@ -1341,7 +1417,8 @@ def etf_scanner():
                     print(f"❌ ETF Scanner error: {e}")
                     # Don't cache empty error results
                 finally:
-                    scanner_cache[cache_key]['running'] = False
+                    if cache_key in scanner_cache:
+                        scanner_cache[cache_key]['running'] = False
             
             threading.Thread(target=run_scan, daemon=True).start()
         
