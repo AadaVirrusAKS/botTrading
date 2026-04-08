@@ -2587,26 +2587,26 @@ def _bot_auto_cycle_inner():
         _spy_intraday_change = 0
         if bot_state['settings'].get('market_regime_filter', True):
             # Check VIX first - elevated VIX = cautious environment
-            # Note: VIX is an index, Alpaca doesn't support it. Use yfinance directly.
+            # Note: VIX is an index, Alpaca doesn't support it. Fetch directly via Yahoo Finance API.
             try:
-                import yfinance as yf
                 import requests
-                import tempfile
-                import os
+                import time
                 
-                # Completely bypass yfinance cache by setting a fresh temp cache dir
-                _vix_cache_dir = os.path.join(tempfile.gettempdir(), f'yf_vix_{os.getpid()}')
-                os.makedirs(_vix_cache_dir, exist_ok=True)
-                yf.set_tz_cache_location(_vix_cache_dir)
+                # Fetch VIX directly from Yahoo Finance API without yfinance (avoids cache issues)
+                vix_url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
+                params = {"interval": "1d", "range": "5d"}
+                headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
                 
-                # Use a fresh session without yfinance's problematic cache
-                session = requests.Session()
-                session.headers.update({'User-Agent': 'Mozilla/5.0'})
-                vix_ticker = yf.Ticker('^VIX', session=session)
-                # Try to get VIX data with cache disabled
-                vix_hist = vix_ticker.history(period='5d', interval='1d')
-                if vix_hist is not None and not vix_hist.empty:
-                    _vix_level = float(vix_hist['Close'].iloc[-1])
+                resp = requests.get(vix_url, params=params, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result = data.get("chart", {}).get("result", [])
+                    if result:
+                        closes = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                        # Get last non-None close
+                        valid_closes = [c for c in closes if c is not None]
+                        if valid_closes:
+                            _vix_level = float(valid_closes[-1])
                 
                 if _vix_level > 22:  # Elevated VIX = be cautious
                     _market_regime = 'high_vix'
