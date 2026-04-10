@@ -2457,6 +2457,19 @@ def _bot_auto_cycle_inner():
         now_et = datetime.now(et_tz)
         is_past_day_trade_cutoff = (now_et.hour == 15 and now_et.minute >= 30) or now_et.hour >= 16
         
+        # ===== OPENING DELAY GUARD (April 2026 fix) =====
+        # Avoid trading in the first N minutes after market open (9:30 AM ET)
+        # This prevents getting caught in opening reversals like the 4/9 PUT trap
+        avoid_first_minutes = int(bot_state['settings'].get('avoid_first_minutes', 15))
+        is_in_opening_period = False
+        if now_et.hour == 9 and now_et.minute >= 30:
+            minutes_since_open = now_et.minute - 30
+            if minutes_since_open < avoid_first_minutes:
+                is_in_opening_period = True
+                print(f"⏰ OPENING DELAY ACTIVE: {avoid_first_minutes - minutes_since_open} min remaining before entries allowed (avoid opening reversals)")
+        elif now_et.hour == 9 and now_et.minute < 30:
+            is_in_opening_period = True  # Pre-market, don't trade
+        
         current_positions = len(account.get('positions', []))
         current_symbols = [p['symbol'] for p in account.get('positions', [])]
         current_stock_sides = {
@@ -2466,6 +2479,23 @@ def _bot_auto_cycle_inner():
         }
         # For options, also track contracts to avoid duplicates
         current_contracts = [p.get('contract', '') for p in account.get('positions', []) if p.get('instrument_type') == 'option']
+        
+        # ===== SAME-DIRECTION POSITION COUNT (April 2026 fix) =====
+        # Count current CALL and PUT positions to enforce max_same_direction_positions
+        current_call_count = sum(1 for p in account.get('positions', []) 
+                                  if p.get('instrument_type') == 'option' and p.get('option_type', '').lower() == 'call')
+        current_put_count = sum(1 for p in account.get('positions', []) 
+                                 if p.get('instrument_type') == 'option' and p.get('option_type', '').lower() == 'put')
+        max_same_direction = int(bot_state['settings'].get('max_same_direction_positions', 2))
+        
+        # ===== CORRELATED INDEX TRACKING (April 2026 fix) =====
+        # Track if we already have SPY or QQQ positions to prevent both in same direction
+        CORRELATED_INDICES = {'SPY', 'QQQ', 'IWM'}  # These tend to move together
+        current_index_positions = {}  # {symbol: option_type} e.g., {'SPY': 'put'}
+        block_correlated_indices = bot_state['settings'].get('block_correlated_indices', True)
+        for p in account.get('positions', []):
+            if p.get('instrument_type') == 'option' and p.get('symbol') in CORRELATED_INDICES:
+                current_index_positions[p['symbol']] = p.get('option_type', '').lower()
         
         # --- OVERTRADING GUARDS ---
         # 1. Max total trades per day (entries only)
@@ -2579,6 +2609,14 @@ def _bot_auto_cycle_inner():
                 _mins_since_last_loss = (datetime.now() - _last_loss_time).total_seconds() / 60
                 if _mins_since_last_loss < 15:
                     execution_signals = []
+
+        # ===== OPENING PERIOD CIRCUIT BREAKER (April 2026 fix) =====
+        # Block ALL entries during the first N minutes after market open
+        # This prevents the morning trap pattern where weak opens reverse sharply
+        if is_in_opening_period and execution_signals:
+            skipped_reasons.append(f"OPENING DELAY ACTIVE: Waiting {avoid_first_minutes} min after 9:30 AM ET to avoid opening reversals")
+            print(f"⏰ OPENING DELAY BREAKER: Blocking all entries until {avoid_first_minutes} min after open")
+            execution_signals = []
 
         # ===== MARKET REGIME FILTER =====
         # Check SPY trend + VIX + intraday direction to avoid trading against the flow
@@ -2702,6 +2740,31 @@ def _bot_auto_cycle_inner():
                 # If the for-loop broke (conflict found), skip this signal
                 if any(f"{signal['symbol']}: Directional conflict" in r for r in skipped_reasons[-1:]):
                     continue
+                
+                # ===== SAME-DIRECTION POSITION LIMIT (April 2026 fix) =====
+                # Limit max CALLs or PUTs to prevent concentrated directional bets
+                if new_opt_type == 'call' and current_call_count >= max_same_direction:
+                    skipped_reasons.append(f"{signal.get('contract', signal['symbol'])}: Max {max_same_direction} CALL positions reached — diversify directions")
+                    continue
+                elif new_opt_type == 'put' and current_put_count >= max_same_direction:
+                    skipped_reasons.append(f"{signal.get('contract', signal['symbol'])}: Max {max_same_direction} PUT positions reached — diversify directions")
+                    continue
+                
+                # ===== CORRELATED INDEX BLOCK (April 2026 fix) =====
+                # Prevent SPY + QQQ (or IWM) in the same direction simultaneously
+                # This avoids the 4/9 scenario where all index PUTs failed together
+                sym = signal['symbol']
+                if block_correlated_indices and sym in CORRELATED_INDICES:
+                    # Check if we already have another index in the same direction
+                    for existing_idx, existing_dir in current_index_positions.items():
+                        if existing_idx != sym and existing_dir == new_opt_type:
+                            skipped_reasons.append(f"{sym}: Correlated index blocked — already have {existing_idx} {existing_dir.upper()}")
+                            print(f"🔗 Correlated index block: Can't add {sym} {new_opt_type.upper()} when holding {existing_idx} {existing_dir.upper()}")
+                            break
+                    else:
+                        pass  # No conflict
+                    if any(f"{sym}: Correlated index blocked" in r for r in skipped_reasons[-1:]):
+                        continue
             else:
                 intended_side = 'LONG' if signal.get('action') == 'BUY' else 'SHORT'
                 existing_side = current_stock_sides.get(signal['symbol'])
@@ -3013,6 +3076,16 @@ def _bot_auto_cycle_inner():
                 
                 current_positions += 1
                 current_contracts.append(signal.get('contract', ''))
+                
+                # ===== UPDATE DIRECTION COUNTERS (April 2026 fix) =====
+                opt_type = signal.get('option_type', 'call').lower()
+                if opt_type == 'call':
+                    current_call_count += 1
+                elif opt_type == 'put':
+                    current_put_count += 1
+                # Update correlated index tracking
+                if signal['symbol'] in CORRELATED_INDICES:
+                    current_index_positions[signal['symbol']] = opt_type
                 
                 print(f"\U0001f916 AUTO-TRADE: \U0001f7e2 BUY {contracts_qty} x {signal.get('contract', signal['symbol'])} @ ${premium:.2f} (OPTION)")
             

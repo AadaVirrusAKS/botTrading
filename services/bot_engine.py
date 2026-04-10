@@ -57,7 +57,11 @@ bot_state = {
         'close_0dte_before_expiry': True,
         'max_loss_per_trade': 500,
         'min_option_premium': 1.0,
-        'market_regime_filter': True
+        'market_regime_filter': True,
+        # === MORNING TRAP PREVENTION (April 2026 fixes) ===
+        'avoid_first_minutes': 15,           # Wait 15 min after market open (avoid opening reversals)
+        'max_same_direction_positions': 2,   # Max 2 CALLs or 2 PUTs at once
+        'block_correlated_indices': True     # Prevent SPY+QQQ same direction bets
     },
     'last_scan': None,
     'signals': [],
@@ -153,7 +157,11 @@ def init_user_bot_state(user_id):
             'close_0dte_before_expiry': True,
             'max_loss_per_trade': 500,
             'min_option_premium': 1.0,
-            'market_regime_filter': True
+            'market_regime_filter': True,
+            # === MORNING TRAP PREVENTION (April 2026 fixes) ===
+            'avoid_first_minutes': 15,
+            'max_same_direction_positions': 2,
+            'block_correlated_indices': True
         },
         'last_scan': None,
         'signals': [],
