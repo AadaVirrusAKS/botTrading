@@ -1448,16 +1448,18 @@ def _bot_auto_cycle_inner():
                     trailing_mode = 'atr'
 
                 # ---- MINIMUM HOLD TIME: Don't trail for first N minutes ----
-                # Reduced from 30 to 15 for options - missed too many profit spikes
-                _MIN_HOLD_MINUTES_OPTIONS = 15   # Options: 15 min before trailing
+                # FIX April 2026: Increased to 25 min to let options breathe
+                # Was exiting 65 trades at <5% gain - cutting winners too short
+                _MIN_HOLD_MINUTES_OPTIONS = 25   # Options: 25 min before trailing
                 _MIN_HOLD_MINUTES_STOCKS = 5     # Stocks can trail sooner
                 _min_hold = _MIN_HOLD_MINUTES_OPTIONS if is_option else _MIN_HOLD_MINUTES_STOCKS
                 _hold_minutes = _pos_age_seconds / 60.0
 
                 # ---- MIN PROFIT THRESHOLD: Higher for options to avoid micro-exits ----
-                # RESTORED: 3% threshold was working well before recent changes
+                # FIX April 2026: Increased from 3% to 10% for options
+                # Let winners run to meaningful profit before trailing kicks in
                 if is_option:
-                    min_profit_to_trail = 0.03   # 3% minimum before trailing
+                    min_profit_to_trail = 0.10   # 10% minimum before trailing (was 3%)
                 else:
                     min_profit_to_trail = 0.005  # 0.5% for stocks
 
@@ -2929,16 +2931,25 @@ def _bot_auto_cycle_inner():
                     skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} below minimum ${min_premium:.2f} — too cheap, spread kills edge")
                     continue
 
+                # ===== MAXIMUM PREMIUM FILTER (April 2026 fix) =====
+                # Feb 2026 had 88% win rate with avg entry $3.31 (mostly <$6 options)
+                # Apr 2026 dropped to 58% win rate with avg entry $5.74 (43% were >$6)
+                # Expensive options = bigger losses when stopped out
+                max_premium = float(bot_state['settings'].get('max_option_premium', 6.0))
+                if premium > max_premium:
+                    skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} above maximum ${max_premium:.2f} — too expensive, bigger loss risk")
+                    continue
+
                 # ===== POSITION SIZING =====
                 # 1. Size contracts from position_size budget
                 contracts_qty = max(1, int(position_size / (premium * 100)))
                 cost = contracts_qty * premium * 100
 
                 # 2. Respect scanner's stop loss level, reduce qty to fit max_loss_per_trade
-                # The scanner's 50% stop is calibrated for options — don't tighten it.
-                # Instead, reduce contract count so total risk at that stop fits the budget.
+                # FIX April 2026: Tightened default stop from 50% to 20%
+                # 50% stops were causing -$750 avg losses, destroying profitability
                 max_loss_per_trade = float(bot_state['settings'].get('max_loss_per_trade', 500))
-                signal_stop = float(signal.get('stop_loss', premium * 0.5) or (premium * 0.5))
+                signal_stop = float(signal.get('stop_loss', premium * 0.20) or (premium * 0.20))
                 risk_pct_signal = max(0.01, min(0.95, 1 - (signal_stop / signal_premium))) if signal_premium > 0 else 0.5
                 signal_based_stop = round(premium * (1 - risk_pct_signal), 2)
 

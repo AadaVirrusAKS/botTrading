@@ -57,6 +57,7 @@ bot_state = {
         'close_0dte_before_expiry': True,
         'max_loss_per_trade': 500,
         'min_option_premium': 1.0,
+        'max_option_premium': 5.0,          # Avoid expensive options (Apr 2026 fix)
         'market_regime_filter': True,
         # === MORNING TRAP PREVENTION (April 2026 fixes) ===
         'avoid_first_minutes': 15,           # Wait 15 min after market open (avoid opening reversals)
