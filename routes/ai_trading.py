@@ -1045,15 +1045,51 @@ def build_live_option_fallback_signals(symbols, max_candidates=6):
             if not chain:
                 continue
 
-            def _atm_signal(df, option_type):
+            def _otm_signal(df, option_type):
+                """Select OTM strike for better leverage on big moves"""
                 if df is None or df.empty:
                     return None
                 rows = df.copy()
-                rows['dist'] = abs(rows['strike'] - float(spot))
-                atm = rows.nsmallest(1, 'dist')
-                if atm.empty:
-                    return None
-                row = atm.iloc[0]
+                _spot = float(spot)
+                
+                # OTM settings
+                _otm_mode = bot_state.get('settings', {}).get('otm_mode', False)
+                _otm_pct = bot_state.get('settings', {}).get('otm_pct', 3.0)
+                _otm_max_premium = bot_state.get('settings', {}).get('otm_max_premium', 2.0)
+                
+                if _otm_mode:
+                    # OTM selection
+                    if option_type == 'call':
+                        target_strike = _spot * (1 + _otm_pct / 100)
+                        otm_rows = rows[rows['strike'] >= _spot]
+                    else:
+                        target_strike = _spot * (1 - _otm_pct / 100)
+                        otm_rows = rows[rows['strike'] <= _spot]
+                    
+                    if otm_rows.empty:
+                        otm_rows = rows
+                    
+                    otm_rows = otm_rows.copy()
+                    otm_rows['dist'] = abs(otm_rows['strike'] - target_strike)
+                    candidates = otm_rows.nsmallest(3, 'dist')
+                    
+                    # Filter by premium
+                    candidates['_premium'] = candidates['lastPrice'].fillna(
+                        (candidates['bid'].fillna(0) + candidates['ask'].fillna(0)) / 2
+                    )
+                    cheap = candidates[candidates['_premium'] <= _otm_max_premium]
+                    
+                    if not cheap.empty:
+                        row = cheap.iloc[0]
+                    else:
+                        row = candidates.iloc[0]
+                else:
+                    # Original ATM logic
+                    rows['dist'] = abs(rows['strike'] - _spot)
+                    atm = rows.nsmallest(1, 'dist')
+                    if atm.empty:
+                        return None
+                    row = atm.iloc[0]
                 strike = float(row.get('strike', 0) or 0)
                 last = float(row.get('lastPrice', 0) or 0)
                 bid = float(row.get('bid', 0) or 0)
@@ -1067,15 +1103,31 @@ def build_live_option_fallback_signals(symbols, max_candidates=6):
                     dte_val = 0
                 if dte_val < min_dte_days:
                     return None
+                
+                # RUNNER MODE: Widen targets for OTM options to catch big moves
+                _runner_mode = bot_state.get('settings', {}).get('runner_mode', False)
+                _otm_mode = bot_state.get('settings', {}).get('otm_mode', False)
+                
+                if _runner_mode and _otm_mode:
+                    # OTM runner: target 2x, 3x, 4x (let winners run!)
+                    _stop_mult = 0.50   # 50% stop (wider to avoid whipsaws)
+                    _target_mult = 2.0  # 100% gain target
+                    _target2_mult = 3.0 # 200% gain target
+                else:
+                    # Standard targets
+                    _stop_mult = 0.60
+                    _target_mult = 1.4
+                    _target2_mult = 1.8
+                
                 return {
                     'symbol': symbol,
                     'action': 'BUY',
                     'confidence': 55,
                     'entry': round(premium, 2),
-                    'stop_loss': round(premium * 0.6, 2),
-                    'target': round(premium * 1.4, 2),
-                    'target_2': round(premium * 1.8, 2),
-                    'reason': 'Live option-chain fallback candidate',
+                    'stop_loss': round(premium * _stop_mult, 2),
+                    'target': round(premium * _target_mult, 2),
+                    'target_2': round(premium * _target2_mult, 2),
+                    'reason': f"{'🚀 OTM Runner' if _otm_mode else 'Live option-chain'} candidate",
                     'instrument_type': 'option',
                     'option_type': option_type,
                     'contract': f"{symbol} {best_exp} {strike:.0f}{'C' if option_type == 'call' else 'P'}",
@@ -1088,8 +1140,8 @@ def build_live_option_fallback_signals(symbols, max_candidates=6):
                     'scan_type': 'intraday'
                 }
 
-            call_sig = _atm_signal(chain.calls, 'call')
-            put_sig = _atm_signal(chain.puts, 'put')
+            call_sig = _otm_signal(chain.calls, 'call')
+            put_sig = _otm_signal(chain.puts, 'put')
             if call_sig:
                 candidates.append(call_sig)
             if put_sig:
@@ -1458,8 +1510,19 @@ def _bot_auto_cycle_inner():
                 # ---- MIN PROFIT THRESHOLD: Higher for options to avoid micro-exits ----
                 # FIX April 2026: Increased from 3% to 10% for options
                 # Let winners run to meaningful profit before trailing kicks in
+                
+                # RUNNER MODE: For OTM options, require much higher profit before trailing
+                _runner_mode = bot_state.get('settings', {}).get('runner_mode', False)
+                _otm_mode = bot_state.get('settings', {}).get('otm_mode', False)
+                
                 if is_option:
-                    min_profit_to_trail = 0.10   # 10% minimum before trailing (was 3%)
+                    if _runner_mode and _otm_mode:
+                        # OTM Runner: Don't trail until 50% profit to let big moves play out
+                        min_profit_to_trail = 0.50   # 50% minimum before trailing!
+                        _MIN_HOLD_MINUTES_OPTIONS = 45  # Override: hold 45 min minimum
+                        _min_hold = _MIN_HOLD_MINUTES_OPTIONS
+                    else:
+                        min_profit_to_trail = 0.10   # 10% minimum before trailing (was 3%)
                 else:
                     min_profit_to_trail = 0.005  # 0.5% for stocks
 
@@ -1506,6 +1569,11 @@ def _bot_auto_cycle_inner():
                     else:
                         profit_pct = (entry_price - trail_reference_price) / entry_price
 
+                    # RUNNER MODE logging: Show when we're holding for bigger move
+                    if _runner_mode and _otm_mode and is_option:
+                        if profit_pct > 0.10 and profit_pct < min_profit_to_trail:
+                            print(f"🚀 RUNNER MODE: {symbol} at +{profit_pct*100:.1f}% — holding for bigger move (trail at +{min_profit_to_trail*100:.0f}%)")
+
                     # Check trend alignment: bullish = good for LONG, bearish = good for SHORT
                     _trend_aligned = (side == 'LONG' and _trend_direction >= 1) or \
                                      (side == 'SHORT' and _trend_direction <= -1)
@@ -1528,21 +1596,25 @@ def _bot_auto_cycle_inner():
                         # Today's IWM/ORCL/JPM all went from +2-5% to -10% because
                         # the 3.5x ATR trailing was too wide for thin profits.
                         if is_option and profit_pct < 0.05:
-                            # Very small option profit: trail at breakeven + small buffer
-                            # This ensures we don't turn winners into losers
-                            atr_multiplier = 2.0
+                            # Very small option profit: tight trail to lock near breakeven
+                            # FIX Apr 2026: Tightened from 2.0 → 1.5 (give back less on small moves)
+                            atr_multiplier = 1.5
                         elif profit_pct < 0.10:
-                            # <10% profit: give room to breathe
-                            atr_multiplier = 3.0 if is_option else 2.5
+                            # <10% profit: moderate room
+                            # FIX Apr 2026: Tightened from 3.0 → 2.0 for options
+                            atr_multiplier = 2.0 if is_option else 2.5
                         elif profit_pct < 0.25:
-                            # 10-25% profit: medium trailing
-                            atr_multiplier = 2.5 if is_option else 2.0
+                            # 10-25% profit: tighter to lock meaningful gains
+                            # FIX Apr 2026: Tightened from 2.5 → 1.8 for options
+                            atr_multiplier = 1.8 if is_option else 2.0
                         elif profit_pct < 0.50:
-                            # 25-50% profit: start tightening to lock gains
-                            atr_multiplier = 2.0 if is_option else 1.8
+                            # 25-50% profit: protect the runner
+                            # FIX Apr 2026: Tightened from 2.0 → 1.5 for options
+                            atr_multiplier = 1.5 if is_option else 1.8
                         else:
-                            # >50% profit: big runner, protect but give room
-                            atr_multiplier = 1.8 if is_option else 1.5
+                            # >50% profit: big runner, protect aggressively
+                            # FIX Apr 2026: Tightened from 1.8 → 1.2 for options
+                            atr_multiplier = 1.2 if is_option else 1.5
 
                         # TREND BONUS: If trend is in our favor, widen trailing by 30%
                         if _trend_aligned:
@@ -1553,12 +1625,18 @@ def _bot_auto_cycle_inner():
 
                         if side == 'LONG':
                             new_trailing_stop = round(trail_reference_price - (pos_atr * atr_multiplier), 2)
+                            # Profit floor (Apr 2026): once stop crosses above entry, lock in min 5%
+                            if new_trailing_stop > entry_price:
+                                new_trailing_stop = max(new_trailing_stop, round(entry_price * 1.05, 2))
                             if new_trailing_stop > stop_loss and new_trailing_stop > entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
                                 print(f"📈 ATR Trail{_tier_label} UP {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}x{atr_multiplier:.1f}, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
                         else:
                             new_trailing_stop = round(trail_reference_price + (pos_atr * atr_multiplier), 2)
+                            # Profit floor (Apr 2026): once stop crosses below entry, lock in min 5%
+                            if new_trailing_stop < entry_price:
+                                new_trailing_stop = min(new_trailing_stop, round(entry_price * 0.95, 2))
                             if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop < entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
@@ -1595,12 +1673,18 @@ def _bot_auto_cycle_inner():
                         if trailing_pct > 0:
                             if side == 'LONG':
                                 new_trailing_stop = trail_reference_price * (1 - trailing_pct)
+                                # Profit floor (Apr 2026): once stop above entry, lock in min 5%
+                                if new_trailing_stop > entry_price:
+                                    new_trailing_stop = max(new_trailing_stop, entry_price * 1.05)
                                 if new_trailing_stop > stop_loss and new_trailing_stop > entry_price:
                                     pos['stop_loss'] = round(new_trailing_stop, 2)
                                     stop_loss = pos['stop_loss']
                                     print(f"📈 %Trail UP {symbol}: ${stop_loss:.2f} ({trailing_pct*100:.1f}%, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
                             else:
                                 new_trailing_stop = trail_reference_price * (1 + trailing_pct)
+                                # Profit floor (Apr 2026): once stop below entry, lock in min 5%
+                                if new_trailing_stop < entry_price:
+                                    new_trailing_stop = min(new_trailing_stop, entry_price * 0.95)
                                 if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop < entry_price:
                                     pos['stop_loss'] = round(new_trailing_stop, 2)
                                     stop_loss = pos['stop_loss']
@@ -2063,6 +2147,13 @@ def _bot_auto_cycle_inner():
                 f"Stock Targets: {daily_analysis['stocks']['target_hit_count']} | "
                 f"Stock P&L: ${daily_analysis['stocks']['net_pnl']:.2f}"
             )
+            # Also persist full analysis report to daily_analysis_reports/ for EOD tracking
+            try:
+                from services.daily_analysis_agent import run_daily_analysis as _run_full_analysis
+                _run_full_analysis(analysis_date)
+                print(f"💾 EOD full report saved to daily_analysis_reports/analysis_{analysis_date}.json")
+            except Exception as _e:
+                print(f"⚠️ EOD full report save failed: {_e}")
 
     market_open = (ct_hour > 8 or (ct_hour == 8 and ct_min >= 30))  # 8:30 AM CT
     market_close = ct_hour < 15  # Before 3:00 PM CT
@@ -2453,11 +2544,15 @@ def _bot_auto_cycle_inner():
         expect_intraday_only = (current_watchlist in ('intraday_stocks', 'intraday_options') 
                                 or current_instrument in ('options', 'both'))
         
-        # Check if we're past trading cutoff (3:30 PM ET for day trades)
+        # Check if we're past trading cutoff (2:30 PM ET for day trades)
+        # FIX Apr 2026: Pulled back from 3:30 → 2:30 PM ET.
+        # AAPL/ORCL entered 12:42 and 13:27 and were force-closed EOD at a loss.
+        # No new intraday options should open within 90 min of close — not enough
+        # time to recover a losing position or let a winner breathe.
         import pytz
         et_tz = pytz.timezone('US/Eastern')
         now_et = datetime.now(et_tz)
-        is_past_day_trade_cutoff = (now_et.hour == 15 and now_et.minute >= 30) or now_et.hour >= 16
+        is_past_day_trade_cutoff = (now_et.hour == 14 and now_et.minute >= 30) or now_et.hour >= 15
         
         # ===== OPENING DELAY GUARD (April 2026 fix) =====
         # Avoid trading in the first N minutes after market open (9:30 AM ET)
@@ -2550,8 +2645,8 @@ def _bot_auto_cycle_inner():
                     prev = recent_auto_exits.get(sym)
                     if not prev or ts > prev:
                         recent_auto_exits[sym] = ts
-        COOLDOWN_MINUTES = 45
-        REENTRY_COOLDOWN_MINUTES = int(bot_state['settings'].get('reentry_cooldown_minutes', 15))
+        COOLDOWN_MINUTES = 120  # FIX Apr 2026: Raised from 45 to 120 min (post-SL hard floor)
+        REENTRY_COOLDOWN_MINUTES = int(bot_state['settings'].get('reentry_cooldown_minutes', 240))
         
         # ===== PER-SYMBOL DAILY LOSS CAP =====
         # If we've already lost > $500 on a symbol today, don't trade it again.
@@ -2669,11 +2764,13 @@ def _bot_auto_cycle_inner():
                         # SMA calculations use daily closes (stable reference)
                         spy_sma3 = spy_close.rolling(3).mean().iloc[-1]
                         spy_sma10 = spy_close.rolling(min(10, len(spy_close))).mean().iloc[-1]
-                        spy_prev = float(spy_close.iloc[-2])
-                        spy_open_today = float(spy_close.iloc[-1])  # Previous close = today's reference
+                        # FIX Apr 2026: Use iloc[-2] (yesterday's settled close) as the intraday
+                        # reference. iloc[-1] is today's daily candle which yfinance fills in real-time,
+                        # making live_price ≈ iloc[-1] → 0% change → regime always stuck at NEUTRAL.
+                        spy_prev_close = float(spy_close.iloc[-2])  # Yesterday's close = correct reference
                         
-                        # Calculate INTRADAY change (from prev close to current price)
-                        _spy_intraday_change = ((spy_latest - spy_open_today) / spy_open_today) * 100 if spy_open_today > 0 else 0
+                        # Calculate INTRADAY change (from yesterday close to current live price)
+                        _spy_intraday_change = ((spy_latest - spy_prev_close) / spy_prev_close) * 100 if spy_prev_close > 0 else 0
                         
                         # INTRADAY DIRECTION OVERRIDE
                         # If SPY is DOWN >0.5% today, market is selling regardless of SMA position
@@ -2884,9 +2981,9 @@ def _bot_auto_cycle_inner():
                 skipped_reasons.append(f"{signal['symbol']}: Stock signal rejected (instrument_type is options)")
                 continue
             
-            # Skip day trades after 3:30 PM ET cutoff
+            # Skip day trades after 2:30 PM ET cutoff
             if is_intraday_signal and is_past_day_trade_cutoff:
-                skipped_reasons.append(f"{signal['symbol']}: Past day trade cutoff (3:30 PM ET)")
+                skipped_reasons.append(f"{signal['symbol']}: Past day trade cutoff (2:30 PM ET — 90 min before close)")
                 continue
             
             # Only execute BUY signals automatically (safer) - in demo mode allow SELL too
@@ -2932,12 +3029,12 @@ def _bot_auto_cycle_inner():
                     continue
 
                 # ===== MAXIMUM PREMIUM FILTER (April 2026 fix) =====
-                # Feb 2026 had 88% win rate with avg entry $3.31 (mostly <$6 options)
-                # Apr 2026 dropped to 58% win rate with avg entry $5.74 (43% were >$6)
-                # Expensive options = bigger losses when stopped out
-                max_premium = float(bot_state['settings'].get('max_option_premium', 6.0))
+                # Apr 14 analysis: <=$2 options had 75% WR, $2-$4 had 29% WR, >$4 had 50% WR.
+                # Sweet spot is cheap options where the per-contract loss is bounded.
+                # Cap at $2.50: any entry above this gets stopped for ~$250+/contract.
+                max_premium = float(bot_state['settings'].get('max_option_premium', 2.50))
                 if premium > max_premium:
-                    skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} above maximum ${max_premium:.2f} — too expensive, bigger loss risk")
+                    skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} above maximum ${max_premium:.2f} — too expensive (Apr14: $2-4 range had 29% WR)")
                     continue
 
                 # ===== POSITION SIZING =====
@@ -4589,17 +4686,70 @@ def scan_intraday_option(symbol):
         if opts.empty:
             return None
 
-        # Pick strike closest to current price (ATM)
+        # OTM STRIKE SELECTION (April 2026 update)
+        # For CALLs: pick strike ABOVE current price (OTM)
+        # For PUTs: pick strike BELOW current price (OTM)
+        # OTM options have more leverage = bigger percentage moves
         opts = opts.copy()
-        opts['dist'] = abs(opts['strike'] - price)
-        atm = opts.nsmallest(3, 'dist')
-
-        # Pick the best row (highest open interest among close strikes)
-        if 'openInterest' in atm.columns:
-            atm = atm.fillna({'openInterest': 0})
-            best_row = atm.sort_values('openInterest', ascending=False).iloc[0]
+        
+        # Get OTM settings from bot_state
+        _otm_mode = bot_state.get('settings', {}).get('otm_mode', False)
+        _otm_pct = bot_state.get('settings', {}).get('otm_pct', 3.0)  # 3% OTM default
+        _otm_max_premium = bot_state.get('settings', {}).get('otm_max_premium', 2.0)
+        
+        if _otm_mode:
+            # Calculate target OTM strike
+            if opt_type == 'call':
+                # CALL: strike should be ABOVE current price
+                target_strike = price * (1 + _otm_pct / 100)
+                # Filter to only OTM strikes
+                otm_opts = opts[opts['strike'] >= price]
+            else:
+                # PUT: strike should be BELOW current price  
+                target_strike = price * (1 - _otm_pct / 100)
+                # Filter to only OTM strikes
+                otm_opts = opts[opts['strike'] <= price]
+            
+            if otm_opts.empty:
+                otm_opts = opts  # Fallback to all if no OTM available
+            
+            # Find strikes closest to our target OTM level
+            otm_opts = otm_opts.copy()
+            otm_opts['dist'] = abs(otm_opts['strike'] - target_strike)
+            candidates = otm_opts.nsmallest(5, 'dist')
+            
+            # Filter by premium (prefer cheaper options for leverage)
+            candidates['_premium'] = candidates['lastPrice'].fillna(
+                (candidates['bid'].fillna(0) + candidates['ask'].fillna(0)) / 2
+            )
+            cheap_opts = candidates[candidates['_premium'] <= _otm_max_premium]
+            
+            if not cheap_opts.empty:
+                # Pick cheapest that has decent OI
+                if 'openInterest' in cheap_opts.columns:
+                    cheap_opts = cheap_opts.fillna({'openInterest': 0})
+                    # Among cheap options, pick one with best OI
+                    best_row = cheap_opts.sort_values('openInterest', ascending=False).iloc[0]
+                else:
+                    best_row = cheap_opts.iloc[0]
+                print(f"🎯 OTM MODE: {symbol} {opt_type.upper()} picking ${best_row['strike']:.0f} strike (spot ${price:.2f}, {_otm_pct}% OTM target ${target_strike:.2f})")
+            else:
+                # No cheap OTM options - fallback to closest OTM with warning
+                if 'openInterest' in candidates.columns:
+                    candidates = candidates.fillna({'openInterest': 0})
+                    best_row = candidates.sort_values('openInterest', ascending=False).iloc[0]
+                else:
+                    best_row = candidates.iloc[0]
+                print(f"⚠️ OTM MODE: No cheap options for {symbol}, using ${best_row['strike']:.0f} (premium ${best_row.get('_premium', 0):.2f})")
         else:
-            best_row = atm.iloc[0]
+            # Original ATM logic
+            opts['dist'] = abs(opts['strike'] - price)
+            atm = opts.nsmallest(3, 'dist')
+            if 'openInterest' in atm.columns:
+                atm = atm.fillna({'openInterest': 0})
+                best_row = atm.sort_values('openInterest', ascending=False).iloc[0]
+            else:
+                best_row = atm.iloc[0]
 
         strike = float(best_row['strike'])
         premium = float(best_row['lastPrice']) if not pd.isna(best_row.get('lastPrice', None)) else 0

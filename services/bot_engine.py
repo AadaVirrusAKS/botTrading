@@ -48,7 +48,7 @@ bot_state = {
         'max_daily_trades': 20,
         'max_per_symbol_daily': 2,
         'max_per_symbol_daily': 4,
-        'reentry_cooldown_minutes': 10,
+        'reentry_cooldown_minutes': 240,      # 4-hr cooldown prevents same-ticker re-entry after exit
         'position_size': 4000,
         'stop_loss': 2.0,
         'take_profit': 4.0,
@@ -57,10 +57,10 @@ bot_state = {
         'close_0dte_before_expiry': True,
         'max_loss_per_trade': 500,
         'min_option_premium': 1.0,
-        'max_option_premium': 5.0,          # Avoid expensive options (Apr 2026 fix)
+        'max_option_premium': 2.50,          # Cap at $2.50 — <=$2 options had 75% WR on Apr14
         'market_regime_filter': True,
         # === MORNING TRAP PREVENTION (April 2026 fixes) ===
-        'avoid_first_minutes': 15,           # Wait 15 min after market open (avoid opening reversals)
+        'avoid_first_minutes': 30,           # Wait 30 min after market open (avoid opening reversals)
         'max_same_direction_positions': 2,   # Max 2 CALLs or 2 PUTs at once
         'block_correlated_indices': True     # Prevent SPY+QQQ same direction bets
     },
@@ -149,7 +149,7 @@ def init_user_bot_state(user_id):
             'max_positions': 3,
             'max_daily_trades': 20,
             'max_per_symbol_daily': 4,
-            'reentry_cooldown_minutes': 10,
+            'reentry_cooldown_minutes': 240,      # 4-hr cooldown prevents same-ticker re-entry after exit
             'position_size': 4000,
             'stop_loss': 2.0,
             'take_profit': 4.0,
@@ -158,9 +158,10 @@ def init_user_bot_state(user_id):
             'close_0dte_before_expiry': True,
             'max_loss_per_trade': 500,
             'min_option_premium': 1.0,
+            'max_option_premium': 2.50,          # Cap at $2.50
             'market_regime_filter': True,
             # === MORNING TRAP PREVENTION (April 2026 fixes) ===
-            'avoid_first_minutes': 15,
+            'avoid_first_minutes': 30,
             'max_same_direction_positions': 2,
             'block_correlated_indices': True
         },
@@ -501,7 +502,11 @@ def load_bot_state():
     if 'max_per_symbol_daily' not in bot_state['settings']:
         bot_state['settings']['max_per_symbol_daily'] = 6
     if 'reentry_cooldown_minutes' not in bot_state['settings']:
-        bot_state['settings']['reentry_cooldown_minutes'] = 10
+        bot_state['settings']['reentry_cooldown_minutes'] = 240
+    if 'avoid_first_minutes' not in bot_state['settings']:
+        bot_state['settings']['avoid_first_minutes'] = 30
+    if 'max_option_premium' not in bot_state['settings']:
+        bot_state['settings']['max_option_premium'] = 2.50
     if 'max_loss_per_trade' not in bot_state['settings']:
         bot_state['settings']['max_loss_per_trade'] = 500
     # Backfill initial_balance for real_account (prevents recalculate_balance from defaulting to $10k)
