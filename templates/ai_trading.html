@@ -1158,6 +1158,14 @@
                         </div>
                     </div>
                 </div>
+                <!-- Why-not-trading panel -->
+                <div id="skipped-reasons-panel" style="display:none; border-top: 1px solid var(--border); padding: 10px 16px; background: rgba(239,68,68,0.06);">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                        <span style="font-size:13px; font-weight:600; color:#ef4444;">⚠️ Auto-trade blocked — reasons:</span>
+                        <span id="skipped-ts" style="font-size:11px; color:var(--text-secondary);"></span>
+                    </div>
+                    <ul id="skipped-reasons-list" style="margin:0; padding-left:18px; font-size:12px; color:var(--text-secondary); line-height:1.8;"></ul>
+                </div>
             </div>
 
             <!-- Active Positions -->
@@ -1584,10 +1592,12 @@
             // Count completed trades (round-trips: BUY + CLOSE = 1 trade)
             // Only CLOSE/BUY_TO_COVER actions or SELL with auto_exit represent completed trades
             const trades = account.trades || [];
-            const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED'];
+            const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED', 'PARTIAL_TARGET_HIT'];
             const completedTrades = trades.filter(t => 
                 t.action === 'CLOSE' || 
                 t.action === 'BUY_TO_COVER' || 
+                t.action === 'PARTIAL_SELL' ||
+                t.action === 'PARTIAL_COVER' ||
                 (t.action === 'SELL' && (t.auto_exit || exitReasons.includes(t.reason)))
             );
             document.getElementById('stat-trades').textContent = completedTrades.length;
@@ -1600,6 +1610,26 @@
             document.getElementById('stat-win-rate').textContent = `${winRate}%`;
         }
         
+        // Show/hide the "why auto-trade didn't fire" panel below signals
+        function updateSkippedReasons(reasons, ts) {
+            const panel = document.getElementById('skipped-reasons-panel');
+            const list  = document.getElementById('skipped-reasons-list');
+            const tsEl  = document.getElementById('skipped-ts');
+            if (!panel || !list) return;
+            if (!reasons || reasons.length === 0) {
+                panel.style.display = 'none';
+                return;
+            }
+            list.innerHTML = reasons.map(r => `<li>${r}</li>`).join('');
+            if (ts) {
+                try {
+                    const d = new Date(ts);
+                    tsEl.textContent = d.toLocaleTimeString();
+                } catch(e) { tsEl.textContent = ''; }
+            }
+            panel.style.display = 'block';
+        }
+
         // Update Today's P&L display (equity-based, matches Alpaca's day_pnl)
         function updateDayPnlDisplay(dayPnl, dayPnlPct, todayRealizedPnl) {
             const el = document.getElementById('stat-day-pnl');
@@ -1947,6 +1977,9 @@
                     if (data.trades) {
                         renderTradeLog(data.trades, latestPositions);
                     }
+
+                    // Update the "why not trading" skipped-reasons panel
+                    updateSkippedReasons(data.last_skipped_reasons || [], data.last_skipped_ts || '');
                     
                     // Sync accountMode with server's account_mode to ensure close operations work correctly
                     // Use flag to prevent infinite recursion
@@ -2048,10 +2081,13 @@
                     // Log skipped reasons for debugging
                     if (data.skipped_reasons && data.skipped_reasons.length > 0) {
                         console.log('🤖 Signals skipped:', data.skipped_reasons);
+                        updateSkippedReasons(data.skipped_reasons, new Date().toISOString());
                         // Show first skip reason to user if no trades executed and auto-trade is on
                         if ((!data.trades_executed || data.trades_executed.length === 0) && data.auto_trade_enabled) {
-                            showNotification(`ℹ️ ${data.skipped_reasons[0]}`, 'info');
+                            showNotification(`⚠️ ${data.skipped_reasons[0]}`, 'warning');
                         }
+                    } else if (data.trades_executed && data.trades_executed.length > 0) {
+                        updateSkippedReasons([], '');
                     }
                     
                     // Show status message
@@ -2401,7 +2437,7 @@
                 // SELL with auto_exit/exit-reason = closing a LONG, BUY_TO_COVER = closing a SHORT
                 const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED', 'END_OF_DAY',
                     'TRAILING_STOP', 'MAX_LOSS_GUARD', 'EXPIRY_PROTECTION', 'STALE_DAY_TRADE', 'ALREADY_CLOSED',
-                    'PARTIAL_COVER'];
+                    'PARTIAL_COVER', 'PARTIAL_TARGET_HIT'];
                 const isAutoExit = trade.auto_exit || exitReasons.includes(trade.reason);
                 const side = trade.side || (isAutoExit 
                     ? (trade.action === 'BUY_TO_COVER' ? 'SHORT' : 'LONG')
@@ -2411,7 +2447,7 @@
                 
                 // Auto-exit trades have auto_exit=true, or specific exit reasons (STOP_LOSS, TARGET_HIT)
                 // Note: entry trades also have 'reason' field (signal reasons), so we check for specific exit reasons
-                const isClosing = trade.action === 'CLOSE' || (trade.action === 'SELL' && isAutoExit) || trade.action === 'BUY_TO_COVER';
+                const isClosing = trade.action === 'CLOSE' || (trade.action === 'SELL' && isAutoExit) || trade.action === 'BUY_TO_COVER' || trade.action === 'PARTIAL_SELL' || trade.action === 'PARTIAL_COVER';
                 const isOpening = !isClosing && (
                     (trade.action === 'BUY' && side === 'LONG') || 
                     (trade.action === 'SELL' && side === 'SHORT')
@@ -2975,7 +3011,7 @@
             // Group trades into round trips
             const roundTrips = [];
             const openPositions = {};
-            const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED'];
+            const exitReasons = ['STOP_LOSS', 'TARGET_HIT', 'MANUAL_CLOSE', 'EXPIRED', 'PARTIAL_TARGET_HIT'];
             
             account.trades.forEach(trade => {
                 const side = trade.side || (trade.action === 'BUY' ? 'LONG' : 'SHORT');
@@ -2983,7 +3019,7 @@
                 const key = isOption ? (trade.contract || trade.symbol + '_opt') : trade.symbol;
                 
                 const isAutoExit = trade.auto_exit || exitReasons.includes(trade.reason);
-                const isClosing = trade.action === 'CLOSE' || (trade.action === 'SELL' && isAutoExit) || trade.action === 'BUY_TO_COVER';
+                const isClosing = trade.action === 'CLOSE' || (trade.action === 'SELL' && isAutoExit) || trade.action === 'BUY_TO_COVER' || trade.action === 'PARTIAL_SELL' || trade.action === 'PARTIAL_COVER';
                 const isOpening = !isClosing && (
                     (trade.action === 'BUY' && side === 'LONG') || 
                     (trade.action === 'SELL' && side === 'SHORT')

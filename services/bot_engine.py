@@ -42,11 +42,10 @@ bot_state = {
     'settings': {
         'watchlist': 'top_50',
         'scan_interval': 5,
-        'min_confidence': 85,
+        'min_confidence': 80,
         'min_option_dte_days': 1,
         'max_positions': 3,
         'max_daily_trades': 20,
-        'max_per_symbol_daily': 2,
         'max_per_symbol_daily': 4,
         'reentry_cooldown_minutes': 240,      # 4-hr cooldown prevents same-ticker re-entry after exit
         'position_size': 4000,
@@ -56,8 +55,8 @@ bot_state = {
         'partial_profit_taking': True,
         'close_0dte_before_expiry': True,
         'max_loss_per_trade': 500,
-        'min_option_premium': 1.0,
-        'max_option_premium': 2.50,          # Cap at $2.50 — <=$2 options had 75% WR on Apr14
+        'min_option_premium': 0.5,
+        'max_option_premium': 15.0,          # Allow up to $15 to cover high-priced movers (TSLA, HOOD, etc.)
         'market_regime_filter': True,
         # === MORNING TRAP PREVENTION (April 2026 fixes) ===
         'avoid_first_minutes': 30,           # Wait 30 min after market open (avoid opening reversals)
@@ -528,6 +527,31 @@ def load_bot_state():
         if orphan_count > 0:
             print(f"🔧 [{acct_key}] Reconciled {orphan_count} orphan position(s) on startup")
             _needs_save = True
+
+        # --- Sync manual position entry_price to BUY trade log price ---
+        # When Alpaca fills at a different price than the user-entered premium, the
+        # position entry_price gets the fill price but the trade log keeps the original.
+        # Align them so both panes show the same entry price.
+        trades = acct.get('trades', [])
+        for pos in acct.get('positions', []):
+            if pos.get('source') != 'manual':
+                continue
+            contract = pos.get('contract', '')
+            symbol = pos.get('symbol', '')
+            # Find the most-recent BUY trade for this position
+            buy_trade = None
+            for t in reversed(trades):
+                if t.get('action') == 'BUY' and (
+                    (contract and t.get('contract') == contract) or
+                    (not contract and t.get('symbol') == symbol)
+                ):
+                    buy_trade = t
+                    break
+            if buy_trade and buy_trade.get('price') and abs(buy_trade['price'] - pos.get('entry_price', 0)) > 0.001:
+                old_ep = pos['entry_price']
+                pos['entry_price'] = buy_trade['price']
+                print(f"🔧 [{acct_key}] Entry price sync: {contract or symbol} {old_ep} → {buy_trade['price']} (trade log)")
+                _needs_save = True
 
         # Recalculate balance from trade history to prevent drift
         correct_balance = recalculate_balance(acct)

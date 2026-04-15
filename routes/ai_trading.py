@@ -301,7 +301,9 @@ def bot_status():
             'positions': positions if state_copy['account_mode'] == 'demo' else state_copy['demo_account']['positions'],
             'unrealized_pnl': total_pnl
         },
-        'force_live': force_live
+        'force_live': force_live,
+        'last_skipped_reasons': bot_state.get('last_skipped_reasons', []),
+        'last_skipped_ts': bot_state.get('last_skipped_ts', ''),
     })
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
@@ -324,21 +326,36 @@ def bot_start():
         bot_state['account_mode'] = req.get('account_mode', 'demo')
         bot_state['strategy'] = req.get('strategy', 'trend_following')
         bot_state['last_scan'] = None  # Clear last scan so first auto_cycle runs immediately
-        bot_state['settings'] = {
-            'watchlist': req.get('watchlist', 'top_50'),
-            'scan_interval': req.get('scan_interval', 5),
-            'min_confidence': req.get('min_confidence', 75),
-            'min_option_dte_days': req.get('min_option_dte_days', 1),
-            'max_positions': req.get('max_positions', 5),
-            'max_daily_trades': req.get('max_daily_trades', 20),
-            'max_per_symbol_daily': req.get('max_per_symbol_daily', 6),
-            'reentry_cooldown_minutes': req.get('reentry_cooldown_minutes', 10),
-            'position_size': req.get('position_size', 1000),
-            'stop_loss': req.get('stop_loss', 2.0),
-            'take_profit': req.get('take_profit', 4.0),
-            'trailing_stop': req.get('trailing_stop', '2'),
-            'instrument_type': req.get('instrument_type', 'stocks')
+
+        # Merge incoming settings with existing — only update keys explicitly sent by caller.
+        # This prevents the UI Start button from resetting calibrated values like
+        # min_confidence and max_option_premium back to stale UI defaults.
+        existing_settings = bot_state.get('settings', {})
+        new_settings = {
+            'watchlist': req.get('watchlist', existing_settings.get('watchlist', 'intraday_stocks')),
+            'scan_interval': req.get('scan_interval', existing_settings.get('scan_interval', 1)),
+            'min_confidence': req.get('min_confidence', existing_settings.get('min_confidence', 80)),
+            'min_option_dte_days': req.get('min_option_dte_days', existing_settings.get('min_option_dte_days', 1)),
+            'max_positions': req.get('max_positions', existing_settings.get('max_positions', 5)),
+            'max_daily_trades': req.get('max_daily_trades', existing_settings.get('max_daily_trades', 20)),
+            'max_per_symbol_daily': req.get('max_per_symbol_daily', existing_settings.get('max_per_symbol_daily', 2)),
+            'reentry_cooldown_minutes': req.get('reentry_cooldown_minutes', existing_settings.get('reentry_cooldown_minutes', 20)),
+            'position_size': req.get('position_size', existing_settings.get('position_size', 3000)),
+            'stop_loss': req.get('stop_loss', existing_settings.get('stop_loss', 2.0)),
+            'take_profit': req.get('take_profit', existing_settings.get('take_profit', 4.0)),
+            'trailing_stop': req.get('trailing_stop', existing_settings.get('trailing_stop', '2')),
+            'instrument_type': req.get('instrument_type', existing_settings.get('instrument_type', 'both')),
+            # Preserve calibrated filter values — never let UI reset these below safe minimums
+            'min_option_premium': existing_settings.get('min_option_premium', 0.5),
+            'max_option_premium': max(
+                float(req.get('max_option_premium', existing_settings.get('max_option_premium', 15.0))),
+                3.0  # hard floor: never let it drop below $3
+            ),
+            'avoid_first_minutes': existing_settings.get('avoid_first_minutes', 30),
+            'max_loss_per_trade': existing_settings.get('max_loss_per_trade', 500),
+            'market_regime_filter': existing_settings.get('market_regime_filter', True),
         }
+        bot_state['settings'] = new_settings
         save_bot_state()
     
     # --- STARTUP HEALTH CHECK: log all potential blockers upfront ---
@@ -667,6 +684,63 @@ def bot_import_positions():
             'message': 'No new positions to import (all already exist or are options/closed)',
             'imported': []
         })
+
+@ai_trading_bp.route('/api/bot/edit_position', methods=['POST'])
+def bot_edit_position():
+    """Edit entry_price (and optionally stop_loss/target) on an existing position,
+    keeping the trade log in sync."""
+    global bot_state
+
+    req = request.get_json(force=True)
+    contract = req.get('contract', '')
+    symbol = req.get('symbol', '')
+    account_mode = req.get('account_mode', 'demo')
+    new_entry_price = req.get('entry_price')
+
+    if new_entry_price is None:
+        return jsonify({'success': False, 'error': 'entry_price is required'}), 400
+    try:
+        new_entry_price = float(new_entry_price)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'entry_price must be a number'}), 400
+
+    with BOT_STATE_LOCK:
+        load_bot_state()
+        account = bot_state['demo_account'] if account_mode == 'demo' else bot_state['real_account']
+
+        # Find matching position
+        pos = None
+        for p in account['positions']:
+            if contract and p.get('contract') == contract:
+                pos = p
+                break
+            if not contract and p.get('symbol') == symbol:
+                pos = p
+                break
+
+        if pos is None:
+            return jsonify({'success': False, 'error': f'Position not found: {contract or symbol}'}), 404
+
+        old_entry = pos['entry_price']
+        pos['entry_price'] = new_entry_price
+        if req.get('stop_loss') is not None:
+            pos['stop_loss'] = float(req['stop_loss'])
+        if req.get('target') is not None:
+            pos['target'] = float(req['target'])
+
+        # Keep most-recent matching BUY trade in sync
+        match_contract = contract or (symbol + '_opt')
+        for t in reversed(account['trades']):
+            if (t.get('action') == 'BUY' and
+                    (t.get('contract') == contract or t.get('symbol') == symbol)):
+                t['price'] = new_entry_price
+                t['cost'] = pos['quantity'] * new_entry_price * (100 if pos.get('instrument_type') == 'option' else 1)
+                break
+
+        save_bot_state()
+        print(f"✏️ EDIT POSITION: {contract or symbol} entry_price {old_entry} → {new_entry_price}")
+
+    return jsonify({'success': True, 'old_entry_price': old_entry, 'new_entry_price': new_entry_price})
 
 @ai_trading_bp.route('/api/bot/scan', methods=['POST'])
 def bot_scan():
@@ -3317,7 +3391,18 @@ def _bot_auto_cycle_inner():
                 
                 action_emoji = '\U0001f7e2' if signal['action'] == 'BUY' else '\U0001f534'
                 print(f"\U0001f916 AUTO-TRADE: {action_emoji} {signal['action']} {quantity} shares of {signal['symbol']} at ${price:.2f} ({side})")
-    
+
+    # Persist skipped reasons to bot_state so the UI can surface WHY auto-trade didn't fire
+    if skipped_reasons:
+        bot_state['last_skipped_reasons'] = skipped_reasons[-20:]  # keep last 20
+        bot_state['last_skipped_ts'] = datetime.now().isoformat()
+        with BOT_STATE_LOCK:
+            save_bot_state()
+    elif trades_executed:
+        # Clear stale skipped reasons when a trade actually fired
+        bot_state['last_skipped_reasons'] = []
+        bot_state['last_skipped_ts'] = ''
+
     return jsonify({
         'success': True,
         'signals': signals,
@@ -3701,6 +3786,8 @@ def bot_trade_option():
                     print(f"📋 ALPACA FILL (entry): {contract} filled @ ${fill_price:.2f} (bot price: ${premium:.2f})")
                     position['entry_price'] = fill_price
                     position['current_price'] = fill_price
+                    premium = fill_price  # sync trade log to actual fill
+                    cost = contracts * fill_price * 100
             else:
                 # Alpaca order failed — don't create phantom position
                 save_bot_state()
@@ -4065,14 +4152,19 @@ def bot_cleanup_duplicate_exits():
 INTRADAY_STOCK_UNIVERSE = [
     'SPY', 'QQQ', 'IWM', 'DIA',
     'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'AMZN', 'META', 'GOOGL', 'NFLX',
-    'JPM', 'BAC', 'GS', 'MS', 'C',
-    'XOM', 'CVX', 'UNH', 'WMT', 'COST',
+    'AVGO', 'CRM', 'ADBE', 'ORCL',
+    'JPM', 'BAC', 'GS', 'MS', 'C', 'V', 'MA',
+    'XOM', 'CVX', 'UNH', 'WMT', 'COST', 'HD',
     'NKE', 'DIS', 'UBER', 'PYPL', 'COIN',
     'SOFI', 'PLTR', 'SNAP', 'ROKU',
+    # High-beta momentum movers
+    'HOOD', 'IONQ', 'DDOG', 'DASH', 'SHOP', 'AFRM', 'UPST', 'LYFT',
+    'TTD', 'NET', 'ZS', 'PINS', 'ZM', 'TEAM', 'NOW',
+    # Crypto / fintech
+    'MSTR', 'RIOT', 'MARA', 'BTBT',
 ]
 
 # Options-friendly tickers (high volume, tight bid-ask, weekly options)
-# Keep this list SMALL (~30) to avoid Yahoo rate limits
 INTRADAY_OPTIONS_UNIVERSE = [
     # Core ETFs with massive options volume
     'SPY', 'QQQ', 'IWM', 'DIA', 'GLD', 'SLV',
@@ -4080,13 +4172,18 @@ INTRADAY_OPTIONS_UNIVERSE = [
     'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'AMZN', 'META', 'GOOGL', 'NFLX',
     'AVGO', 'CRM', 'ADBE', 'ORCL',
     # Financials
-    'JPM', 'BAC', 'V', 'MA', 'WFC',
+    'JPM', 'BAC', 'V', 'MA', 'WFC', 'GS',
     # Healthcare
     'UNH', 'LLY', 'ABBV', 'MRK', 'JNJ',
     # Consumer / retail
     'WMT', 'COST', 'MCD', 'HD',
     # High-beta momentum (great for 0-DTE)
     'COIN', 'SOFI', 'PLTR', 'UBER',
+    # Active movers with strong options liquidity
+    'HOOD', 'SHOP', 'DDOG', 'DASH', 'AFRM', 'UPST',
+    'TTD', 'NET', 'IONQ', 'SNOW', 'RBLX',
+    # Crypto / high-vol
+    'MSTR', 'RIOT', 'MARA',
 ]
 
 
@@ -4401,6 +4498,20 @@ def scan_intraday_stock(symbol):
             signals.append(f'📊 High Vol {vol_ratio:.1f}x')
         else:
             score += 1
+
+        # --- Day-mover bonus: big % movers get extra score ---
+        # Stocks up/down 5%+ on the day are in play — reward their momentum
+        day_open = float(today.iloc[0]['Open']) if not pd.isna(today.iloc[0]['Open']) else price
+        day_change_pct = ((price - day_open) / day_open * 100) if day_open > 0 else 0
+        if abs(day_change_pct) >= 8:
+            score += 4
+            signals.append(f'🚀 Big Mover {day_change_pct:+.1f}%')
+        elif abs(day_change_pct) >= 5:
+            score += 3
+            signals.append(f'💥 Mover {day_change_pct:+.1f}%')
+        elif abs(day_change_pct) >= 3:
+            score += 2
+            signals.append(f'📈 Up {day_change_pct:+.1f}%')
 
         # ===== SIGNAL CONFLICT FILTER =====
         # Reject signals where EMA and MACD disagree in direction
@@ -4848,6 +4959,22 @@ def scan_intraday_option(symbol):
                 signals.append(f'🎯 RSI Sweet Spot ({rsi:.0f})')
             elif 45 <= rsi < 55:
                 score += 1
+
+        # --- Day-mover bonus (0-4 pts): big % movers are in play ---
+        day_open = float(today.iloc[0]['Open']) if not pd.isna(today.iloc[0]['Open']) else price
+        day_change_pct = ((price - day_open) / day_open * 100) if day_open > 0 else 0
+        # Only reward when direction aligns with day move
+        aligned_move = (direction == 'BULLISH' and day_change_pct > 0) or (direction == 'BEARISH' and day_change_pct < 0)
+        if aligned_move:
+            if abs(day_change_pct) >= 8:
+                score += 4
+                signals.append(f'🚀 Big Mover {day_change_pct:+.1f}%')
+            elif abs(day_change_pct) >= 5:
+                score += 3
+                signals.append(f'💥 Mover {day_change_pct:+.1f}%')
+            elif abs(day_change_pct) >= 3:
+                score += 2
+                signals.append(f'📈 Day Move {day_change_pct:+.1f}%')
 
         # --- VWAP alignment (0-2 pts) ---
         # Price strongly above/below VWAP confirms direction
