@@ -2938,7 +2938,11 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    showNotification(`✅ Position closed for ${symbol}`, 'success');
+                    const pnlStr = data.pnl !== undefined ? ` | P&L: ${data.pnl >= 0 ? '+' : ''}$${Math.abs(data.pnl).toFixed(0)}` : '';
+                    showNotification(`✅ Position closed for ${symbol}${pnlStr}`, 'success');
+                    if (data.alpaca_warning) {
+                        showNotification(`⚠️ ${data.alpaca_warning}`, 'warning');
+                    }
                     refreshStatus();
                 } else {
                     showNotification('❌ ' + data.error, 'error');

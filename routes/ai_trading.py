@@ -1596,7 +1596,7 @@ def _bot_auto_cycle_inner():
                         _MIN_HOLD_MINUTES_OPTIONS = 45  # Override: hold 45 min minimum
                         _min_hold = _MIN_HOLD_MINUTES_OPTIONS
                     else:
-                        min_profit_to_trail = 0.10   # 10% minimum before trailing (was 3%)
+                        min_profit_to_trail = 0.10   # 10% minimum before trailing (Apr16 analysis: 15% too high, Feb sweet spot was ~10%)
                 else:
                     min_profit_to_trail = 0.005  # 0.5% for stocks
 
@@ -2029,10 +2029,26 @@ def _bot_auto_cycle_inner():
             
             # Check exit conditions based on position side (full exit)
             # Skip exit checks during grace period — let the trade develop before evaluating
-            # Skip exit checks for SWING trades outside market hours (9:30 AM - 4:00 PM ET)
-            # Price data after hours is unreliable and can trigger false trailing stops
+            # OPTIONS: Never exit after market hours (9:30 AM - 4:00 PM ET) regardless of trade_type.
+            # Alpaca rejects option market orders outside market hours, and after-hours option
+            # prices are stale/unreliable — checking SL/targets then causes false exits.
+            # STOCKS: allowed to exit any time (after-hours fills work fine).
             _skip_exit_after_hours = False
-            if pos.get('trade_type', 'swing') == 'swing':
+            if is_option:
+                # Block ALL option exits when market is closed — applies to both day and swing
+                try:
+                    import pytz
+                    _et_tz = pytz.timezone('US/Eastern')
+                    _now_et = datetime.now(_et_tz)
+                    _et_h, _et_m = _now_et.hour, _now_et.minute
+                    _in_market_hours = (_et_h > 9 or (_et_h == 9 and _et_m >= 30)) and _et_h < 16 and _now_et.weekday() < 5
+                    if not _in_market_hours:
+                        _skip_exit_after_hours = True
+                        print(f"🔒 {symbol}: Option exit skipped — market closed ({_now_et.strftime('%I:%M %p')} ET)")
+                except Exception:
+                    pass
+            elif pos.get('trade_type', 'swing') == 'swing':
+                # Swing STOCK positions: also skip after hours (same reason — unreliable prices)
                 try:
                     import pytz
                     _et_tz = pytz.timezone('US/Eastern')
@@ -2062,24 +2078,38 @@ def _bot_auto_cycle_inner():
             elif _in_grace_period and not exit_reason:
                 print(f"⏳ {symbol}: In grace period ({_pos_age_seconds:.0f}s/{_POSITION_GRACE_SECONDS}s) — skipping SL/target/trailing checks")
             
-            # TIME-BASED EXIT: Close DAY TRADE positions at 4:00 PM ET
-            # Only applies to positions with trade_type='day', NOT swing trades
+            # TIME-BASED EXIT: Close DAY TRADE positions at 3:55 PM ET (5 min before close)
+            # Only applies to positions with trade_type='day', NOT swing trades.
+            # Options: only trigger EOD while market is still open so Alpaca can fill the order.
+            # Stocks: can EOD-close after 4:00 PM ET as after-hours fills work.
             if not exit_reason:
                 try:
                     import pytz
                     et_tz = pytz.timezone('US/Eastern')
                     now_et = datetime.now(et_tz)
-                    # EOD at 4:00 PM ET (3:00 PM CT)
-                    is_eod = now_et.hour >= 16
-                    
-                    # Only close if explicitly marked as day trade
-                    trade_type = pos.get('trade_type', 'swing')  # Default to swing if not specified
+                    _et_h_eod, _et_m_eod = now_et.hour, now_et.minute
+
+                    trade_type = pos.get('trade_type', 'swing')
                     is_day_trade = (trade_type == 'day')
-                    
-                    if is_eod and is_day_trade:
-                        exit_reason = 'END_OF_DAY'
-                        exit_price = current_price
-                        print(f"⏰ END_OF_DAY exit triggered for {symbol} @ ${current_price:.2f} (day trade)")
+
+                    if is_option:
+                        # OPTIONS: trigger EOD at 3:55 PM ET while market is still open
+                        # Never trigger after 4:00 PM ET — Alpaca will reject the order
+                        is_eod_option = (
+                            now_et.weekday() < 5
+                            and (_et_h_eod == 15 and _et_m_eod >= 55)
+                        )
+                        if is_eod_option and is_day_trade:
+                            exit_reason = 'END_OF_DAY'
+                            exit_price = current_price
+                            print(f"⏰ END_OF_DAY exit triggered for {symbol} @ ${current_price:.2f} (day option, 3:55 PM ET)")
+                    else:
+                        # STOCKS: trigger EOD at or after 4:00 PM ET
+                        is_eod_stock = _et_h_eod >= 16
+                        if is_eod_stock and is_day_trade:
+                            exit_reason = 'END_OF_DAY'
+                            exit_price = current_price
+                            print(f"⏰ END_OF_DAY exit triggered for {symbol} @ ${current_price:.2f} (day stock)")
                 except Exception as e:
                     print(f"⚠️ Error checking EOD exit for {symbol}: {e}")
             
@@ -3118,9 +3148,9 @@ def _bot_auto_cycle_inner():
 
                 # 2. Respect scanner's stop loss level, reduce qty to fit max_loss_per_trade
                 # FIX April 2026: Tightened default stop from 50% to 20%
-                # 50% stops were causing -$750 avg losses, destroying profitability
+                # FIX Apr16 2026: Reverted to 22% — 13% caused whipsaw exits, Feb used 50% but avg premium was $3.44
                 max_loss_per_trade = float(bot_state['settings'].get('max_loss_per_trade', 500))
-                signal_stop = float(signal.get('stop_loss', premium * 0.20) or (premium * 0.20))
+                signal_stop = float(signal.get('stop_loss', premium * 0.22) or (premium * 0.22))
                 risk_pct_signal = max(0.01, min(0.95, 1 - (signal_stop / signal_premium))) if signal_premium > 0 else 0.5
                 signal_based_stop = round(premium * (1 - risk_pct_signal), 2)
 
@@ -3921,6 +3951,7 @@ def bot_close_position():
         
         # Close on Alpaca if this position has an Alpaca order
         alpaca_close_id = None
+        alpaca_warning = None  # track non-fatal Alpaca failures (e.g. after-hours)
         if is_alpaca_execution_enabled() and target_pos.get('alpaca_order_id'):
             raw_close = target_pos.get('option_ticker') or target_pos.get('alpaca_symbol') or target_pos.get('contract') or symbol
             if is_option:
@@ -3950,6 +3981,13 @@ def bot_close_position():
                         pnl = (price - target_pos['entry_price']) * target_pos['quantity']
                     else:
                         pnl = (target_pos['entry_price'] - price) * target_pos['quantity']
+            else:
+                err_msg = str(alpaca_close.get('error', ''))
+                if 'market hours' in err_msg.lower() or 'after hours' in err_msg.lower():
+                    alpaca_warning = 'Market closed — Alpaca position will clear at next open'
+                else:
+                    alpaca_warning = f'Alpaca close skipped: {err_msg[:80]}'
+                print(f"⚠️ MANUAL CLOSE: Alpaca close skipped for {display_name} — {alpaca_warning}")
         
         trade = {
             'symbol': symbol,
@@ -3964,19 +4002,26 @@ def bot_close_position():
             'pnl': pnl,
             'pnl_pct': ((price - target_pos['entry_price']) / target_pos['entry_price'] * 100) if target_pos['entry_price'] > 0 else 0,
             'timestamp': datetime.now().isoformat(),
-            'alpaca_order_id': alpaca_close_id
+            'alpaca_order_id': alpaca_close_id,
+            # Tag manual close so auto-cycle applies reentry cooldown (prevents bot from
+            # immediately re-opening the same underlying after user manually exits)
+            'auto_exit': True,
+            'reason': 'MANUAL_CLOSE',
         }
         account['trades'].append(trade)
         account['positions'].remove(target_pos)
         # Recalculate balance from trade history (authoritative)
         account['balance'] = recalculate_balance(account)
         save_bot_state()
-        
-        return jsonify({
+
+        resp_data = {
             'success': True,
             'message': f'Position closed for {display_name}',
             'pnl': pnl
-        })
+        }
+        if alpaca_warning:
+            resp_data['alpaca_warning'] = alpaca_warning
+        return jsonify(resp_data)
 
 @ai_trading_bp.route('/api/bot/close-all', methods=['POST'])
 def bot_close_all():
@@ -5008,9 +5053,9 @@ def scan_intraday_option(symbol):
         # R:R on premium — use ATR-based stop instead of fixed 50%
         # Fixed 50% stop is too wide for high-premium options and too tight for cheap ones.
         # ATR-based stop adapts to actual volatility.
-        _atr_stop_pct = min(0.50, max(0.20, (atr / price) * 2.5)) if price > 0 else 0.50
+        _atr_stop_pct = min(0.50, max(0.22, (atr / price) * 2.5)) if price > 0 else 0.50
         sl_premium = round(premium * (1 - _atr_stop_pct), 2)  # ATR-scaled stop
-        sl_premium = max(sl_premium, round(premium * 0.20, 2))  # Floor: never less than 20% stop
+        sl_premium = max(sl_premium, round(premium * 0.22, 2))  # Floor: 22% stop (Apr16 analysis: 13% too tight, Feb was 50%)
         _risk = premium - sl_premium
         tp_1 = round(premium + (_risk * 2.0), 2)   # 1:2 R:R target
         tp_2 = round(premium + (_risk * 3.0), 2)   # 1:3 R:R target
