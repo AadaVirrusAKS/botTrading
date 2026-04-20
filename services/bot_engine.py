@@ -157,7 +157,7 @@ def init_user_bot_state(user_id):
             'close_0dte_before_expiry': True,
             'max_loss_per_trade': 500,
             'min_option_premium': 1.0,
-            'max_option_premium': 2.50,          # Cap at $2.50
+            'max_option_premium': 10.00,         # Cap at $10.00
             'market_regime_filter': True,
             # === MORNING TRAP PREVENTION (April 2026 fixes) ===
             'avoid_first_minutes': 30,
@@ -505,7 +505,7 @@ def load_bot_state():
     if 'avoid_first_minutes' not in bot_state['settings']:
         bot_state['settings']['avoid_first_minutes'] = 30
     if 'max_option_premium' not in bot_state['settings']:
-        bot_state['settings']['max_option_premium'] = 2.50
+        bot_state['settings']['max_option_premium'] = 10.00
     if 'max_loss_per_trade' not in bot_state['settings']:
         bot_state['settings']['max_loss_per_trade'] = 500
     # Backfill initial_balance for real_account (prevents recalculate_balance from defaulting to $10k)

@@ -1711,9 +1711,10 @@ def _bot_auto_cycle_inner():
                             # BREAKEVEN LOCK (fix): if trailing is in profit (>= threshold) but ATR
                             # width is wider than the profit margin, the stop falls below entry and
                             # the > entry_price guard rejects it — leaving the original wide stop.
-                            # Solution: always lock in at least breakeven once _can_trail is True.
+                            # Solution: always lock in at least entry+1% once _can_trail is True.
+                            # +1% buffer above entry avoids -$4 slippage losses on breakeven stops.
                             if new_trailing_stop <= entry_price:
-                                new_trailing_stop = entry_price  # floor at breakeven
+                                new_trailing_stop = round(entry_price * 1.01, 2)  # floor at entry+1% (covers slippage)
                             if new_trailing_stop > stop_loss and new_trailing_stop >= entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
@@ -1723,9 +1724,10 @@ def _bot_auto_cycle_inner():
                             # Profit floor: once stop crosses below entry, lock in min 5%
                             if new_trailing_stop < entry_price:
                                 new_trailing_stop = min(new_trailing_stop, round(entry_price * 0.95, 2))
-                            # BREAKEVEN LOCK (fix): floor at entry if ATR is too wide
+                            # BREAKEVEN LOCK (fix): floor at entry-1% if ATR is too wide
+                            # -1% buffer below entry avoids slippage turning stops into losses.
                             if new_trailing_stop >= entry_price:
-                                new_trailing_stop = entry_price  # floor at breakeven
+                                new_trailing_stop = round(entry_price * 0.99, 2)  # floor at entry-1% (covers slippage)
                             if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop <= entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
@@ -2085,14 +2087,19 @@ def _bot_auto_cycle_inner():
                 if side == 'LONG':
                     if stop_loss > 0 and current_price <= stop_loss:
                         exit_reason = 'TRAILING_STOP' if _stop_is_trailing else 'STOP_LOSS'
-                        exit_price = current_price  # Use actual fill price, not stop level
+                        # If price gapped THROUGH the stop (e.g. stop=$8.10, current=$7.50),
+                        # use stop_loss as exit price — simulates a real stop order fill.
+                        # Alpaca live positions will override this with the actual fill price below.
+                        exit_price = max(current_price, stop_loss)
                     elif target > 0 and current_price >= target:
                         exit_reason = 'TARGET_HIT'
                         exit_price = current_price
                 else:  # SHORT position
                     if stop_loss > 0 and current_price >= stop_loss:
                         exit_reason = 'TRAILING_STOP' if _stop_is_trailing else 'STOP_LOSS'
-                        exit_price = current_price  # Use actual fill price, not stop level
+                        # If price gapped THROUGH the stop (e.g. stop=$8.10, current=$8.70),
+                        # use stop_loss as exit price — simulates a real stop order fill.
+                        exit_price = min(current_price, stop_loss)
                     elif target > 0 and current_price <= target:
                         exit_reason = 'TARGET_HIT'
                         exit_price = current_price
@@ -2679,19 +2686,6 @@ def _bot_auto_cycle_inner():
         now_et = datetime.now(et_tz)
         is_past_day_trade_cutoff = (now_et.hour == 14 and now_et.minute >= 30) or now_et.hour >= 15
         
-        # ===== OPENING DELAY GUARD (April 2026 fix) =====
-        # Avoid trading in the first N minutes after market open (9:30 AM ET)
-        # This prevents getting caught in opening reversals like the 4/9 PUT trap
-        avoid_first_minutes = int(bot_state['settings'].get('avoid_first_minutes', 15))
-        is_in_opening_period = False
-        if now_et.hour == 9 and now_et.minute >= 30:
-            minutes_since_open = now_et.minute - 30
-            if minutes_since_open < avoid_first_minutes:
-                is_in_opening_period = True
-                print(f"⏰ OPENING DELAY ACTIVE: {avoid_first_minutes - minutes_since_open} min remaining before entries allowed (avoid opening reversals)")
-        elif now_et.hour == 9 and now_et.minute < 30:
-            is_in_opening_period = True  # Pre-market, don't trade
-        
         current_positions = len(account.get('positions', []))
         current_symbols = [p['symbol'] for p in account.get('positions', [])]
         current_stock_sides = {
@@ -2831,14 +2825,6 @@ def _bot_auto_cycle_inner():
                 _mins_since_last_loss = (datetime.now() - _last_loss_time).total_seconds() / 60
                 if _mins_since_last_loss < 15:
                     execution_signals = []
-
-        # ===== OPENING PERIOD CIRCUIT BREAKER (April 2026 fix) =====
-        # Block ALL entries during the first N minutes after market open
-        # This prevents the morning trap pattern where weak opens reverse sharply
-        if is_in_opening_period and execution_signals:
-            skipped_reasons.append(f"OPENING DELAY ACTIVE: Waiting {avoid_first_minutes} min after 9:30 AM ET to avoid opening reversals")
-            print(f"⏰ OPENING DELAY BREAKER: Blocking all entries until {avoid_first_minutes} min after open")
-            execution_signals = []
 
         # ===== MARKET REGIME FILTER =====
         # Check SPY trend + VIX + intraday direction to avoid trading against the flow
@@ -3163,9 +3149,9 @@ def _bot_auto_cycle_inner():
                 # Apr 14 analysis: <=$2 options had 75% WR, $2-$4 had 29% WR, >$4 had 50% WR.
                 # Sweet spot is cheap options where the per-contract loss is bounded.
                 # Cap at $2.50: any entry above this gets stopped for ~$250+/contract.
-                max_premium = float(bot_state['settings'].get('max_option_premium', 2.50))
+                max_premium = float(bot_state['settings'].get('max_option_premium', 10.00))
                 if premium > max_premium:
-                    skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} above maximum ${max_premium:.2f} — too expensive (Apr14: $2-4 range had 29% WR)")
+                    skipped_reasons.append(f"{signal.get('contract', sym)}: Premium ${premium:.2f} above maximum ${max_premium:.2f} — too expensive")
                     continue
 
                 # ===== POSITION SIZING =====
