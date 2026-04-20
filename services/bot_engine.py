@@ -802,11 +802,13 @@ def analyze_for_strategy(data, strategy):
     ema9 = data['ema9']
     ema21 = data['ema21']
     sma20 = data['sma20']
+    sma50 = data.get('sma50', sma20)
     bb_upper = data['bb_upper']
     bb_lower = data['bb_lower']
     volume = data['volume']
     vol_avg = data['vol_avg']
     atr = data['atr']
+    vol_ratio = volume / vol_avg if vol_avg > 0 else 1
     
     if strategy == 'trend_following':
         # EMA crossover
@@ -926,6 +928,44 @@ def analyze_for_strategy(data, strategy):
     if not action or confidence < 60:
         return None
     
+    # ── UNIVERSAL CONFIRMATION BOOSTERS ──────────────────────────────────────
+    # Applied after action is decided so they only reward confirmed setups.
+    # These allow strong multi-factor setups to exceed the 75–80 range that the
+    # core strategy signals produce, enabling them to pass a min_confidence=85+.
+
+    # Volume confirmation: elevated volume = real conviction
+    if vol_ratio >= 2.0:
+        signals.append(f'Strong volume ({vol_ratio:.1f}x avg)')
+        confidence += 10
+    elif vol_ratio >= 1.5:
+        signals.append(f'Above-avg volume ({vol_ratio:.1f}x)')
+        confidence += 5
+
+    # SMA50 trend alignment: price above/below 50-day MA confirms macro trend
+    if action == 'BUY' and sma50 > 0 and price > sma50:
+        signals.append('Above SMA50 (macro uptrend)')
+        confidence += 5
+    elif action == 'SELL' and sma50 > 0 and price < sma50:
+        signals.append('Below SMA50 (macro downtrend)')
+        confidence += 5
+
+    # MACD strength: large MACD vs signal divergence = strong momentum
+    if macd_signal != 0:
+        macd_strength = abs(macd - macd_signal) / abs(macd_signal)
+        if macd_strength > 0.5:
+            if (action == 'BUY' and macd > macd_signal) or (action == 'SELL' and macd < macd_signal):
+                signals.append('Strong MACD divergence')
+                confidence += 5
+
+    # RSI sweet spot: 52-65 for buys, 35-48 for sells (momentum without overextension)
+    if action == 'BUY' and 52 <= rsi <= 65:
+        signals.append(f'RSI in momentum zone ({rsi:.0f})')
+        confidence += 5
+    elif action == 'SELL' and 35 <= rsi <= 48:
+        signals.append(f'RSI in momentum zone ({rsi:.0f})')
+        confidence += 5
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Calculate stop loss and target based on ATR
     atr_mult = 1.5 if strategy == 'scalping' else 2.0
     stop_loss = price - (atr * atr_mult) if action == 'BUY' else price + (atr * atr_mult)
@@ -942,7 +982,7 @@ def analyze_for_strategy(data, strategy):
         'reason': '; '.join(signals),
         'rsi': rsi,
         'macd': macd,
-        'volume_ratio': volume / vol_avg if vol_avg > 0 else 1
+        'volume_ratio': vol_ratio
     }
 
 def add_or_update_position(account, symbol, side, quantity, price, stop_loss=None, target=None, extra_fields=None):

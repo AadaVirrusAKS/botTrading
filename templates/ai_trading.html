@@ -1007,7 +1007,7 @@
                         </div>
                         <div class="control-item">
                             <label>Watchlist</label>
-                            <select id="watchlist" onchange="saveSettingsToServer()">
+                            <select id="watchlist" onchange="saveSettingsAndRescan()">
                                 <option value="top_50">Top 50 Liquid Stocks</option>
                                 <option value="sp500">S&P 500</option>
                                 <option value="tech">Tech Giants</option>
@@ -1027,7 +1027,7 @@
                         </div>
                         <div class="control-item">
                             <label>Min Confidence (%)</label>
-                            <input type="number" id="min-confidence" value="75" min="50" max="100" onchange="saveSettingsToServer()">
+                            <input type="number" id="min-confidence" value="75" min="50" max="100" onchange="saveSettingsAndRescan()">
                         </div>
                         <div class="control-item">
                             <label>Min Option DTE</label>
@@ -2874,13 +2874,8 @@
             }
             console.log('Instrument type:', instrumentType, 'Watchlist:', wl.value);
             
-            // Save settings to server for persistence
-            saveSettingsToServer();
-
-            // Fetch fresh signals for selected instrument type (only if bot is running)
-            if (botRunning) {
-                runManualScan();
-            }
+            // Save + rescan in one shot (routing change always needs fresh signals)
+            saveSettingsAndRescan();
         }
         
         // Save current settings to server (for persistence across page navigation)
@@ -2913,8 +2908,19 @@
                 if (data.success) {
                     console.log('✅ Settings saved to server');
                 }
+                return data;
             } catch (error) {
                 console.error('❌ Failed to save settings:', error);
+            }
+        }
+
+        // Save scan-affecting settings AND immediately trigger a fresh scan so
+        // the signal list reflects the new watchlist / confidence threshold right away.
+        async function saveSettingsAndRescan() {
+            await saveSettingsToServer();
+            if (botRunning) {
+                showNotification('🔄 Settings saved — refreshing scan...', 'info');
+                await runManualScan();
             }
         }
         

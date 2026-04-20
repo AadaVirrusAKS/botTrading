@@ -436,19 +436,25 @@ def bot_update_settings():
               'max_daily_trades', 'max_per_symbol_daily', 'reentry_cooldown_minutes', 'min_option_dte_days', 'position_size', 'stop_loss', 'take_profit', 'trailing_stop', 'instrument_type',
                           'partial_profit_taking', 'close_0dte_before_expiry', 'max_loss_per_trade']
         
-        # Track if routing-critical settings changed
+        # Track if any scan-affecting settings changed
+        any_scan_setting_changed = False
         routing_changed = False
+        # These settings affect which signals appear — any change should force a fresh scan
+        SCAN_AFFECTING_FIELDS = {'watchlist', 'instrument_type', 'min_confidence', 'min_option_dte_days'}
         for field in settings_fields:
             if field in req:
                 old_val = bot_state['settings'].get(field)
                 bot_state['settings'][field] = req[field]
-                if field in ('watchlist', 'instrument_type') and old_val != req[field]:
-                    routing_changed = True
+                if old_val != req[field]:
+                    if field in ('watchlist', 'instrument_type'):
+                        routing_changed = True
+                    if field in SCAN_AFFECTING_FIELDS:
+                        any_scan_setting_changed = True
                     print(f"\U0001f527 Setting '{field}' changed: {old_val} → {req[field]}")
         
-        # When watchlist or instrument_type changes, clear stale cached signals
-        # This prevents old daily/swing signals from being auto-traded after switching to intraday
-        if routing_changed:
+        # Any scan-affecting change: clear cached signals + reset last_scan so the
+        # next auto_cycle immediately re-scans with the new settings.
+        if any_scan_setting_changed:
             bot_state['signals'] = []
             bot_state['last_scan'] = None  # Force fresh scan on next auto_cycle
             print(f"\U0001f527 Cleared cached signals and last_scan due to settings change")
@@ -1699,19 +1705,28 @@ def _bot_auto_cycle_inner():
 
                         if side == 'LONG':
                             new_trailing_stop = round(trail_reference_price - (pos_atr * atr_multiplier), 2)
-                            # Profit floor (Apr 2026): once stop crosses above entry, lock in min 5%
+                            # Profit floor: once stop crosses above entry, lock in min 5%
                             if new_trailing_stop > entry_price:
                                 new_trailing_stop = max(new_trailing_stop, round(entry_price * 1.05, 2))
-                            if new_trailing_stop > stop_loss and new_trailing_stop > entry_price:
+                            # BREAKEVEN LOCK (fix): if trailing is in profit (>= threshold) but ATR
+                            # width is wider than the profit margin, the stop falls below entry and
+                            # the > entry_price guard rejects it — leaving the original wide stop.
+                            # Solution: always lock in at least breakeven once _can_trail is True.
+                            if new_trailing_stop <= entry_price:
+                                new_trailing_stop = entry_price  # floor at breakeven
+                            if new_trailing_stop > stop_loss and new_trailing_stop >= entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
                                 print(f"📈 ATR Trail{_tier_label} UP {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}x{atr_multiplier:.1f}, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
                         else:
                             new_trailing_stop = round(trail_reference_price + (pos_atr * atr_multiplier), 2)
-                            # Profit floor (Apr 2026): once stop crosses below entry, lock in min 5%
+                            # Profit floor: once stop crosses below entry, lock in min 5%
                             if new_trailing_stop < entry_price:
                                 new_trailing_stop = min(new_trailing_stop, round(entry_price * 0.95, 2))
-                            if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop < entry_price:
+                            # BREAKEVEN LOCK (fix): floor at entry if ATR is too wide
+                            if new_trailing_stop >= entry_price:
+                                new_trailing_stop = entry_price  # floor at breakeven
+                            if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop <= entry_price:
                                 pos['stop_loss'] = new_trailing_stop
                                 stop_loss = new_trailing_stop
                                 print(f"📉 ATR Trail{_tier_label} DN {symbol}: ${stop_loss:.2f} (ATR=${pos_atr:.2f}x{atr_multiplier:.1f}, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
@@ -1747,19 +1762,25 @@ def _bot_auto_cycle_inner():
                         if trailing_pct > 0:
                             if side == 'LONG':
                                 new_trailing_stop = trail_reference_price * (1 - trailing_pct)
-                                # Profit floor (Apr 2026): once stop above entry, lock in min 5%
+                                # Profit floor: once stop above entry, lock in min 5%
                                 if new_trailing_stop > entry_price:
                                     new_trailing_stop = max(new_trailing_stop, entry_price * 1.05)
-                                if new_trailing_stop > stop_loss and new_trailing_stop > entry_price:
+                                # BREAKEVEN LOCK (fix): floor at entry if % width is wider than margin
+                                if new_trailing_stop <= entry_price:
+                                    new_trailing_stop = entry_price
+                                if new_trailing_stop > stop_loss and new_trailing_stop >= entry_price:
                                     pos['stop_loss'] = round(new_trailing_stop, 2)
                                     stop_loss = pos['stop_loss']
                                     print(f"📈 %Trail UP {symbol}: ${stop_loss:.2f} ({trailing_pct*100:.1f}%, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
                             else:
                                 new_trailing_stop = trail_reference_price * (1 + trailing_pct)
-                                # Profit floor (Apr 2026): once stop below entry, lock in min 5%
+                                # Profit floor: once stop below entry, lock in min 5%
                                 if new_trailing_stop < entry_price:
                                     new_trailing_stop = min(new_trailing_stop, entry_price * 0.95)
-                                if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop < entry_price:
+                                # BREAKEVEN LOCK (fix): floor at entry if % width is wider than margin
+                                if new_trailing_stop >= entry_price:
+                                    new_trailing_stop = entry_price
+                                if (stop_loss == 0 or new_trailing_stop < stop_loss) and new_trailing_stop <= entry_price:
                                     pos['stop_loss'] = round(new_trailing_stop, 2)
                                     stop_loss = pos['stop_loss']
                                     print(f"📉 %Trail DN {symbol}: ${stop_loss:.2f} ({trailing_pct*100:.1f}%, ref=${trail_reference_price:.2f}, +{profit_pct*100:.1f}%, hold={_hold_minutes:.0f}m)")
@@ -2944,13 +2965,19 @@ def _bot_auto_cycle_inner():
                 if any(f"{signal['symbol']}: Directional conflict" in r for r in skipped_reasons[-1:]):
                     continue
                 
-                # ===== SAME-DIRECTION POSITION LIMIT (April 2026 fix) =====
-                # Limit max CALLs or PUTs to prevent concentrated directional bets
-                if new_opt_type == 'call' and current_call_count >= max_same_direction:
-                    skipped_reasons.append(f"{signal.get('contract', signal['symbol'])}: Max {max_same_direction} CALL positions reached — diversify directions")
+                # ===== SAME-DIRECTION POSITION LIMIT =====
+                # Only enforce in choppy/neutral/high_vix markets.
+                # In a trending market, let the trend direction run freely:
+                #   BULLISH regime  → unlimited CALLs, PUTs are still capped
+                #   BEARISH/SELLING → unlimited PUTs, CALLs are still capped
+                #   NEUTRAL/HIGH_VIX → cap both directions
+                _call_cap_active = _market_regime not in ('bullish',)
+                _put_cap_active  = _market_regime not in ('bearish', 'selling')
+                if new_opt_type == 'call' and _call_cap_active and current_call_count >= max_same_direction:
+                    skipped_reasons.append(f"{signal.get('contract', signal['symbol'])}: Max {max_same_direction} CALL positions reached — diversify directions (regime: {_market_regime})")
                     continue
-                elif new_opt_type == 'put' and current_put_count >= max_same_direction:
-                    skipped_reasons.append(f"{signal.get('contract', signal['symbol'])}: Max {max_same_direction} PUT positions reached — diversify directions")
+                elif new_opt_type == 'put' and _put_cap_active and current_put_count >= max_same_direction:
+                    skipped_reasons.append(f"{signal.get('contract', signal['symbol'])}: Max {max_same_direction} PUT positions reached — diversify directions (regime: {_market_regime})")
                     continue
                 
                 # ===== CORRELATED INDEX BLOCK (April 2026 fix) =====
@@ -5110,7 +5137,10 @@ def bot_intraday_stocks():
     """Intraday stock scanner for AI Bot page"""
     try:
         cache_key = 'intraday-stocks'
-        cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
+        # Ensure key always exists in scanner_cache so background thread can access it safely
+        if cache_key not in scanner_cache:
+            scanner_cache[cache_key] = {'data': None, 'timestamp': None, 'running': False}
+        cache_entry = scanner_cache[cache_key]
 
         # Reset stuck scanners
         check_scanner_stale_running(cache_key)
@@ -5159,10 +5189,10 @@ def bot_intraday_stocks():
                 print(f"✅ Intraday stock scan complete: {len(results)} setups found")
             except Exception as e:
                 print(f"❌ Intraday stock scan error: {e}")
-                scanner_cache[cache_key]['data'] = []
-                scanner_cache[cache_key]['timestamp'] = datetime.now()
+                scanner_cache.setdefault(cache_key, {})['data'] = []
+                scanner_cache.setdefault(cache_key, {})['timestamp'] = datetime.now()
             finally:
-                scanner_cache[cache_key]['running'] = False
+                scanner_cache.setdefault(cache_key, {})['running'] = False
 
         thread = threading.Thread(target=run_scan, daemon=True)
         thread.start()
@@ -5183,7 +5213,10 @@ def bot_intraday_options():
     """Intraday options scanner for AI Bot page"""
     try:
         cache_key = 'intraday-options'
-        cache_entry = scanner_cache.get(cache_key, {'data': None, 'timestamp': None, 'running': False})
+        # Ensure key always exists in scanner_cache so background thread can access it safely
+        if cache_key not in scanner_cache:
+            scanner_cache[cache_key] = {'data': None, 'timestamp': None, 'running': False}
+        cache_entry = scanner_cache[cache_key]
 
         # Return cached data if fresh
         if cache_entry['data'] is not None and cache_entry['timestamp']:
@@ -5229,9 +5262,9 @@ def bot_intraday_options():
                 print(f"✅ Intraday options scan complete: {len(results)} setups found")
             except Exception as e:
                 print(f"❌ Intraday options scan error: {e}")
-                # Don't cache empty error results
+                scanner_cache.setdefault(cache_key, {})['timestamp'] = datetime.now()
             finally:
-                scanner_cache[cache_key]['running'] = False
+                scanner_cache.setdefault(cache_key, {})['running'] = False
 
         thread = threading.Thread(target=run_scan, daemon=True)
         thread.start()
